@@ -1,0 +1,11 @@
+services:
+  bucketeer:
+    build: .
+    ports:
+      - "${BUCKETEER_BIND:-127.0.0.1}:${BUCKETEER_PORT:-3000}:3000"
+    volumes:
+      - bucketeer-data:/data
+    restart: unless-stopped
+
+volumes:
+  bucketeer-data:

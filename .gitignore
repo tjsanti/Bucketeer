@@ -1,0 +1,11 @@
+# Private local notes
+.local/
+
+node_modules/
+dist/
+.test-dist/
+data/
+coverage/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

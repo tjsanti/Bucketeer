@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#edf4f8">
+    <title>Bucketeer</title>
+    <link rel="stylesheet" href="/ui/styles.css">
+    <script type="module" src="/ui/app.js"></script>
+  </head>
+  <body>
+    <header class="masthead">
+      <a class="brand" href="/" aria-label="Bucketeer home">
+        <svg viewBox="0 0 32 36" width="30" height="34" aria-hidden="true"><path d="M8 12V9a8 8 0 0 1 16 0v3M3 12h26l-4 21H7Z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/><path d="M11 22h10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+        Bucketeer
+      </a>
+      <span class="masthead-note">A place for your money.</span>
+    </header>
+    <main class="workspace">
+      <nav class="budgets" aria-labelledby="budgets-heading">
+        <div class="section-heading"><h2 id="budgets-heading">Your budgets</h2><button id="new-budget" class="new-button" type="button">+ New</button></div>
+        <p id="list-message" class="muted" role="status">Loading budgets...</p>
+        <ul id="budget-list"></ul>
+      </nav>
+      <section class="editor" aria-labelledby="editor-heading">
+        <div class="editor-top"><span class="eyebrow" id="editor-state">GETTING STARTED</span><span class="bucket-mark" aria-hidden="true"></span></div>
+        <h1 id="editor-heading">Start a budget.</h1>
+        <p class="intro" id="editor-description">Give it a name. You can save it now and pick it up whenever you need.</p>
+        <form id="budget-form">
+          <label for="budget-name">Budget name</label>
+          <input id="budget-name" name="name" type="text" placeholder="e.g. Household" autocomplete="off" required>
+          <div class="save-row"><button class="save-button" type="submit" id="save-budget">Save budget</button><p id="save-message" role="status" aria-live="polite"></p></div>
+        </form>
+        <p id="error-message" role="alert" hidden></p>
+        <dl id="budget-details" hidden><div><dt>Created</dt><dd id="created-at"></dd></div><div><dt>Last saved</dt><dd id="updated-at"></dd></div></dl>
+      </section>
+    </main>
+  </body>
+</html>
