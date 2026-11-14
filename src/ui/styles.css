@@ -1,70 +1,448 @@
+/* ==========================================================================
+   Fonts: bundled with the app (SIL OFL 1.1; licences sit beside the files).
+   Variable woff2 files from Fontsource, copied into dist/ui/fonts by the
+   build (scripts/copy-assets.ts). Latin and Latin Extended only; anything
+   else falls back to the system stack in --font-display and --font-body.
+   ========================================================================== */
+@font-face {
+  font-family: "Nunito";
+  font-style: normal;
+  font-weight: 200 1000;
+  font-display: swap;
+  src: url("/ui/fonts/nunito-latin-wght-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Nunito";
+  font-style: normal;
+  font-weight: 200 1000;
+  font-display: swap;
+  src: url("/ui/fonts/nunito-latin-ext-wght-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Figtree";
+  font-style: normal;
+  font-weight: 300 900;
+  font-display: swap;
+  src: url("/ui/fonts/figtree-latin-wght-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Figtree";
+  font-style: normal;
+  font-weight: 300 900;
+  font-display: swap;
+  src: url("/ui/fonts/figtree-latin-ext-wght-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ==========================================================================
+   DESIGN TOKENS: Watercolour (copied from .local/design/final.html)
+   Every colour, size, space, radius, shadow and duration lives here.
+   Colour has three separate jobs, and they never borrow from each other:
+     1. Neutrals and the lake accent: the page, text and ordinary actions.
+     2. State colours: unassigned (violet), overspent (red), a filling vessel
+        (amber) and a full vessel (soft green). Overspending is shown by a
+        true minus and a red cell; the vessel's colour is backed by its fill.
+     3. Bucket colours: sixteen hues that only say "which bucket". They
+        appear as the dot beside a name and the fill of that bucket's goal
+        bar, and never as text, a badge or a cell background.
+        Keep bucket identities visually distinct from the warning cells, the
+        violet source and each other. Judge hue, lightness and placement
+        together in both themes; hue gap alone is not proof. As a floor, no
+        bucket hue sits within about 25 degrees of a state hue (overspent
+        350, underfunded 38, unassigned 254), and plum and rose stay about
+        30 degrees apart. Rose is lighter than overspent in light mode and
+        darker and softer in dark mode, so the overspent cell stays the only
+        red-family area in the ledger.
+   ========================================================================== */
 :root {
   color-scheme: light;
-  --paper: #edf4f8;
-  --white: #ffffff;
-  --ink: #173648;
-  --muted: #526b7d;
-  --line: #ccdce7;
-  --blue: #285cac;
-  --blue-light: #e0edff;
-  --green: #16735b;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: var(--ink);
-  background: var(--paper);
-  font-synthesis: none;
+
+  /* --- Type families --- */
+  --font-display: "Nunito", ui-rounded, "SF Pro Rounded", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Figtree", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  /* --- Type scale (px; ratio about 1.2, tuned by hand) --- */
+  --fs-xs: 12px;    /* captions, column heads */
+  --fs-sm: 13px;    /* secondary text, goal captions */
+  --fs-base: 15px;  /* body, table rows */
+  --fs-md: 17px;    /* group names, card titles */
+  --fs-lg: 21px;    /* section headings */
+  --fs-xl: 26px;    /* summary figures */
+  --fs-2xl: 32px;   /* month heading */
+  --fs-hero: 38px;  /* ready to assign, in the summary strip */
+  --lh-tight: 1.15;
+  --lh-base: 1.45;
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+  --fw-heavy: 800;
+
+  /* --- Spacing (4px grid) --- */
+  --s-1: 4px;  --s-2: 8px;  --s-3: 12px; --s-4: 16px; --s-5: 20px;
+  --s-6: 24px; --s-8: 32px; --s-10: 40px; --s-12: 48px; --s-16: 64px;
+  --row-h: 40px;        /* one bucket row on desktop */
+  --row-h-goal-phone: 74px; /* dated goals keep their date beside the target */
+  --row-h-phone: 54px;  /* one bucket row on phone: name over target */
+  --touch: 44px;        /* minimum touch target */
+  --group-h: 46px;      /* one group header row */
+  --sidebar-w: 252px;
+
+  /* --- Shape --- */
+  --r-sm: 8px;     /* chips, small controls */
+  --r-md: 12px;    /* buttons, inputs */
+  --r-lg: 18px;    /* cards */
+  --r-pill: 999px;
+  --dot: 10px;     /* bucket colour dot */
+  --bar-w: 112px;  /* goal bar track: the whole track is the goal */
+  --bar-h: 8px;
+
+  /* --- Motion --- */
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-rain: 760ms;
+  --ease: cubic-bezier(.2, .7, .3, 1);
+
+  /* --- Neutrals --- */
+  --bg: #F2F6F8;              /* page */
+  --sidebar: #E5EEF2;         /* left rail, a shade of the sky */
+  --surface: #FFFFFF;         /* cards */
+  --surface-sunken: #F5F8FA;  /* table heads, inputs at rest */
+  --avail-col: #EFF4F7;       /* the one emphasised column */
+  --track: #E1E9EE;           /* empty part of a goal bar */
+  --border: #E1E8EC;          /* hairlines between rows */
+  --border-strong: #C9D5DC;   /* group rules, input outlines */
+  --text: #15303C;            /* ink */
+  --text-muted: #4E6876;      /* labels, captions */
+  --text-faint: #536D7B;      /* placeholders, decorative only */
+
+  /* --- Accent: ordinary actions and navigation --- */
+  --accent: #0B6884;
+  --accent-hover: #08556C;
+  --on-accent: #FFFFFF;
+  --accent-soft: #DCEFF4;
+  --accent-ink: #0A5A72;
+  --focus: #1F7FA0;
+  --focus-halo: rgba(31, 127, 160, .25);
+
+  /* --- State colours (always paired with a word or an icon) --- */
+  --unassigned: #5A3BC2;        /* money waiting for rain; also the rain action */
+  --unassigned-hover: #4A2EA6;
+  --on-unassigned: #FFFFFF;
+  --unassigned-soft: #EEE9FC;
+  --unassigned-line: #D9CEF7;
+  --over: #B3243B;              /* overspent: the only strong warning */
+  --over-soft: #FCE8EC;
+  --over-line: #F3C3CD;
+  --short: #845400;             /* underfunded: attention, not alarm */
+  --short-soft: #FCF0D4;
+  --short-fill: #E9A93B;
+  /* Vessel: amber while filling, a soft green when full */
+  --vessel-part-line: #845400;
+  --vessel-part-fill: #E9A93B;
+  --vessel-full-line: #3E9A69;   /* 3.5:1 on white: carries the shape */
+  --vessel-full-fill: #D3EEDD;   /* pale tint: full, but quiet */
+  --short-line: #F0D9A1;
+  --ok: #1B7146;                /* funded, paid, income, success */
+  --ok-soft: #E0F2E7;
+  --ok-line: #BFE3CD;
+
+  /* --- Bucket colours: identity only, never meaning --- */
+  --b-sky: #3FA3DB;
+  --b-blue: #3D6CD4;
+  --b-teal: #1A9E92;
+  --b-green: #45A257;
+  --b-lime: #86AE2C;
+  --b-sun: #D4B40F;
+  --b-tangerine: #EC8033;
+  --b-plum: #A54FB0;
+  --b-rose: #CC4F9A;
+  --b-cocoa: #A07052;
+  --b-mint: #2FB585;
+  --b-forest: #2D7A4A;
+  --b-olive: #808A2B;
+  --b-peach: #E39466;
+  --b-denim: #4F84B8;
+  --b-slate: #64798C;
+  /* Controls: Rainlight's stronger outline for inputs, selects and
+     secondary buttons (3:1 against the surface). */
+  --border-control: #7E939A;
+  /* Resting inputs retain a 3:1 outline in both themes. */
+  --pill-line: #7E939A;
+  --pill-bg: #F7FAFB;
+  --surface-raised: #FFFFFF;
+  --shadow-pop: 0 10px 30px -10px rgba(21, 48, 60, .35), 0 0 0 1px var(--border-strong);
+  --snack-bg: #15303C;
+  --snack-text: #FFFFFF;
+  --snack-action: #9FDDEE;
+  --snack-icon: #8FE0B4;
+
+  /* --- Depth --- */
+  --shadow-card: 0 1px 2px rgba(21, 48, 60, .05), 0 6px 20px -8px rgba(21, 48, 60, .10);
+  --shadow-btn: 0 1px 2px rgba(21, 48, 60, .12);
+  --card-ring: transparent;
+
+  /* --- Added for the app (not in the prototype's token block) --- */
+  --input-bg: var(--surface);
 }
-* { box-sizing: border-box; }
-body { margin: 0; }
-button, input { font: inherit; }
+
+/* Dark: a night lake. Surfaces get lighter as they come forward; no shadows,
+   no glow. Bucket hues are lifted and slightly softened, not inverted.
+   This is the only dark block. The build (scripts/copy-assets.ts) also emits
+   it under @media (prefers-color-scheme: dark) for :root:not([data-theme="light"]),
+   so dark follows the system unless data-theme="light" overrides it. Put
+   dark-only values here as tokens, never in component rules. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #0F171E;
+  --sidebar: #0B1218;
+  --surface: #16212A;
+  --surface-sunken: #121C24;
+  --avail-col: #1B2833;
+  --track: #617782;          /* lifted so goal tracks stay visible */
+  --border: #22303B;
+  --border-strong: #33444F;
+  --text: #E3ECF0;
+  --text-muted: #9AAEB9;
+  --text-faint: #7F94A0;
+
+  --accent: #63C5DF;
+  --accent-hover: #86D4E8;
+  --on-accent: #062B37;
+  --accent-soft: #15323D;
+  --accent-ink: #7FD0E5;
+  --focus: #7FD0E5;
+  --focus-halo: rgba(127, 208, 229, .28);
+
+  --unassigned: #B7A3FF;
+  --unassigned-hover: #CABBFF;
+  --on-unassigned: #1A123F;
+  --unassigned-soft: #221D3D;
+  --unassigned-line: #3A3268;
+  --over: #FF96A4;
+  --over-soft: #3A1C26;
+  --over-line: #5E2C3A;
+  --short: #EEC36B;
+  --short-soft: #30260F;
+  --short-fill: #D99A2B;
+  --vessel-part-line: #EEC36B;
+  --vessel-part-fill: #C98A1E;
+  --vessel-full-line: #5CC08A;
+  --vessel-full-fill: #1F4A33;
+  --short-line: #4E3E19;
+  --ok: #72D19D;
+  --ok-soft: #14301F;
+  --ok-line: #24503A;
+
+  --b-sky: #6BBCE9;
+  --b-blue: #7E9CF2;
+  --b-teal: #48C1B3;
+  --b-green: #6FC27C;
+  --b-lime: #A6CC55;
+  --b-sun: #E4D35A;
+  --b-tangerine: #F39D5B;
+  --b-plum: #D18BDF;
+  --b-rose: #E27AB8;
+  --b-cocoa: #C99878;
+  --b-mint: #6AD6AA;
+  --b-forest: #6DB987;
+  --b-olive: #B3BE5E;
+  --b-peach: #F2B48C;
+  --b-denim: #8AB4DE;
+  --b-slate: #9DB0C1;
+  --border-control: #78949F;
+  --pill-line: #78949F;
+  --pill-bg: #121C24;
+  --surface-raised: #1D2A34;
+  --shadow-pop: 0 10px 30px -8px rgba(0, 0, 0, .6), 0 0 0 1px var(--border-control);
+  --snack-bg: #E3ECF0;
+  --snack-text: #15303C;
+  --snack-action: #08556C;
+  --snack-icon: #1B7146;
+
+  /* A transparent shadow, not `none`: these tokens sit inside comma-separated
+     box-shadow lists, where `none` would invalidate the whole declaration. */
+  --shadow-card: 0 0 #0000;
+  --shadow-btn: 0 0 #0000;
+  --card-ring: var(--border);
+
+  --input-bg: var(--surface-sunken);
+}
+
+/* ==========================================================================
+   Base
+   ========================================================================== */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3 { font-family: var(--font-display); font-weight: var(--fw-heavy); line-height: var(--lh-tight); margin: 0; letter-spacing: -0.005em; }
+p { margin: 0; }
+button, input, select { font: inherit; color: inherit; }
 button, a, input { -webkit-tap-highlight-color: transparent; }
 button, a { touch-action: manipulation; }
-button { cursor: pointer; }
-:focus-visible { outline: 3px solid var(--blue); outline-offset: 4px; }
-button:disabled, input:disabled { cursor: wait; opacity: .65; }
 [hidden] { display: none !important; }
-.masthead { max-width: 1180px; margin: auto; padding: 38px 40px 30px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
-.brand { display: flex; align-items: center; gap: 12px; font-family: ui-rounded, "Arial Rounded MT Bold", sans-serif; font-size: 25px; font-weight: 750; letter-spacing: -.8px; color: var(--ink); text-decoration: none; }
-.brand svg { color: var(--blue); }
-.masthead-note { color: var(--muted); font-size: 14px; }
-.workspace { max-width: 1100px; margin: 15px auto 60px; display: grid; grid-template-columns: 300px minmax(0, 1fr); border: 1px solid var(--line); border-radius: 14px; background: var(--white); overflow: hidden; min-height: 560px; }
-.budgets { padding: 30px 20px; background: #f6f9fb; border-right: 1px solid var(--line); }
-.section-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 8px; margin-bottom: 24px; }
-h2 { font-size: 14px; font-weight: 650; margin: 0; }
-.new-button { border: 1px solid var(--line); border-radius: 6px; color: var(--blue); background: var(--white); padding: 7px 11px; font-size: 13px; font-weight: 650; }
-.new-button:hover { background: var(--blue-light); }
-.muted { color: var(--muted); font-size: 14px; line-height: 1.6; padding: 0 8px; }
-#budget-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
-.budget-link { display: block; color: var(--ink); text-decoration: none; padding: 16px; border: 1px solid transparent; border-radius: 8px; overflow-wrap: anywhere; }
-.budget-link:hover { background: var(--paper); }
-.budget-link[aria-current="page"] { background: var(--blue-light); border-color: #b3ccef; box-shadow: inset 3px 0 0 var(--blue); }
-.budget-link strong { display: block; font-size: 15px; font-weight: 600; line-height: 1.4; }
-.budget-link span { display: block; color: var(--muted); font-size: 12px; margin-top: 6px; }
-.editor { padding: 42px 48px; }
-.editor-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 35px; }
-.eyebrow { font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: 1.6px; color: var(--muted); }
-.bucket-mark { width: 26px; height: 26px; border: 2px solid var(--line); border-top: 5px solid var(--blue); border-radius: 2px 2px 8px 8px; transform: perspective(50px) rotateX(-12deg); }
-h1 { font-family: ui-rounded, "Arial Rounded MT Bold", sans-serif; font-size: clamp(28px, 3.2vw, 40px); letter-spacing: -1.5px; line-height: 1.15; margin: 0 0 16px; overflow-wrap: anywhere; }
-.intro { color: var(--muted); font-size: 15px; line-height: 1.7; max-width: 390px; margin: 0 0 38px; }
-label { display: block; font-size: 13px; font-weight: 650; margin-bottom: 10px; }
-input { display: block; width: 100%; border: 1px solid #9cb3c4; border-radius: 7px; color: var(--ink); padding: 14px; background: var(--white); }
-input::placeholder { color: #6a8192; }
-.save-row { margin-top: 18px; display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
-.save-button { background: var(--blue); border: 1px solid var(--blue); border-radius: 7px; color: var(--white); padding: 12px 20px; font-size: 14px; font-weight: 600; }
-.save-button:hover { background: #1d4788; }
-#save-message { color: var(--green); font-size: 13px; margin: 0; }
-#error-message { color: #9b263d; background: #fff0f3; border-left: 3px solid #b93d54; padding: 12px 15px; font-size: 14px; line-height: 1.5; margin-top: 20px; }
-#budget-details { display: flex; flex-wrap: wrap; gap: 24px; border-top: 1px solid var(--line); padding-top: 24px; margin: 42px 0 0; }
-dt { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
-dd { margin: 0; font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.num, .money { font-variant-numeric: tabular-nums lining-nums; font-feature-settings: "tnum" 1, "lnum" 1; }
+.icon { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.muted { color: var(--text-muted); }
+
+.card {
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-card), 0 0 0 1px var(--card-ring);
+}
+
+/* ==========================================================================
+   Buttons
+   ========================================================================== */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--s-2);
+  height: var(--touch); padding: 0 var(--s-5); border-radius: var(--r-md);
+  font-weight: var(--fw-bold); font-size: var(--fs-base); line-height: 1;
+  border: 1px solid transparent; cursor: pointer; white-space: nowrap; text-decoration: none;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+.btn:active { transform: translateY(1px); }
+.btn-sm { height: 36px; padding: 0 var(--s-3); font-size: var(--fs-sm); }
+.btn-primary { background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-btn); }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-secondary { background: var(--surface); color: var(--accent-ink); border-color: var(--border-control); }
+.btn-secondary:hover { border-color: var(--accent); }
+.btn-quiet { background: transparent; color: var(--accent-ink); padding: 0 var(--s-3); }
+.btn-quiet:hover { background: var(--accent-soft); }
+.btn:disabled { background: var(--surface-sunken); color: var(--text-faint); border-color: var(--border); box-shadow: none; cursor: wait; transform: none; }
+
+.icon-btn {
+  width: var(--touch); height: var(--touch); border-radius: var(--r-pill); flex: none;
+  display: inline-grid; place-items: center;
+  background: var(--surface); border: 1px solid var(--border); color: var(--text);
+  cursor: pointer; transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.icon-btn:hover { border-color: var(--border-control); }
+.theme-toggle .i-sun { display: none; }
+.theme-toggle[aria-pressed="true"] .i-moon { display: none; }
+.theme-toggle[aria-pressed="true"] .i-sun { display: block; }
+
+/* ==========================================================================
+   Inputs
+   ========================================================================== */
+.input {
+  display: block; width: 100%; height: var(--touch); padding: 0 var(--s-3);
+  background: var(--input-bg); border: 1px solid var(--border-control); border-radius: var(--r-md);
+  color: var(--text); font-size: var(--fs-base);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+  appearance: none; -webkit-appearance: none;
+}
+.input::placeholder { color: var(--text-faint); opacity: 1; }
+.input:hover { border-color: var(--text-muted); }
+.input:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 4px var(--focus-halo); }
+.input:disabled { cursor: wait; opacity: .65; }
+
+/* ==========================================================================
+   Messages: every state has a word or an icon, never colour alone.
+   Icons are drawn in CSS with empty alt text, so assistive technology reads
+   only the message itself.
+   ========================================================================== */
+.notice-error {
+  display: flex; align-items: flex-start; gap: var(--s-3);
+  padding: var(--s-3) var(--s-4); border-radius: var(--r-md);
+  background: var(--over-soft); border: 1px solid var(--over-line); border-left: 3px solid var(--over);
+  color: var(--text); font-size: var(--fs-sm); line-height: var(--lh-base); overflow-wrap: anywhere;
+}
+.notice-error::before {
+  content: "!" / "";
+  flex: none; display: grid; place-items: center; width: 18px; height: 18px; margin-top: 1px;
+  border-radius: var(--r-pill); background: var(--over); color: var(--surface);
+  font-size: var(--fs-xs); font-weight: var(--fw-heavy); line-height: 1;
+}
+.status { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--fs-sm); font-weight: var(--fw-medium); }
+.status[data-tone="ok"] { color: var(--ok); font-weight: var(--fw-semibold); }
+.status[data-tone="ok"]::before {
+  content: "" / "";
+  width: 6px; height: 11px; margin: 0 4px 3px 2px;
+  border: solid currentColor; border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+
+/* ==========================================================================
+   Masthead
+   ========================================================================== */
+body { padding: 0 var(--s-6); }
+.masthead { max-width: 1100px; margin: 0 auto; padding: var(--s-8) 0 var(--s-6); display: flex; align-items: center; gap: var(--s-4); }
+.brand { display: flex; align-items: center; min-height: var(--touch); gap: 10px; margin-right: auto; color: var(--text); text-decoration: none; border-radius: var(--r-md); }
+.brand .glyph { width: 34px; height: 34px; border-radius: 11px; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; }
+.brand .glyph svg { width: 20px; height: 22px; }
+.brand span:last-child { font-family: var(--font-display); font-weight: var(--fw-heavy); font-size: 20px; letter-spacing: -0.01em; }
+.masthead-note { color: var(--text-muted); font-size: var(--fs-sm); }
+
+/* ==========================================================================
+   Budget workspace
+   ========================================================================== */
+.workspace { max-width: 1100px; margin: 0 auto var(--s-16); display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: 560px; overflow: hidden; }
+.budgets { padding: var(--s-6) var(--s-4); background: var(--surface-sunken); border-right: 1px solid var(--border); }
+.section-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); padding: 0 var(--s-2) 0 var(--s-3); margin-bottom: var(--s-4); }
+.section-heading h2 { font-size: var(--fs-md); }
+#list-message { color: var(--text-muted); font-size: var(--fs-sm); padding: 0 var(--s-3); }
+#budget-list { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--s-1); }
+.budget-link {
+  display: block; min-height: var(--touch); padding: var(--s-2) var(--s-3); border-radius: var(--r-md);
+  color: var(--text); text-decoration: none; overflow-wrap: anywhere;
+  transition: background var(--dur-fast) var(--ease);
+}
+.budget-link:hover { background: color-mix(in srgb, var(--surface) 70%, transparent); }
+.budget-link:focus-visible { outline-offset: -2px; }
+.budget-link[aria-current="page"] { background: var(--surface); box-shadow: inset 3px 0 0 var(--accent), var(--shadow-btn), 0 0 0 1px var(--border); }
+.budget-link strong { display: block; font-size: var(--fs-base); font-weight: var(--fw-medium); line-height: 1.35; }
+.budget-link[aria-current="page"] strong { color: var(--accent-ink); font-weight: var(--fw-bold); }
+.budget-link span { display: block; margin-top: 2px; color: var(--text-muted); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+
+.editor { padding: var(--s-10) var(--s-12); }
+.editor-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--s-6); }
+.eyebrow { font-size: var(--fs-xs); font-weight: var(--fw-semibold); letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
+.bucket-mark { width: 24px; height: 26px; border: 2px solid var(--border-strong); border-top: 5px solid var(--accent); border-radius: 2px 2px var(--r-sm) var(--r-sm); transform: perspective(50px) rotateX(-12deg); }
+.editor h1 { font-size: var(--fs-2xl); margin-bottom: var(--s-3); overflow-wrap: anywhere; }
+.intro { color: var(--text-muted); max-width: 46ch; margin-bottom: var(--s-8); }
+#budget-form { max-width: 440px; }
+#budget-form label { display: block; margin-bottom: 6px; font-size: var(--fs-sm); font-weight: var(--fw-semibold); }
+.save-row { margin-top: var(--s-4); display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-4); }
+#error-message { margin-top: var(--s-5); max-width: 560px; }
+#budget-details { display: flex; flex-wrap: wrap; gap: var(--s-6); margin: var(--s-10) 0 0; padding-top: var(--s-5); border-top: 1px solid var(--border); }
+dt { color: var(--text-muted); font-size: var(--fs-xs); margin-bottom: var(--s-1); }
+dd { margin: 0; font-size: var(--fs-sm); font-weight: var(--fw-medium); font-variant-numeric: tabular-nums; }
+
+/* ==========================================================================
+   Phone: 16px gutter, 44px touch targets
+   ========================================================================== */
 @media (max-width: 760px) {
-  .masthead { padding: 24px 20px; }
+  body { padding: 0 var(--s-4); }
+  .masthead { padding: var(--s-4) 0; }
   .masthead-note { display: none; }
-  .workspace { display: block; margin: 0 16px 30px; min-height: auto; }
-  .budgets { border-right: 0; border-bottom: 1px solid var(--line); padding: 22px 16px; }
-  .section-heading { margin-bottom: 14px; }
+  .workspace { display: block; min-height: auto; margin-bottom: var(--s-8); }
+  .budgets { border-right: 0; border-bottom: 1px solid var(--border); padding: var(--s-4) var(--s-3); }
+  .section-heading { padding: 0 0 0 var(--s-3); margin-bottom: var(--s-3); }
+  .btn-sm { height: var(--touch); padding: 0 var(--s-4); }
   #budget-list { max-height: 225px; overflow-y: auto; }
-  .budget-link { padding: 12px 14px; }
-  .editor { padding: 28px 24px 38px; }
-  .editor-top { margin-bottom: 24px; }
-  .intro { margin-bottom: 28px; }
+  .editor { padding: var(--s-6) var(--s-5) var(--s-8); }
+  .editor-top { margin-bottom: var(--s-4); }
+  .editor h1 { font-size: var(--fs-xl); }
+  .intro { margin-bottom: var(--s-6); }
+  /* 16px stops iOS Safari zooming into a focused field. */
+  .input { font-size: 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0ms !important; animation-duration: 0ms !important; scroll-behavior: auto !important; }
+  .btn:active { transform: none; }
 }

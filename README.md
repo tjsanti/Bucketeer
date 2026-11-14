@@ -41,7 +41,7 @@ npm test
 npm run acceptance
 ```
 
-Browser regression tests cover successful saves when the budget-list refresh fails, failed saves and retries, reopening, renaming, and mobile layout. Install Chromium once, then run them:
+Browser regression tests cover successful saves when the budget-list refresh fails, failed saves and retries, reopening, renaming, mobile layout, the light/dark theme and its saved override, and bundled fonts loading with no external requests. Install Chromium once, then run them:
 
 ```sh
 npx playwright-core install chromium
@@ -69,6 +69,6 @@ Server configuration: `PORT` defaults to `3000`, `HOST` to `0.0.0.0`, and `DATAB
 - `src/api.ts` exposes the core through HTTP. `GET /health` queries SQLite and returns 503 when it is unavailable.
 - `src/client.ts` is the HTTP client shared by the CLI and UI.
 - `src/cli.ts` provides scriptable commands.
-- `src/ui/` provides budget selection, saving, renaming, and reopening via a bookmarkable URL.
+- `src/ui/` provides budget selection, saving, renaming, and reopening via a bookmarkable URL. `styles.css` holds the design tokens and light/dark themes; the build bundles the Nunito and Figtree fonts (OFL) from Fontsource into `dist/ui/fonts` with content-hashed names, served as immutable.
 
 HTTP routes: `GET /api/budgets`, `POST /api/budgets` with `{ "name": "Household" }`, and `GET` or `PUT /api/budgets/:id`. PUT accepts `{ "name": "Family budget" }`. POST and PUT reject an `id` in the request body; the server assigns IDs, and PUT takes its ID from the URL. Budget responses contain `id`, `name`, `createdAt`, and `updatedAt`. Timestamps are UTC ISO strings. Future monetary values will use integer cents, with rules in the core.

@@ -11,7 +11,8 @@
     "exactOptionalPropertyTypes": true,
     "verbatimModuleSyntax": true,
     "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "moduleDetection": "legacy"
   },
   "include": ["src/**/*.ts"]
 }

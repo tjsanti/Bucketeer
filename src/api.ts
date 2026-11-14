@@ -4,12 +4,41 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { BudgetError } from "./core/index.js";
 import type { Bucketeer } from "./core/index.js";
 
-const assets = new Map<string, readonly [string, string]>([
-  ["/", ["./ui/index.html", "text/html; charset=utf-8"]],
-  ["/ui/app.js", ["./ui/app.js", "text/javascript; charset=utf-8"]],
-  ["/ui/styles.css", ["./ui/styles.css", "text/css; charset=utf-8"]],
-  ["/client.js", ["./client.js", "text/javascript; charset=utf-8"]],
+interface Asset {
+  readonly file: string;
+  readonly type: string;
+  readonly cache: string;
+}
+
+const revalidate = "no-cache";
+const assets = new Map<string, Asset>([
+  ["/", { file: "./ui/index.html", type: "text/html; charset=utf-8", cache: revalidate }],
+  ["/ui/app.js", { file: "./ui/app.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
+  ["/ui/styles.css", { file: "./ui/styles.css", type: "text/css; charset=utf-8", cache: revalidate }],
+  ["/ui/theme.js", { file: "./ui/theme.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
+  ["/client.js", { file: "./client.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
 ]);
+
+// Bundled fonts and their licences, copied into dist/ui/fonts by the build.
+// Font names carry a content hash, so a changed font gets a new URL and can be cached forever.
+function findAsset(pathname: string): Asset | undefined {
+  const known = assets.get(pathname);
+  if (known) return known;
+  const font = /^\/ui\/fonts\/([a-z0-9-]+\.[0-9a-f]{8}\.woff2)$/.exec(pathname)?.[1];
+  if (font) return { file: `./ui/fonts/${font}`, type: "font/woff2", cache: "public, max-age=31536000, immutable" };
+  const licence = /^\/ui\/fonts\/([A-Za-z0-9-]+\.txt)$/.exec(pathname)?.[1];
+  if (licence) return { file: `./ui/fonts/${licence}`, type: "text/plain; charset=utf-8", cache: revalidate };
+  return undefined;
+}
+
+async function readAsset(path: string): Promise<Buffer> {
+  try {
+    return await readFile(new URL(path, import.meta.url));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new HttpError(404, "not_found", "Route not found.");
+    throw error;
+  }
+}
 
 class HttpError extends Error {
   constructor(public readonly status: number, public readonly code: string, message: string) {
@@ -81,10 +110,10 @@ export function createApi(core: Bucketeer) {
           return;
         }
       }
-      const asset = assets.get(pathname);
+      const asset = findAsset(pathname);
       if (asset && (request.method === "GET" || request.method === "HEAD")) {
-        const content = await readFile(new URL(asset[0], import.meta.url));
-        response.writeHead(200, { "content-type": asset[1], "cache-control": "no-cache" });
+        const content = await readAsset(asset.file);
+        response.writeHead(200, { "content-type": asset.type, "cache-control": asset.cache });
         response.end(request.method === "HEAD" ? undefined : content);
         return;
       }

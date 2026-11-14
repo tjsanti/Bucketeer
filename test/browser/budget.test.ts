@@ -1,35 +1,10 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
-import { resolve } from "node:path";
-import { createInterface } from "node:readline";
 import { test } from "node:test";
-import { chromium } from "playwright-core";
+import { launchBrowser, startServer } from "./harness.js";
 
 test("the UI distinguishes a saved budget with a stale list from a failed save", { timeout: 30_000 }, async (t) => {
-  const server = spawn(process.execPath, [resolve("dist/server.js")], {
-    env: { ...process.env, HOST: "127.0.0.1", PORT: "0", DATABASE_PATH: ":memory:" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const exited = once(server, "exit");
-  let stderr = "";
-  server.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-  t.after(async () => {
-    if (server.exitCode === null && server.signalCode === null) server.kill("SIGTERM");
-    await exited;
-  });
-  const lines = createInterface({ input: server.stdout });
-  const line = await Promise.race([
-    once(lines, "line").then(([value]) => String(value)),
-    exited.then(() => { throw new Error(`Server exited before listening: ${stderr}`); }),
-  ]);
-  lines.close();
-  const port = /port (\d+)/.exec(line)?.[1];
-  assert.ok(port, line);
-  const url = `http://127.0.0.1:${port}`;
-  const browserPath = process.env.BUCKETEER_BROWSER_PATH;
-  const browser = await chromium.launch({ headless: true, ...(browserPath ? { executablePath: browserPath } : {}) });
-  t.after(() => browser.close());
+  const url = await startServer(t);
+  const browser = await launchBrowser(t);
   const page = await browser.newPage();
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));

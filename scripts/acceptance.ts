@@ -43,10 +43,19 @@ try {
   }, "Missing budgets must produce a nonzero exit code.");
   compose("exec", "-T", "bucketeer", "node", "--input-type=module", "-e", `
     import assert from 'node:assert/strict';
-    for (const path of ['/', '/ui/app.js', '/ui/styles.css', '/client.js']) {
+    for (const path of ['/', '/ui/app.js', '/ui/theme.js', '/ui/styles.css', '/client.js']) {
       const response = await fetch('http://localhost:${port}' + path);
       assert.equal(response.status, 200, path);
       assert.ok((await response.text()).length > 0, path);
+    }
+    const css = await (await fetch('http://localhost:${port}/ui/styles.css')).text();
+    const fonts = [...css.matchAll(/url\\("(\\/ui\\/fonts\\/[^"]+\\.woff2)"\\)/g)].map((match) => match[1]);
+    assert.equal(fonts.length, 4, 'bundled font URLs in styles.css');
+    for (const path of fonts) {
+      const response = await fetch('http://localhost:${port}' + path);
+      assert.equal(response.status, 200, path);
+      assert.equal(response.headers.get('cache-control'), 'public, max-age=31536000, immutable', path);
+      assert.ok((await response.arrayBuffer()).byteLength > 0, path);
     }
   `);
   console.log("PASS: Docker health on default and custom ports, CLI save/list/open/update, container recreation, persistence, errors, and UI assets.");

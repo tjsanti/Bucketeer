@@ -27,6 +27,12 @@ function showError(error: unknown): void {
   errorMessage.hidden = false;
 }
 
+function setSaveMessage(text: string, tone?: "ok"): void {
+  saveMessage.textContent = text;
+  if (tone) saveMessage.dataset.tone = tone;
+  else delete saveMessage.dataset.tone;
+}
+
 function setBusy(value: boolean): void {
   busy = value;
   name.disabled = value;
@@ -46,7 +52,7 @@ function showBudget(budget?: Budget): void {
     element("created-at").textContent = date(budget.createdAt);
     element("updated-at").textContent = date(budget.updatedAt);
   }
-  saveMessage.textContent = "";
+  setSaveMessage("");
   errorMessage.hidden = true;
   for (const link of list.querySelectorAll<HTMLAnchorElement>("a")) {
     if (link.dataset.id === budget?.id) link.setAttribute("aria-current", "page");
@@ -106,26 +112,26 @@ newBudget.addEventListener("click", () => {
 });
 list.addEventListener("click", (event) => { if (busy) event.preventDefault(); });
 window.addEventListener("hashchange", () => { void loadSelection(); });
-name.addEventListener("input", () => { saveMessage.textContent = "Unsaved changes"; });
+name.addEventListener("input", () => { setSaveMessage("Unsaved changes"); });
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (busy) return;
   setBusy(true);
   errorMessage.hidden = true;
-  saveMessage.textContent = "Saving...";
+  setSaveMessage("Saving...");
   try {
     const input = { name: name.value };
     const budget = await (selected ? client.renameBudget(selected.id, input) : client.createBudget(input));
     window.history.replaceState(null, "", `#${encodeURIComponent(budget.id)}`);
     showBudget(budget);
-    saveMessage.textContent = "Saved";
+    setSaveMessage("Saved", "ok");
     try {
       await refreshList();
     } catch {
       showError(new Error("Your budget was saved, but the budget list could not refresh. Reload to try again."));
     }
   } catch (error) {
-    saveMessage.textContent = "";
+    setSaveMessage("");
     showError(error);
   } finally {
     setBusy(false);
