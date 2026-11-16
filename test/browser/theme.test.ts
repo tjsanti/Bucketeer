@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { launchBrowser, startServer } from "./harness.js";
+import { launchBrowser, ready, startServer } from "./harness.js";
 
 const lightBackground = "rgb(242, 246, 248)";
 const darkBackground = "rgb(15, 23, 30)";
@@ -20,7 +20,7 @@ test("the theme follows the system, a saved choice overrides it, and fonts come 
   const toggle = page.getByRole("button", { name: "Dark theme" });
 
   await page.goto(url);
-  await page.locator("#save-budget:enabled").waitFor();
+  await ready(page);
   assert.equal(await background(), darkBackground);
   assert.equal(await toggle.getAttribute("aria-pressed"), "true");
 
@@ -30,7 +30,7 @@ test("the theme follows the system, a saved choice overrides it, and fonts come 
   assert.equal(await toggle.getAttribute("aria-pressed"), "false");
 
   await page.reload();
-  await page.locator("#save-budget:enabled").waitFor();
+  await ready(page);
   assert.equal(await background(), lightBackground, "The saved choice must survive a reload.");
 
   await page.emulateMedia({ colorScheme: "light" });
@@ -71,7 +71,7 @@ test("the theme toggle still works when storage is unavailable", { timeout: 30_0
     Object.defineProperty(window, "localStorage", { get() { throw new DOMException("Blocked", "SecurityError"); } });
   });
   await page.goto(url);
-  await page.locator("#save-budget:enabled").waitFor();
+  await ready(page);
   await page.getByRole("button", { name: "Dark theme" }).click();
   assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), darkBackground);
   assert.deepEqual(pageErrors, []);

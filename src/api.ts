@@ -13,10 +13,11 @@ interface Asset {
 const revalidate = "no-cache";
 const assets = new Map<string, Asset>([
   ["/", { file: "./ui/index.html", type: "text/html; charset=utf-8", cache: revalidate }],
-  ["/ui/app.js", { file: "./ui/app.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
   ["/ui/styles.css", { file: "./ui/styles.css", type: "text/css; charset=utf-8", cache: revalidate }],
-  ["/ui/theme.js", { file: "./ui/theme.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
   ["/client.js", { file: "./client.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
+  // Shared with the browser: money.js imports types.js at runtime.
+  ["/core/money.js", { file: "./core/money.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
+  ["/core/types.js", { file: "./core/types.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
 ]);
 
 // Bundled fonts and their licences, copied into dist/ui/fonts by the build.
@@ -24,6 +25,11 @@ const assets = new Map<string, Asset>([
 function findAsset(pathname: string): Asset | undefined {
   const known = assets.get(pathname);
   if (known) return known;
+  // Path-routed pages: the UI reads the budget ID from the URL.
+  if (/^\/budgets\/[^/]+\/accounts\/?$/.test(pathname)) return assets.get("/");
+  // Compiled UI modules (app.js, theme.js, accounts.js, ...) live flat in dist/ui.
+  const script = /^\/ui\/([a-z][a-z0-9-]*\.js)$/.exec(pathname)?.[1];
+  if (script) return { file: `./ui/${script}`, type: "text/javascript; charset=utf-8", cache: revalidate };
   const font = /^\/ui\/fonts\/([a-z0-9-]+\.[0-9a-f]{8}\.woff2)$/.exec(pathname)?.[1];
   if (font) return { file: `./ui/fonts/${font}`, type: "font/woff2", cache: "public, max-age=31536000, immutable" };
   const licence = /^\/ui\/fonts\/([A-Za-z0-9-]+\.txt)$/.exec(pathname)?.[1];
@@ -43,6 +49,16 @@ async function readAsset(path: string): Promise<Buffer> {
 class HttpError extends Error {
   constructor(public readonly status: number, public readonly code: string, message: string) {
     super(message);
+  }
+}
+
+const statuses = { invalid_input: 400, not_found: 404, name_taken: 409, balance_not_zero: 409 } as const;
+
+function decodeId(segment: string, what: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    throw new HttpError(400, "invalid_input", `${what} ID is malformed.`);
   }
 }
 
@@ -93,14 +109,37 @@ export function createApi(core: Bucketeer) {
         json(response, 201, budget);
         return;
       }
+      const budgetAccounts = /^\/api\/budgets\/([^/]+)\/accounts$/.exec(pathname)?.[1];
+      if (budgetAccounts && request.method === "GET") {
+        json(response, 200, core.listAccounts(decodeId(budgetAccounts, "Budget")));
+        return;
+      }
+      if (budgetAccounts && request.method === "POST") {
+        const account = core.createAccount(decodeId(budgetAccounts, "Budget"), await readJson(request));
+        response.setHeader("location", `/api/accounts/${encodeURIComponent(account.id)}`);
+        json(response, 201, account);
+        return;
+      }
+      const accountRoute = /^\/api\/accounts\/([^/]+)(?:\/(close|reopen))?$/.exec(pathname);
+      if (accountRoute?.[1]) {
+        const id = decodeId(accountRoute[1], "Account");
+        const action = accountRoute[2];
+        if (!action && request.method === "GET") {
+          json(response, 200, core.openAccount(id));
+          return;
+        }
+        if (!action && request.method === "PATCH") {
+          json(response, 200, core.editAccount(id, await readJson(request)));
+          return;
+        }
+        if (action && request.method === "POST") {
+          json(response, 200, action === "close" ? core.closeAccount(id) : core.reopenAccount(id));
+          return;
+        }
+      }
       const match = /^\/api\/budgets\/([^/]+)$/.exec(pathname);
       if (match?.[1]) {
-        let id: string;
-        try {
-          id = decodeURIComponent(match[1]);
-        } catch {
-          throw new HttpError(400, "invalid_input", "Budget ID is malformed.");
-        }
+        const id = decodeId(match[1], "Budget");
         if (request.method === "GET") {
           json(response, 200, core.openBudget(id));
           return;
@@ -120,7 +159,7 @@ export function createApi(core: Bucketeer) {
       throw new HttpError(404, "not_found", "Route not found.");
     } catch (error) {
       if (error instanceof BudgetError) {
-        json(response, error.code === "not_found" ? 404 : 400, { error: { code: error.code, message: error.message } });
+        json(response, statuses[error.code], { error: { code: error.code, message: error.message } });
       } else if (error instanceof HttpError) {
         json(response, error.status, { error: { code: error.code, message: error.message } });
       } else {

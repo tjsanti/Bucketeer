@@ -1,4 +1,4 @@
-import type { Budget, BudgetNameInput, Health } from "./core/index.js";
+import type { Account, AccountEditInput, Budget, BudgetNameInput, Health, NewAccountInput } from "./core/index.js";
 
 export class ApiError extends Error {
   constructor(public readonly code: string, message: string) {
@@ -30,6 +30,11 @@ export function createClient(baseUrl: string) {
     return body as T;
   }
 
+  const send = (method: string, body?: unknown): RequestInit => body === undefined
+    ? { method }
+    : { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
+  const account = (id: string) => `/api/accounts/${encodeURIComponent(id)}`;
+
   return {
     status: () => request<Health>("/health"),
     listBudgets: () => request<Budget[]>("/api/budgets"),
@@ -44,5 +49,11 @@ export function createClient(baseUrl: string) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
     }),
+    listAccounts: (budgetId: string) => request<Account[]>(`/api/budgets/${encodeURIComponent(budgetId)}/accounts`),
+    createAccount: (budgetId: string, input: NewAccountInput) => request<Account>(`/api/budgets/${encodeURIComponent(budgetId)}/accounts`, send("POST", input)),
+    openAccount: (id: string) => request<Account>(account(id)),
+    editAccount: (id: string, input: AccountEditInput) => request<Account>(account(id), send("PATCH", input)),
+    closeAccount: (id: string) => request<Account>(`${account(id)}/close`, send("POST")),
+    reopenAccount: (id: string) => request<Account>(`${account(id)}/reopen`, send("POST")),
   };
 }

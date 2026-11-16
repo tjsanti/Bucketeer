@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import type { TestContext } from "node:test";
 import { chromium } from "playwright-core";
-import type { Browser } from "playwright-core";
+import type { Browser, Page } from "playwright-core";
 
 /** Starts the built server on a free port with an in-memory database; stops it when the test ends. */
 export async function startServer(t: TestContext): Promise<string> {
@@ -37,4 +37,41 @@ export async function launchBrowser(t: TestContext): Promise<Browser> {
   const browser = await chromium.launch({ headless: true, ...(browserPath ? { executablePath: browserPath } : {}) });
   t.after(() => browser.close());
   return browser;
+}
+
+export interface App {
+  url: string;
+  page: Page;
+  pageErrors: string[];
+  foreignRequests: string[];
+}
+
+/** A fresh server and browser page; tracks page errors and requests that leave the app's origin. */
+export async function openApp(t: TestContext, options: { colorScheme?: "light" | "dark"; width?: number; height?: number } = {}): Promise<App> {
+  const url = await startServer(t);
+  const browser = await launchBrowser(t);
+  const context = await browser.newContext({
+    colorScheme: options.colorScheme ?? "light",
+    viewport: { width: options.width ?? 1280, height: options.height ?? 900 },
+    reducedMotion: "reduce",
+  });
+  const page = await context.newPage();
+  const pageErrors: string[] = [];
+  const foreignRequests: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("request", (request) => {
+    if (new URL(request.url()).origin !== url) foreignRequests.push(request.url());
+  });
+  return { url, page, pageErrors, foreignRequests };
+}
+
+/** Waits until the app has finished loading its route. */
+export async function ready(page: Page): Promise<void> {
+  await page.locator("#main:not([aria-busy])").waitFor();
+}
+
+export async function seedBudget(url: string, name: string): Promise<string> {
+  const response = await fetch(`${url}/api/budgets`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name }) });
+  assert.equal(response.status, 201);
+  return ((await response.json()) as { id: string }).id;
 }

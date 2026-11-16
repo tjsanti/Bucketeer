@@ -1,149 +1,179 @@
+// Entry point: routing and loading. The History API drives two kinds of page:
+//   /                          -> the last-used (or first) budget's Accounts page, or the first-run card
+//   /budgets/<id>/accounts     -> the Accounts page
 import { createClient } from "../client.js";
 import type { Budget } from "../core/index.js";
-
-function element<T extends HTMLElement>(id: string): T {
-  const found = document.getElementById(id);
-  if (!found) throw new Error(`Missing element: ${id}`);
-  return found as T;
-}
+import { createAccountsPage } from "./accounts.js";
+import { byId, el, messageOf, setNote } from "./dom.js";
+import { field, openSheet, textInput } from "./sheet.js";
+import { accountsPath, createShell } from "./shell.js";
 
 const client = createClient(window.location.origin);
-const form = element<HTMLFormElement>("budget-form");
-const name = element<HTMLInputElement>("budget-name");
-const save = element<HTMLButtonElement>("save-budget");
-const newBudget = element<HTMLButtonElement>("new-budget");
-const list = element<HTMLUListElement>("budget-list");
-const listMessage = element("list-message");
-const errorMessage = element("error-message");
-const saveMessage = element("save-message");
-let selected: Budget | undefined;
-let busy = false;
-let selectionRequest = 0;
+const main = byId("main");
+const budgetKey = "bucketeer-budget";
+let routeSeq = 0;
+let current: Budget | undefined;
 
-const date = (value: string) => new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-
-function showError(error: unknown): void {
-  errorMessage.textContent = error instanceof Error ? error.message : "Could not load your budget. Try again.";
-  errorMessage.hidden = false;
-}
-
-function setSaveMessage(text: string, tone?: "ok"): void {
-  saveMessage.textContent = text;
-  if (tone) saveMessage.dataset.tone = tone;
-  else delete saveMessage.dataset.tone;
-}
-
-function setBusy(value: boolean): void {
-  busy = value;
-  name.disabled = value;
-  save.disabled = value;
-  newBudget.disabled = value;
-  form.setAttribute("aria-busy", String(value));
-}
-
-function showBudget(budget?: Budget): void {
-  selected = budget;
-  name.value = budget?.name ?? "";
-  element("editor-heading").textContent = budget?.name ?? "Start a budget.";
-  element("editor-state").textContent = budget ? "YOUR BUDGET" : "GETTING STARTED";
-  element("editor-description").textContent = budget ? "Your budget is saved. Change its name here whenever you need." : "Give it a name. You can save it now and pick it up whenever you need.";
-  element("budget-details").hidden = !budget;
-  if (budget) {
-    element("created-at").textContent = date(budget.createdAt);
-    element("updated-at").textContent = date(budget.updatedAt);
-  }
-  setSaveMessage("");
-  errorMessage.hidden = true;
-  for (const link of list.querySelectorAll<HTMLAnchorElement>("a")) {
-    if (link.dataset.id === budget?.id) link.setAttribute("aria-current", "page");
-    else link.removeAttribute("aria-current");
-  }
-}
-
-async function refreshList(): Promise<void> {
-  const budgets = await client.listBudgets();
-  list.replaceChildren();
-  listMessage.textContent = budgets.length ? "" : "No budgets yet. Save your first one to get started.";
-  listMessage.hidden = budgets.length > 0;
-  for (const budget of budgets) {
-    const item = document.createElement("li");
-    const link = document.createElement("a");
-    link.className = "budget-link";
-    link.href = `#${encodeURIComponent(budget.id)}`;
-    link.dataset.id = budget.id;
-    if (selected?.id === budget.id) link.setAttribute("aria-current", "page");
-    const title = document.createElement("strong");
-    title.textContent = budget.name;
-    const saved = document.createElement("span");
-    saved.textContent = `Saved ${date(budget.updatedAt)}`;
-    link.append(title, saved);
-    item.append(link);
-    list.append(item);
-  }
-}
-
-async function loadSelection(): Promise<void> {
-  const request = ++selectionRequest;
-  const id = window.location.hash.slice(1);
-  if (!id) {
-    showBudget();
-    setBusy(false);
-    return;
-  }
-  setBusy(true);
+function lastUsedBudget(): string | undefined {
   try {
-    const budget = await client.openBudget(decodeURIComponent(id));
-    if (request === selectionRequest) showBudget(budget);
-  } catch (error) {
-    if (request === selectionRequest) {
-      showBudget();
-      showError(error);
-    }
-  } finally {
-    if (request === selectionRequest) setBusy(false);
+    return window.localStorage.getItem(budgetKey) ?? undefined;
+  } catch {
+    return undefined;
   }
 }
 
-newBudget.addEventListener("click", () => {
-  if (busy) return;
-  window.history.pushState(null, "", window.location.pathname);
-  showBudget();
-  name.focus();
+function rememberBudget(id: string): void {
+  try {
+    window.localStorage.setItem(budgetKey, id);
+  } catch {
+    // Storage can be unavailable (private mode, blocked site data); the route still works.
+  }
+}
+
+const shell = createShell({
+  navigate,
+  newBudget: () => openBudgetSheet(),
+  renameBudget: () => { if (current) openBudgetSheet(current); },
+  undoFailed: (message) => {
+    const note = main.querySelector<HTMLElement>(".page > .note");
+    if (note) setNote(note, message);
+  },
 });
-list.addEventListener("click", (event) => { if (busy) event.preventDefault(); });
-window.addEventListener("hashchange", () => { void loadSelection(); });
-name.addEventListener("input", () => { setSaveMessage("Unsaved changes"); });
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (busy) return;
-  setBusy(true);
-  errorMessage.hidden = true;
-  setSaveMessage("Saving...");
-  try {
-    const input = { name: name.value };
-    const budget = await (selected ? client.renameBudget(selected.id, input) : client.createBudget(input));
-    window.history.replaceState(null, "", `#${encodeURIComponent(budget.id)}`);
-    showBudget(budget);
-    setSaveMessage("Saved", "ok");
+
+async function navigate(path: string): Promise<void> {
+  if (path !== window.location.pathname) window.history.pushState(null, "", path);
+  await route();
+}
+
+/** Name dialog for both "New budget" and "Rename budget". */
+function openBudgetSheet(existing?: Budget): void {
+  const name = field("Name", (id) => textInput(id, existing?.name ?? ""));
+  const input = name.root.querySelector("input") as HTMLInputElement;
+  openSheet({
+    title: existing ? "Rename budget" : "New budget",
+    submitLabel: existing ? "Save" : "Create budget",
+    returnFocus: () => byId("budget-button"),
+    body: () => [name.root],
+    submit: async () => {
+      if (existing) {
+        await client.renameBudget(existing.id, { name: input.value });
+        await route();
+      } else {
+        const budget = await client.createBudget({ name: input.value });
+        await navigate(accountsPath(budget.id));
+      }
+    },
+  });
+}
+
+function showMessage(title: string, message: string, retry = true): void {
+  const note = el("div", { class: "note", role: "alert" });
+  setNote(note, message);
+  const retryButton = el("button", { class: "btn btn-secondary", type: "button" }, "Try again");
+  retryButton.addEventListener("click", () => void route());
+  main.replaceChildren(el("div", { class: "page" }, el("div", { class: "page-row" }, el("h1", {}, title)), note, retry ? retryButton : null));
+  document.title = `${title} · Bucketeer`;
+}
+
+function showFirstRun(): void {
+  const name = field("Budget name", (id) => textInput(id, ""));
+  const input = name.root.querySelector("input") as HTMLInputElement;
+  const submit = el("button", { class: "btn btn-primary", type: "submit" }, "Create budget");
+  const note = el("div", { class: "note", role: "alert" });
+  const fields = el("fieldset", { class: "sheet-fields" }, name.root);
+  const form = el("form", { class: "start-form", novalidate: true }, fields, note, submit);
+  form.addEventListener("input", () => setNote(note, null));
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    setNote(note, null);
+    fields.disabled = submit.disabled = true;
+    form.setAttribute("aria-busy", "true");
     try {
-      await refreshList();
-    } catch {
-      showError(new Error("Your budget was saved, but the budget list could not refresh. Reload to try again."));
+      const budget = await client.createBudget({ name: input.value });
+      await navigate(accountsPath(budget.id));
+    } catch (error) {
+      setNote(note, messageOf(error));
+      form.removeAttribute("aria-busy");
+      fields.disabled = submit.disabled = false;
+      input.focus();
     }
-  } catch (error) {
-    setSaveMessage("");
-    showError(error);
-  } finally {
-    setBusy(false);
-  }
-});
-
-try {
-  setBusy(true);
-  await refreshList();
-  await loadSelection();
-} catch (error) {
-  listMessage.textContent = "Could not load budgets. Reload to try again.";
-  showError(error);
-  setBusy(false);
+  });
+  main.replaceChildren(el("div", { class: "page" }, el("section", { class: "start card" }, el("h1", {}, "Start a budget"), form)));
+  document.title = "Bucketeer";
+  input.focus();
 }
+
+async function route(): Promise<void> {
+  const seq = ++routeSeq;
+  const stale = () => seq !== routeSeq;
+  main.setAttribute("aria-busy", "true");
+  shell.hideSnack();
+  const path = window.location.pathname.replace(/\/+$/, "") || "/";
+
+  try {
+    const budgets = await client.listBudgets();
+    if (stale()) return;
+    if (budgets.length === 0) {
+      current = undefined;
+      shell.setBudgets(budgets, undefined);
+      shell.setAccounts(null);
+      if (path !== "/") window.history.replaceState(null, "", "/");
+      showFirstRun();
+      return;
+    }
+
+    let id: string | undefined;
+    try {
+      id = /^\/budgets\/([^/]+)\/accounts$/.exec(path)?.[1];
+      if (id !== undefined) id = decodeURIComponent(id);
+    } catch {
+      id = "";
+    }
+    if (id === undefined) {
+      const target = budgets.find((budget) => budget.id === lastUsedBudget()) ?? budgets[0]!;
+      window.history.replaceState(null, "", accountsPath(target.id));
+      id = target.id;
+    }
+    current = budgets.find((budget) => budget.id === id);
+    shell.setBudgets(budgets, current);
+    if (!current) {
+      shell.setAccounts(null);
+      showMessage("Budget not found", "That budget does not exist.", false);
+      return;
+    }
+    const budget = current;
+    rememberBudget(budget.id);
+
+    const accounts = await client.listAccounts(budget.id);
+    if (stale()) return;
+    const page = createAccountsPage({
+      client,
+      budget,
+      snack: shell.showSnack,
+      async refresh() {
+        try {
+          const next = await client.listAccounts(budget.id);
+          if (stale()) return;
+          shell.setAccounts(next);
+          page.render(next);
+          page.note(null);
+        } catch {
+          if (!stale()) page.note("Your change was saved, but the accounts could not refresh. Reload to try again.");
+        }
+      },
+    });
+    shell.setAccounts(accounts);
+    page.render(accounts);
+    main.replaceChildren(page.root);
+    document.title = `Accounts · ${budget.name} · Bucketeer`;
+  } catch (error) {
+    if (stale()) return;
+    shell.setAccounts(null);
+    showMessage("Could not load", messageOf(error));
+  } finally {
+    if (!stale()) main.removeAttribute("aria-busy");
+  }
+}
+
+window.addEventListener("popstate", () => void route());
+await route();
