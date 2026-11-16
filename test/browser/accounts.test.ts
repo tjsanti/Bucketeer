@@ -124,7 +124,8 @@ test("accounts can be added, edited, closed, undone and reopened", { timeout: 60
   await dialog.waitFor({ state: "detached" });
   await snack.waitFor();
   assert.equal(await page.locator("#snack-msg").textContent(), "Closed Cash.");
-  assert.equal(await page.locator("#announce").textContent(), "Closed Cash.");
+  // The live region is cleared, then filled a moment later so screen readers announce a repeat message.
+  await page.waitForFunction(() => document.getElementById("announce")?.textContent === "Closed Cash.", undefined, { timeout: 2_000 });
   assert.equal(await table.getByRole("row", { name: /^Cash/ }).count(), 0);
   assert.equal(await sidebar.locator("li.row").count(), 2);
   assert.equal(compact(await page.locator("details.closed summary").innerText()), "Closed accounts · 1");
