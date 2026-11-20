@@ -1,14 +1,22 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 
-// Isolated Compose project and volume, so acceptance never touches a running personal budget.
-const project = `bucketeer-acceptance-${process.pid}`;
+// Isolated Compose projects and volumes, so acceptance never touches a running personal budget.
+const mainProject = `bucketeer-acceptance-${process.pid}`;
+const upgradeProject = `bucketeer-acceptance-upgrade-${process.pid}`;
+const mainImage = `bucketeer-acceptance-main-${process.pid}`;
+const mainContainer = `bucketeer-acceptance-main-${process.pid}`;
+let project = mainProject;
 let port = 3000;
+let timeZone: string | undefined;
+function docker(args: string[], input?: string | Buffer): string {
+  return execFileSync("docker", args, { encoding: "utf8", input, timeout: 300_000, maxBuffer: 10 * 1024 * 1024 }).trim();
+}
 function compose(...args: string[]): string {
   return execFileSync("docker", ["compose", "-p", project, "-f", "compose.yaml", "-f", "-", ...args], {
     encoding: "utf8",
     input: JSON.stringify({ services: { bucketeer: { environment: { PORT: String(port) } } } }),
-    env: { ...process.env, BUCKETEER_PORT: "0", BUCKETEER_BIND: "127.0.0.1" },
+    env: { ...process.env, BUCKETEER_PORT: "0", BUCKETEER_BIND: "127.0.0.1", ...(timeZone ? { TZ: timeZone } : {}) },
     timeout: 180_000,
     maxBuffer: 10 * 1024 * 1024,
   }).trim();
@@ -155,6 +163,71 @@ try {
     }
   `);
   console.log("PASS: Docker health on default and custom ports, CLI budget, account, group and bucket flows, container recreation, persistence, errors, and UI assets.");
+
+  // Upgrade: a volume written by the image from main, before versioned migrations, opens in place with the current build.
+  console.log("Building the image from main and filling an old volume with it...");
+  docker(["build", "-q", "-t", mainImage, "-"], execFileSync("git", ["archive", "--format=tar", "main"], { maxBuffer: 100 * 1024 * 1024 }));
+  const volume = `${upgradeProject}_bucketeer-data`;
+  docker(["volume", "create", "--label", `com.docker.compose.project=${upgradeProject}`, "--label", "com.docker.compose.volume=bucketeer-data", volume]);
+  docker(["run", "-d", "--name", mainContainer, "-v", `${volume}:/data`, mainImage]);
+  const oldCli = (...args: string[]) => docker(["exec", mainContainer, "bucketeer", "--url", "http://127.0.0.1:3000", ...args]);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      oldCli("status");
+      break;
+    } catch (error) {
+      if (attempt >= 60) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+    }
+  }
+  const oldBudget = JSON.parse(oldCli("budget", "save", "--name", "Old household", "--json"));
+  const oldBudgetArgs = ["--budget", oldBudget.id];
+  oldCli("account", "add", ...oldBudgetArgs, "--name", "Checking", "--type", "checking", "--starting-balance", "250.00", "--date", "2026-11-01");
+  const oldGroup = JSON.parse(oldCli("group", "add", ...oldBudgetArgs, "--name", "Fixed", "--json"));
+  oldCli("bucket", "add", ...oldBudgetArgs, "--name", "Rent", "--group", oldGroup.id, "--type", "recurring", "--amount", "1650");
+  const archivedOld = JSON.parse(oldCli("bucket", "add", ...oldBudgetArgs, "--name", "Old", "--group", oldGroup.id, "--json"));
+  oldCli("bucket", "archive", archivedOld.id);
+  const oldState = {
+    budgets: JSON.parse(oldCli("budget", "list", "--json")),
+    accounts: JSON.parse(oldCli("account", "list", ...oldBudgetArgs, "--json")),
+    buckets: JSON.parse(oldCli("bucket", "list", ...oldBudgetArgs, "--archived", "--json")),
+  };
+  docker(["stop", mainContainer]);
+  docker(["rm", mainContainer]);
+
+  console.log("Upgrading the old volume in place with the current build...");
+  project = upgradeProject;
+  port = 3000;
+  const userVersion = () => Number(compose("exec", "-T", "bucketeer", "node", "--input-type=module", "-e", `
+    import { DatabaseSync } from 'node:sqlite';
+    const database = new DatabaseSync('/data/bucketeer.sqlite', { readOnly: true });
+    console.log(database.prepare('PRAGMA user_version').get().user_version);
+  `));
+  const currentState = () => ({
+    budgets: JSON.parse(cli("budget", "list", "--json")),
+    accounts: JSON.parse(cli("account", "list", ...oldBudgetArgs, "--json")),
+    buckets: JSON.parse(cli("bucket", "list", ...oldBudgetArgs, "--archived", "--json")),
+  });
+  compose("up", "-d", "--build", "--wait", "--wait-timeout", "60");
+  assert.deepEqual(currentState(), oldState);
+  assert.equal(userVersion(), 1);
+  port = 4317;
+  timeZone = "America/Los_Angeles";
+  compose("up", "-d", "--force-recreate", "--wait", "--wait-timeout", "60");
+  assert.deepEqual(currentState(), oldState);
+  assert.equal(userVersion(), 1);
+  assert.equal(compose("exec", "-T", "bucketeer", "node", "-e", "console.log(Intl.DateTimeFormat().resolvedOptions().timeZone)"), "America/Los_Angeles");
+  console.log("PASS: a volume from main upgrades in place to schema version 1 and keeps its data across a container recreate; TZ reaches the server.");
 } finally {
-  compose("down", "--volumes", "--remove-orphans", "--rmi", "local");
+  for (const name of [mainProject, upgradeProject]) {
+    project = name;
+    compose("down", "--volumes", "--remove-orphans", "--rmi", "local");
+  }
+  for (const args of [["rm", "-f", mainContainer], ["rmi", "-f", mainImage], ["volume", "rm", "-f", `${upgradeProject}_bucketeer-data`]]) {
+    try {
+      execFileSync("docker", args, { stdio: "ignore" });
+    } catch {
+      // Already gone.
+    }
+  }
 }

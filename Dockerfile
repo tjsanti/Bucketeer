@@ -15,8 +15,10 @@ FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production PORT=3000 DATABASE_PATH=/data/bucketeer.sqlite
 WORKDIR /app
 COPY --from=build /app/dist ./dist
+# Without the image's own UTC zone files, a host /etc/localtime mounted by compose sets the zone (ADR-0007).
 RUN ln -s /app/dist/cli.js /usr/local/bin/bucketeer \
-    && mkdir /data && chown node:node /data
+    && mkdir /data && chown node:node /data \
+    && rm -f /etc/localtime /etc/timezone
 USER node
 EXPOSE 3000
 VOLUME ["/data"]

@@ -154,27 +154,6 @@ test("revertBucket only lets the month from before the undone edit be past", () 
   }
 });
 
-test("a database from before previous_goal_month gains the column on open", () => {
-  const directory = mkdtempSync(join(tmpdir(), "bucketeer-upgrade-"));
-  const filename = join(directory, "old.sqlite");
-  try {
-    const first = openBucketeer(filename);
-    first.close();
-    const raw = new DatabaseSync(filename);
-    raw.exec("ALTER TABLE buckets DROP COLUMN previous_goal_month");
-    raw.close();
-    const core = openBucketeer(filename);
-    const budget = core.createBudget({ name: "Household" });
-    const group = core.createGroup(budget.id, { name: "Goals" });
-    const trip = core.createBucket(budget.id, { name: "Trip", groupId: group.id, type: "goal", amount: 100, goalMonth: "2099-01" });
-    const moved = core.editBucket(trip.id, { goalMonth: "2099-02" });
-    assert.equal(core.revertBucket(trip.id, { goalMonth: "2099-01", revertOf: moved.updatedAt }).goalMonth, "2099-01");
-    core.close();
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
 test("revertBucket puts back an overdue goal month and a type change, only while the bucket is unchanged", () => {
   const { core, budget, setNow } = setup("2026-06-10T12:00:00.000Z");
   try {

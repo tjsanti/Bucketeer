@@ -18,7 +18,15 @@ Income, spending, assigning money to buckets, and the month view are still to co
 docker compose up --build -d --wait
 ```
 
-Open <http://localhost:3000>. The named `bucketeer-data` volume keeps your data across container restarts and replacements. `docker compose down` preserves it; `docker compose down --volumes` deletes it.
+Open <http://localhost:3000>. The named `bucketeer-data` volume keeps your data across container restarts and replacements. `docker compose down` preserves it; `docker compose down --volumes` deletes it. Upgrading to a newer image migrates the database in place on start.
+
+"Today" and "this month" (the current month, future-dated transactions, the default date for new ones) use the server's time zone. Compose mounts the host's `/etc/localtime` read-only. Where that doesn't carry the host's zone, set `TZ` to an IANA zone name, which compose passes through and which wins over the mount:
+
+```sh
+TZ=America/Los_Angeles docker compose up --build -d --wait
+```
+
+Without either, the container runs in UTC.
 
 > **There are no user accounts or authentication.** Anyone who can reach the port can read and change every budget. The published port binds to `127.0.0.1` by default. To reach it from other devices, put it behind a private network you trust (a VPN such as Tailscale) and set `BUCKETEER_BIND` to the server's VPN IP. Do not expose it to the public internet. `BUCKETEER_PORT` changes the host port.
 
@@ -110,7 +118,7 @@ npm run test:ui
 
 To use an existing Chrome or Chromium executable instead, set `BUCKETEER_BROWSER_PATH` to its full path.
 
-`npm run acceptance` builds an isolated Docker Compose project, saves and updates a budget through the CLI, recreates the container on a non-default port, and verifies the same budget reopens from its SQLite volume. It checks health, errors, and UI assets, then removes only its own containers, volume, and image.
+`npm run acceptance` builds an isolated Docker Compose project, saves and updates a budget through the CLI, recreates the container on a non-default port, and verifies the same budget reopens from its SQLite volume. It also starts the image built from `main` on a separate volume, then upgrades that volume in place with the current build. It checks health, errors, and UI assets, then removes only its own containers, volume, and image.
 
 To run without Docker during development:
 
@@ -121,7 +129,7 @@ npm start
 npm run bucketeer -- status --json
 ```
 
-Server configuration: `PORT` defaults to `3000`, `HOST` to `0.0.0.0`, and `DATABASE_PATH` to `data/bucketeer.sqlite`. The Docker image sets `DATABASE_PATH=/data/bucketeer.sqlite`.
+Server configuration: `PORT` defaults to `3000`, `HOST` to `0.0.0.0`, and `DATABASE_PATH` to `data/bucketeer.sqlite`. `TZ` sets the time zone for date rules; it defaults to the machine's zone. The Docker image sets `DATABASE_PATH=/data/bucketeer.sqlite`.
 
 ## Structure
 

@@ -3,9 +3,10 @@ import type { SQLOutputValue } from "node:sqlite";
 import { openDatabase } from "./database.js";
 import { accountBalance, accountKey, readAccountEdit, readNewAccount, sumReadyToAssign } from "./accounts.js";
 import { readBudgetName } from "./budget.js";
-import { bucketAvailable, monthOf, nameKey, readBucketEdit, readBucketMove, readBucketRevert, readGroupName, readMove, readNewBucket, resolveShape } from "./buckets.js";
+import { bucketAvailable, nameKey, readBucketEdit, readBucketMove, readBucketRevert, readGroupName, readMove, readNewBucket, resolveShape } from "./buckets.js";
 import type { BucketFields, GroupChoice } from "./buckets.js";
 import { leastUsedColour } from "./colours.js";
+import { calendarIn, defaultTimeZone } from "./time.js";
 import type { BucketColour } from "./colours.js";
 import { BudgetError } from "./types.js";
 import type { Account, AccountType, ArchiveResult, Bucket, BucketGroup, BucketTable, BucketType, Budget, Health } from "./types.js";
@@ -18,8 +19,10 @@ export type {
 } from "./types.js";
 
 export interface BucketeerOptions {
-  /** The clock for timestamps and the goal-month rule. Defaults to the system clock. */
+  /** The clock for timestamps and every date rule. Defaults to the system clock. */
   now?: () => Date;
+  /** The IANA zone that decides "today" and "this month" (ADR-0007). Defaults to the process's zone, which honours TZ. */
+  timeZone?: string;
 }
 
 function budgetFromRow(row: Record<string, SQLOutputValue>): Budget {
@@ -86,6 +89,8 @@ const clamp = (index: number, length: number) => Math.min(Math.max(index, 0), le
 export function openBucketeer(filename: string, options: BucketeerOptions = {}) {
   const clock = options.now ?? (() => new Date());
   const timestamp = () => clock().toISOString();
+  const calendar = calendarIn(options.timeZone ?? defaultTimeZone());
+  const thisMonth = () => calendar.monthOf(clock());
   const database = openDatabase(filename);
   const find = database.prepare("SELECT * FROM budgets WHERE id = ?");
   const list = database.prepare("SELECT * FROM budgets ORDER BY created_at, id");
@@ -257,7 +262,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
         throw new BudgetError("bucket_changed", `${bucket.name} has changed since, so the edit was not undone.`);
       }
       const restorable = revertOf === undefined ? null : (previousMonthOf.get(id)?.previous_goal_month as string | null | undefined) ?? null;
-      const shape = resolveShape(bucket, edit, monthOf(clock()), restorable);
+      const shape = resolveShape(bucket, edit, thisMonth(), restorable);
       if (edit.name !== undefined) assertBucketNameFree(bucket.budgetId, edit.name, id);
       const group = edit.group ? chooseGroup(bucket.budgetId, edit.group) : undefined;
       // A group change appends the bucket to the end of the new group.
@@ -280,6 +285,10 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   }
 
   return {
+    /** Today's date, "YYYY-MM-DD", in the server's time zone. */
+    today(): string {
+      return calendar.dateOf(clock());
+    },
     health(): Health {
       health.get();
       return { status: "ok" };
@@ -382,7 +391,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
       const fields = readNewBucket(input);
       return transaction(() => {
         openBudget(budgetId);
-        const shape = resolveShape(null, fields, monthOf(clock()));
+        const shape = resolveShape(null, fields, thisMonth());
         assertBucketNameFree(budgetId, fields.name);
         const colour = fields.colour ?? leastUsedColour(activeBucketsOf(budgetId));
         const group = chooseGroup(budgetId, fields.group);
