@@ -1,3 +1,5 @@
+import type { BucketColour } from "./colours.js";
+
 export interface Budget {
   id: string;
   name: string;
@@ -46,7 +48,78 @@ export interface AccountEditInput {
   startingDate?: string;
 }
 
-export type BudgetErrorCode = "invalid_input" | "not_found" | "name_taken" | "balance_not_zero";
+export type BucketType = "recurring" | "goal" | "plain";
+
+export interface BucketGroup {
+  id: string;
+  budgetId: string;
+  /** 1 to 60 code points, trimmed, unique per budget ignoring case. */
+  name: string;
+  order: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Bucket {
+  id: string;
+  budgetId: string;
+  /** null only for an archived bucket whose group was deleted. */
+  groupId: string | null;
+  /** 1 to 60 code points, trimmed, unique per budget ignoring case, archived buckets included. */
+  name: string;
+  colour: BucketColour;
+  type: BucketType;
+  /** Integer cents > 0: per month (recurring) or the goal amount (goal); null for plain. */
+  amount: number | null;
+  /** "YYYY-MM", goal only. */
+  goalMonth: string | null;
+  /** Integer cents. 0 until assigning exists. */
+  available: number;
+  /** Position within its group. */
+  order: number;
+  archived: boolean;
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BucketTable {
+  groups: BucketGroup[];
+  buckets: Bucket[];
+}
+
+export interface GroupNameInput {
+  name: string;
+}
+
+export interface NewBucketInput {
+  name: string;
+  groupId?: string;
+  newGroupName?: string;
+  colour?: BucketColour;
+  type: BucketType;
+  amount?: number | null;
+  goalMonth?: string | null;
+}
+
+export type BucketEditInput = Partial<NewBucketInput>;
+
+export interface MoveInput {
+  index: number;
+}
+
+export interface BucketMoveInput {
+  groupId: string;
+  index: number;
+}
+
+export interface ArchiveResult {
+  bucket: Bucket;
+  /** Cents sent back to Ready to assign. */
+  returned: number;
+}
+
+export type BudgetErrorCode = "invalid_input" | "not_found" | "name_taken" | "balance_not_zero" | "group_not_empty" | "bucket_overspent";
 
 export class BudgetError extends Error {
   constructor(

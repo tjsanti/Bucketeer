@@ -172,16 +172,16 @@ test("the built server serves index.html for path-routed account pages", async (
     assert.equal(root.status, 200);
     const html = await root.text();
     assert.match(html, /<html/);
-    for (const path of ["/budgets/abc-123/accounts", "/budgets/abc-123/accounts/", "/budgets/a%20b/accounts"]) {
+    for (const path of ["/budgets/abc-123/accounts", "/budgets/abc-123/accounts/", "/budgets/a%20b/accounts", "/budgets/abc-123/buckets", "/budgets/abc-123/buckets/"]) {
       const page = await fetch(`${url}${path}`);
       assert.equal(page.status, 200, path);
       assert.match(page.headers.get("content-type") ?? "", /^text\/html/);
       assert.equal(await page.text(), html);
     }
-    for (const path of ["/budgets/x/accounts/extra", "/budgets//accounts", "/budgets/x", "/accounts"]) assert.equal((await fetch(`${url}${path}`)).status, 404, path);
+    for (const path of ["/budgets/x/accounts/extra", "/budgets//accounts", "/budgets/x/buckets/extra", "/budgets//buckets", "/budgets/x", "/accounts"]) assert.equal((await fetch(`${url}${path}`)).status, 404, path);
     assert.equal((await fetch(`${url}/core/money.js`)).status, 200);
     // Compiled UI modules are served by name; unknown names and nested paths are not.
-    for (const name of ["app", "theme", "dom", "sheet", "shell", "accounts"]) {
+    for (const name of ["app", "theme", "dom", "sheet", "shell", "accounts", "buckets", "bucket-dialog", "reorder"]) {
       const script = await fetch(`${url}/ui/${name}.js`);
       assert.equal(script.status, 200, name);
       assert.match(script.headers.get("content-type") ?? "", /^text\/javascript/);
@@ -190,5 +190,110 @@ test("the built server serves index.html for path-routed account pages", async (
   } finally {
     child.kill();
     await once(child, "exit");
+  }
+});
+
+test("HTTP exposes groups and buckets with status codes for every error and serves the shared colours module", async () => {
+  const core = openBucketeer(":memory:", { now: () => new Date("2026-11-20T12:00:00.000Z") });
+  const server = createApi(core);
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const url = `http://127.0.0.1:${address.port}`;
+  const client = createClient(url);
+  const send = (path: string, method: string, body?: unknown) =>
+    fetch(`${url}${path}`, { method, ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }) });
+  const statuses = async (path: string, method: string, body?: unknown) => {
+    const response = await send(path, method, body);
+    return [response.status, (await response.json()).error.code];
+  };
+  try {
+    const budget = await client.createBudget({ name: "Household" });
+    assert.deepEqual(await client.listBucketTable(budget.id), { groups: [], buckets: [] });
+    const createdGroup = await send(`/api/budgets/${budget.id}/groups`, "POST", { name: "Fixed" });
+    assert.equal(createdGroup.status, 201);
+    const fixed = await createdGroup.json();
+    assert.equal(createdGroup.headers.get("location"), `/api/groups/${fixed.id}`);
+    const everyday = await client.createGroup(budget.id, { name: "Everyday" });
+
+    const createdBucket = await send(`/api/budgets/${budget.id}/buckets`, "POST", { name: "Rent", groupId: fixed.id, type: "recurring", amount: 165_000 });
+    assert.equal(createdBucket.status, 201);
+    const rent = await createdBucket.json();
+    assert.equal(createdBucket.headers.get("location"), `/api/buckets/${rent.id}`);
+    assert.deepEqual([rent.colour, rent.available, rent.order], ["sky", 0, 1]);
+    const vacation = await client.createBucket(budget.id, { name: "Vacation", newGroupName: "Goals", type: "goal", amount: 300_000, goalMonth: "2027-08" });
+    const clothing = await client.createBucket(budget.id, { name: "Clothing", groupId: everyday.id, type: "plain" });
+    const table = await client.listBucketTable(budget.id);
+    assert.deepEqual(table.groups.map((group) => group.name), ["Fixed", "Everyday", "Goals"]);
+    assert.deepEqual(table.buckets, [rent, clothing, vacation]);
+    assert.deepEqual(await client.openBucket(rent.id), rent);
+
+    assert.deepEqual((await client.renameGroup(everyday.id, { name: "Day to day" })).name, "Day to day");
+    assert.equal((await client.moveGroup(vacation.groupId!, { index: 0 })).order, 1);
+    assert.equal((await client.editBucket(rent.id, { type: "plain" })).amount, null);
+    const moved = await client.moveBucket(clothing.id, { groupId: fixed.id, index: 0 });
+    assert.deepEqual([moved.groupId, moved.order], [fixed.id, 1]);
+    const archived = await client.archiveBucket(clothing.id);
+    assert.deepEqual([archived.bucket.archived, archived.returned], [true, 0]);
+    const restored = await client.restoreBucket(clothing.id);
+    assert.deepEqual([restored.archived, restored.order], [false, 2]);
+
+    const deleted = await send(`/api/groups/${everyday.id}`, "DELETE");
+    assert.equal(deleted.status, 204);
+    assert.equal(await deleted.text(), "");
+    assert.equal(await client.deleteGroup((await client.createGroup(budget.id, { name: "Spare" })).id), undefined);
+
+    for (const [attempt, errorCode] of [
+      [() => client.deleteGroup(fixed.id), "group_not_empty"],
+      [() => client.createGroup(budget.id, { name: "fixed" }), "name_taken"],
+      [() => client.createBucket(budget.id, { name: "RENT", groupId: fixed.id, type: "plain" }), "name_taken"],
+      [() => client.createBucket(budget.id, { name: "Pink", groupId: fixed.id, type: "plain", colour: "pink" as never }), "invalid_input"],
+      [() => client.editBucket(vacation.id, { goalMonth: "2020-01" }), "invalid_input"],
+      [() => client.listBucketTable("missing"), "not_found"],
+      [() => client.openBucket("missing"), "not_found"],
+      [() => client.archiveBucket("missing"), "not_found"],
+      [() => client.deleteGroup("missing"), "not_found"],
+    ] as const) {
+      await assert.rejects(attempt(), { code: errorCode }, errorCode);
+    }
+    assert.deepEqual(await statuses(`/api/groups/${fixed.id}`, "DELETE"), [409, "group_not_empty"]);
+    assert.deepEqual(await statuses(`/api/budgets/${budget.id}/groups`, "POST", { name: "FIXED" }), [409, "name_taken"]);
+    assert.deepEqual(await statuses(`/api/budgets/${budget.id}/buckets`, "POST", { name: "clothing", groupId: fixed.id, type: "plain" }), [409, "name_taken"]);
+    assert.deepEqual(await statuses(`/api/budgets/${budget.id}/buckets`, "POST", { name: "X", groupId: fixed.id, type: "goal", amount: 1 }), [400, "invalid_input"]);
+    assert.deepEqual(await statuses(`/api/budgets/${budget.id}/buckets`, "POST", { name: "X", groupId: fixed.id, type: "plain", available: 5 }), [400, "invalid_input"]);
+    assert.deepEqual(await statuses(`/api/budgets/${budget.id}/buckets`, "POST", { name: "X", groupId: "missing", type: "plain" }), [404, "not_found"]);
+    assert.deepEqual(await statuses(`/api/buckets/${rent.id}`, "PATCH", {}), [400, "invalid_input"]);
+    assert.deepEqual(await statuses(`/api/buckets/${rent.id}/move`, "POST", { index: 0 }), [400, "invalid_input"]);
+    assert.deepEqual(await statuses(`/api/groups/${fixed.id}/move`, "POST", { index: "first" }), [400, "invalid_input"]);
+    assert.deepEqual(await statuses(`/api/groups/${fixed.id}`, "PATCH", { name: "" }), [400, "invalid_input"]);
+    assert.deepEqual(await statuses("/api/buckets/missing/restore", "POST"), [404, "not_found"]);
+    assert.deepEqual(await statuses("/api/groups/missing/move", "POST", { index: 0 }), [404, "not_found"]);
+    for (const [path, method] of [
+      ["/api/budgets/%ZZ/buckets", "GET"], ["/api/budgets/%ZZ/groups", "POST"], ["/api/groups/%ZZ", "PATCH"], ["/api/groups/%ZZ", "DELETE"],
+      ["/api/buckets/%ZZ", "GET"], ["/api/buckets/%ZZ/archive", "POST"],
+    ] as const) {
+      assert.deepEqual(await statuses(path, method, method === "GET" || method === "DELETE" ? undefined : {}), [400, "invalid_input"], `${method} ${path}`);
+    }
+    for (const [path, method] of [
+      [`/api/groups/${fixed.id}`, "GET"], [`/api/groups/${fixed.id}/move`, "GET"], [`/api/budgets/${budget.id}/groups`, "GET"],
+      [`/api/buckets/${rent.id}`, "DELETE"], [`/api/buckets/${rent.id}/archive`, "GET"], [`/api/buckets/${rent.id}/other`, "POST"],
+      [`/api/budgets/${budget.id}/buckets`, "PUT"],
+    ] as const) {
+      assert.deepEqual(await statuses(path, method), [404, "not_found"], `${method} ${path}`);
+    }
+    const wrongType = await fetch(`${url}/api/buckets/${rent.id}`, { method: "PATCH", headers: { "content-type": "text/plain" }, body: "{}" });
+    assert.equal(wrongType.status, 415);
+
+    const colours = await fetch(`${url}/core/colours.js`);
+    assert.equal(colours.status, 200);
+    assert.match(colours.headers.get("content-type") ?? "", /^text\/javascript/);
+    const text = await colours.text();
+    assert.match(text, /export function leastUsedColour/);
+    assert.doesNotMatch(text, /^import /m);
+    assert.equal((await fetch(`${url}/core/buckets.js`)).status, 404);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    core.close();
   }
 });

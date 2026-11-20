@@ -3,6 +3,10 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ACCOUNT_TYPES, MAX_ACCOUNT_NAME_LENGTH, MAX_CENTS } from "./accounts.js";
 import { MAX_BUDGET_NAME_LENGTH } from "./budget.js";
+import { BUCKET_TYPES, MAX_BUCKET_NAME_LENGTH } from "./buckets.js";
+import { BUCKET_COLOURS } from "./colours.js";
+
+const list = (values: readonly string[]) => values.map((value) => `'${value}'`).join(", ");
 
 export function openDatabase(filename: string): DatabaseSync {
   if (filename !== ":memory:") mkdirSync(dirname(filename), { recursive: true });
@@ -30,6 +34,41 @@ export function openDatabase(filename: string): DatabaseSync {
         updated_at TEXT NOT NULL
       ) STRICT;
       CREATE INDEX IF NOT EXISTS accounts_by_budget ON accounts(budget_id, sort_order);
+      CREATE TABLE IF NOT EXISTS bucket_groups (
+        id TEXT PRIMARY KEY,
+        budget_id TEXT NOT NULL REFERENCES budgets(id),
+        name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND ${MAX_BUCKET_NAME_LENGTH}),
+        sort_order INTEGER NOT NULL CHECK(sort_order >= 1),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(id, budget_id)
+      ) STRICT;
+      -- NOCASE folds ASCII only; the core also compares full Unicode case. This is the backstop.
+      CREATE UNIQUE INDEX IF NOT EXISTS bucket_groups_name ON bucket_groups(budget_id, name COLLATE NOCASE);
+      CREATE TABLE IF NOT EXISTS buckets (
+        id TEXT PRIMARY KEY,
+        budget_id TEXT NOT NULL REFERENCES budgets(id),
+        group_id TEXT,
+        name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND ${MAX_BUCKET_NAME_LENGTH}),
+        colour TEXT NOT NULL CHECK(colour IN (${list(BUCKET_COLOURS)})),
+        type TEXT NOT NULL CHECK(type IN (${list(BUCKET_TYPES)})),
+        amount INTEGER CHECK(amount BETWEEN 1 AND ${MAX_CENTS}),
+        goal_month TEXT CHECK(goal_month GLOB '[0-9][0-9][0-9][0-9]-[01][0-9]' AND substr(goal_month, 6, 2) BETWEEN '01' AND '12'),
+        sort_order INTEGER NOT NULL CHECK(sort_order >= 1),
+        archived_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        -- A bucket's group is in the same budget. Only an archived bucket may lose its group.
+        FOREIGN KEY (group_id, budget_id) REFERENCES bucket_groups(id, budget_id),
+        CHECK(group_id IS NOT NULL OR archived_at IS NOT NULL),
+        CHECK(
+          (type = 'recurring' AND amount IS NOT NULL AND goal_month IS NULL) OR
+          (type = 'goal' AND amount IS NOT NULL AND goal_month IS NOT NULL) OR
+          (type = 'plain' AND amount IS NULL AND goal_month IS NULL)
+        )
+      ) STRICT;
+      CREATE UNIQUE INDEX IF NOT EXISTS buckets_name ON buckets(budget_id, name COLLATE NOCASE);
+      CREATE INDEX IF NOT EXISTS buckets_by_group ON buckets(budget_id, group_id, sort_order);
     `);
     return database;
   } catch (error) {

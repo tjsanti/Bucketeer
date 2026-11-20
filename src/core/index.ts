@@ -3,11 +3,24 @@ import type { SQLOutputValue } from "node:sqlite";
 import { openDatabase } from "./database.js";
 import { accountBalance, accountKey, readAccountEdit, readNewAccount, sumReadyToAssign } from "./accounts.js";
 import { readBudgetName } from "./budget.js";
+import { bucketAvailable, monthOf, nameKey, readBucketEdit, readBucketMove, readGroupName, readMove, readNewBucket, resolveShape } from "./buckets.js";
+import type { BucketFields, GroupChoice } from "./buckets.js";
+import { leastUsedColour } from "./colours.js";
+import type { BucketColour } from "./colours.js";
 import { BudgetError } from "./types.js";
-import type { Account, AccountType, Budget, Health } from "./types.js";
+import type { Account, AccountType, ArchiveResult, Bucket, BucketGroup, BucketTable, BucketType, Budget, Health } from "./types.js";
 
 export { BudgetError } from "./types.js";
-export type { Account, AccountEditInput, AccountType, Budget, BudgetErrorCode, BudgetNameInput, Health, NewAccountInput } from "./types.js";
+export type { BucketColour } from "./colours.js";
+export type {
+  Account, AccountEditInput, AccountType, ArchiveResult, Bucket, BucketEditInput, BucketGroup, BucketMoveInput, BucketTable, BucketType,
+  Budget, BudgetErrorCode, BudgetNameInput, GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput,
+} from "./types.js";
+
+export interface BucketeerOptions {
+  /** The clock for timestamps and the goal-month rule. Defaults to the system clock. */
+  now?: () => Date;
+}
 
 function budgetFromRow(row: Record<string, SQLOutputValue>): Budget {
   return {
@@ -36,8 +49,43 @@ function accountFromRow(row: Record<string, SQLOutputValue>): Account {
   };
 }
 
+function groupFromRow(row: Record<string, SQLOutputValue>): BucketGroup {
+  return {
+    id: String(row.id),
+    budgetId: String(row.budget_id),
+    name: String(row.name),
+    order: Number(row.sort_order),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function bucketFromRow(row: Record<string, SQLOutputValue>): Bucket {
+  const id = String(row.id);
+  return {
+    id,
+    budgetId: String(row.budget_id),
+    groupId: row.group_id === null ? null : String(row.group_id),
+    name: String(row.name),
+    colour: String(row.colour) as BucketColour,
+    type: String(row.type) as BucketType,
+    amount: row.amount === null ? null : Number(row.amount),
+    goalMonth: row.goal_month === null ? null : String(row.goal_month),
+    available: bucketAvailable({ id }),
+    order: Number(row.sort_order),
+    archived: row.archived_at !== null,
+    archivedAt: row.archived_at === null ? null : String(row.archived_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+const clamp = (index: number, length: number) => Math.min(Math.max(index, 0), length);
+
 // The core owns validation, identity, timestamps, and persistence. Clients only send intent.
-export function openBucketeer(filename: string) {
+export function openBucketeer(filename: string, options: BucketeerOptions = {}) {
+  const clock = options.now ?? (() => new Date());
+  const timestamp = () => clock().toISOString();
   const database = openDatabase(filename);
   const find = database.prepare("SELECT * FROM budgets WHERE id = ?");
   const list = database.prepare("SELECT * FROM budgets ORDER BY created_at, id");
@@ -50,6 +98,30 @@ export function openBucketeer(filename: string) {
     INSERT INTO accounts (id, budget_id, name, type, starting_balance, starting_date, sort_order, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM accounts WHERE budget_id = ?), ?, ?)`);
   const updateAccount = database.prepare("UPDATE accounts SET name = ?, starting_balance = ?, starting_date = ?, closed_at = ?, updated_at = ? WHERE id = ?");
+  const findGroup = database.prepare("SELECT * FROM bucket_groups WHERE id = ?");
+  const groupsOf = database.prepare("SELECT * FROM bucket_groups WHERE budget_id = ? ORDER BY sort_order, created_at, id");
+  const insertGroup = database.prepare(`
+    INSERT INTO bucket_groups (id, budget_id, name, sort_order, created_at, updated_at)
+    VALUES (?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM bucket_groups WHERE budget_id = ?), ?, ?)`);
+  const renameGroupRow = database.prepare("UPDATE bucket_groups SET name = ?, updated_at = ? WHERE id = ?");
+  const orderGroup = database.prepare("UPDATE bucket_groups SET sort_order = ? WHERE id = ?");
+  const touchGroup = database.prepare("UPDATE bucket_groups SET updated_at = ? WHERE id = ?");
+  const deleteGroupRow = database.prepare("DELETE FROM bucket_groups WHERE id = ?");
+  const findBucket = database.prepare("SELECT * FROM buckets WHERE id = ?");
+  // Active buckets in group and position order, then archived buckets, also by group and position
+  // (those whose group was deleted first), with the archive date breaking ties.
+  const bucketsOf = database.prepare(`
+    SELECT buckets.* FROM buckets LEFT JOIN bucket_groups ON bucket_groups.id = buckets.group_id
+    WHERE buckets.budget_id = ?
+    ORDER BY buckets.archived_at IS NOT NULL, bucket_groups.sort_order, buckets.sort_order, buckets.archived_at, buckets.created_at, buckets.id`);
+  const activeIn = database.prepare("SELECT id FROM buckets WHERE group_id = ? AND archived_at IS NULL ORDER BY sort_order, created_at, id");
+  const insertBucket = database.prepare(`
+    INSERT INTO buckets (id, budget_id, group_id, name, colour, type, amount, goal_month, sort_order, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM buckets WHERE group_id = ? AND archived_at IS NULL), ?, ?)`);
+  const updateBucket = database.prepare(`
+    UPDATE buckets SET group_id = ?, name = ?, colour = ?, type = ?, amount = ?, goal_month = ?, archived_at = ?, updated_at = ? WHERE id = ?`);
+  const orderBucket = database.prepare("UPDATE buckets SET sort_order = ? WHERE id = ?");
+  const orphanArchived = database.prepare("UPDATE buckets SET group_id = NULL WHERE group_id = ? AND archived_at IS NOT NULL");
 
   // Reads and writes that depend on each other (name uniqueness, closing) run in one immediate transaction.
   function transaction<T>(work: () => T): T {
@@ -87,10 +159,89 @@ export function openBucketeer(filename: string) {
     const next = { ...account, ...changes };
     const closed = changes.closed ?? account.closed;
     if (closed && accountBalance(next) !== 0) throw new BudgetError("balance_not_zero", "Balance must be 0.00.");
-    const now = new Date().toISOString();
+    const now = timestamp();
     const closedAt = !closed ? null : account.closedAt ?? now;
     updateAccount.run(next.name, next.startingBalance, next.startingDate, closedAt, now, account.id);
     return openAccount(account.id);
+  }
+
+  function openGroup(id: string): BucketGroup {
+    const row = findGroup.get(id);
+    if (!row) throw new BudgetError("not_found", "Group not found.");
+    return groupFromRow(row);
+  }
+
+  function openBucket(id: string): Bucket {
+    const row = findBucket.get(id);
+    if (!row) throw new BudgetError("not_found", "Bucket not found.");
+    return bucketFromRow(row);
+  }
+
+  function listBucketTable(budgetId: string): BucketTable {
+    openBudget(budgetId);
+    return { groups: groupsOf.all(budgetId).map(groupFromRow), buckets: bucketsOf.all(budgetId).map(bucketFromRow) };
+  }
+
+  function assertGroupNameFree(budgetId: string, name: string, exceptId?: string): void {
+    const key = nameKey(name);
+    if (groupsOf.all(budgetId).map(groupFromRow).some((group) => group.id !== exceptId && nameKey(group.name) === key)) {
+      throw new BudgetError("name_taken", "A group with that name already exists in this budget.");
+    }
+  }
+
+  // Bucket names are unique per budget ignoring case, archived buckets included.
+  function assertBucketNameFree(budgetId: string, name: string, exceptId?: string): void {
+    const key = nameKey(name);
+    const clash = bucketsOf.all(budgetId).map(bucketFromRow).find((bucket) => bucket.id !== exceptId && nameKey(bucket.name) === key);
+    if (!clash) return;
+    throw new BudgetError("name_taken", clash.archived
+      ? `An archived bucket is already named ${clash.name}. Restore it or choose another name.`
+      : "A bucket with that name already exists in this budget.");
+  }
+
+  function insertNewGroup(budgetId: string, name: string): BucketGroup {
+    assertGroupNameFree(budgetId, name);
+    const now = timestamp();
+    const id = randomUUID();
+    insertGroup.run(id, budgetId, name, budgetId, now, now);
+    return openGroup(id);
+  }
+
+  // Resolves where a bucket goes. A new group is created inside the caller's transaction.
+  function chooseGroup(budgetId: string, choice: NonNullable<GroupChoice>): BucketGroup {
+    if ("newGroupName" in choice) return insertNewGroup(budgetId, choice.newGroupName);
+    const group = findGroup.get(choice.groupId);
+    if (!group || String(group.budget_id) !== budgetId) throw new BudgetError("not_found", "Group not found.");
+    return groupFromRow(group);
+  }
+
+  function activeIds(groupId: string): string[] {
+    return activeIn.all(groupId).map((row) => String(row.id));
+  }
+
+  function renumberBuckets(ids: readonly string[]): void {
+    ids.forEach((id, index) => orderBucket.run(index + 1, id));
+  }
+
+  function writeBucket(bucket: Bucket): Bucket {
+    updateBucket.run(bucket.groupId, bucket.name, bucket.colour, bucket.type, bucket.amount, bucket.goalMonth, bucket.archivedAt, timestamp(), bucket.id);
+    return openBucket(bucket.id);
+  }
+
+  // Puts an active bucket at a 0-based index in a group (clamped), renumbering the old and new group.
+  function placeBucket(bucket: Bucket, groupId: string, index: number): void {
+    if (bucket.groupId && bucket.groupId !== groupId) renumberBuckets(activeIds(bucket.groupId).filter((id) => id !== bucket.id));
+    const ids = activeIds(groupId).filter((id) => id !== bucket.id);
+    ids.splice(clamp(index, ids.length), 0, bucket.id);
+    renumberBuckets(ids);
+  }
+
+  function assertActive(bucket: Bucket, action: string): void {
+    if (bucket.archived) throw new BudgetError("invalid_input", `Restore the bucket before ${action} it.`);
+  }
+
+  function activeBucketsOf(budgetId: string): Bucket[] {
+    return bucketsOf.all(budgetId).map(bucketFromRow).filter((bucket) => !bucket.archived);
   }
 
   function openBudget(id: string): Budget {
@@ -106,14 +257,14 @@ export function openBucketeer(filename: string) {
     },
     createBudget(input: unknown): Budget {
       const name = readBudgetName(input);
-      const now = new Date().toISOString();
+      const now = timestamp();
       const id = randomUUID();
       insert.run(id, name, now, now);
       return openBudget(id);
     },
     renameBudget(id: string, input: unknown): Budget {
       const name = readBudgetName(input);
-      const result = update.run(name, new Date().toISOString(), id);
+      const result = update.run(name, timestamp(), id);
       if (result.changes === 0) throw new BudgetError("not_found", "Budget not found.");
       return openBudget(id);
     },
@@ -126,7 +277,7 @@ export function openBucketeer(filename: string) {
       return transaction(() => {
         openBudget(budgetId);
         assertNameFree(budgetId, account.name);
-        const now = new Date().toISOString();
+        const now = timestamp();
         const id = randomUUID();
         insertAccount.run(id, budgetId, account.name, account.type, account.startingBalance, account.startingDate, budgetId, now, now);
         return openAccount(id);
@@ -159,6 +310,113 @@ export function openBucketeer(filename: string) {
     // opening balance reduces it. Closed accounts are included.
     readyToAssign(budgetId: string): number {
       return sumReadyToAssign(listAccounts(budgetId));
+    },
+    listBucketTable,
+    createGroup(budgetId: string, input: unknown): BucketGroup {
+      const name = readGroupName(input);
+      return transaction(() => {
+        openBudget(budgetId);
+        return insertNewGroup(budgetId, name);
+      });
+    },
+    renameGroup(id: string, input: unknown): BucketGroup {
+      const name = readGroupName(input);
+      return transaction(() => {
+        const group = openGroup(id);
+        assertGroupNameFree(group.budgetId, name, id);
+        renameGroupRow.run(name, timestamp(), id);
+        return openGroup(id);
+      });
+    },
+    moveGroup(id: string, input: unknown): BucketGroup {
+      const { index } = readMove(input);
+      return transaction(() => {
+        const group = openGroup(id);
+        const ids = groupsOf.all(group.budgetId).map((row) => String(row.id)).filter((other) => other !== id);
+        ids.splice(clamp(index, ids.length), 0, id);
+        ids.forEach((other, position) => orderGroup.run(position + 1, other));
+        touchGroup.run(timestamp(), id);
+        return openGroup(id);
+      });
+    },
+    // Refused while the group has active buckets. Its archived buckets keep existing without a group.
+    deleteGroup(id: string): void {
+      transaction(() => {
+        const group = openGroup(id);
+        if (activeIds(id).length) throw new BudgetError("group_not_empty", "Move or archive this group's buckets before deleting it.");
+        orphanArchived.run(id);
+        deleteGroupRow.run(id);
+        groupsOf.all(group.budgetId).forEach((row, position) => orderGroup.run(position + 1, String(row.id)));
+      });
+    },
+    createBucket(budgetId: string, input: unknown): Bucket {
+      const fields = readNewBucket(input);
+      return transaction(() => {
+        openBudget(budgetId);
+        const shape = resolveShape(null, fields, monthOf(clock()));
+        assertBucketNameFree(budgetId, fields.name);
+        const colour = fields.colour ?? leastUsedColour(activeBucketsOf(budgetId));
+        const group = chooseGroup(budgetId, fields.group);
+        const now = timestamp();
+        const id = randomUUID();
+        insertBucket.run(id, budgetId, group.id, fields.name, colour, shape.type, shape.amount, shape.goalMonth, group.id, now, now);
+        return openBucket(id);
+      });
+    },
+    openBucket,
+    editBucket(id: string, input: unknown): Bucket {
+      const edit: BucketFields = readBucketEdit(input);
+      return transaction(() => {
+        const bucket = openBucket(id);
+        assertActive(bucket, "editing");
+        const shape = resolveShape(bucket, edit, monthOf(clock()));
+        if (edit.name !== undefined) assertBucketNameFree(bucket.budgetId, edit.name, id);
+        const group = edit.group ? chooseGroup(bucket.budgetId, edit.group) : undefined;
+        // A group change appends the bucket to the end of the new group.
+        if (group && group.id !== bucket.groupId) placeBucket(bucket, group.id, Number.MAX_SAFE_INTEGER);
+        return writeBucket({
+          ...bucket, ...shape,
+          name: edit.name ?? bucket.name,
+          colour: edit.colour ?? bucket.colour,
+          groupId: group?.id ?? bucket.groupId,
+        });
+      });
+    },
+    moveBucket(id: string, input: unknown): Bucket {
+      const move = readBucketMove(input);
+      return transaction(() => {
+        const bucket = openBucket(id);
+        assertActive(bucket, "moving");
+        const group = chooseGroup(bucket.budgetId, { groupId: move.groupId });
+        placeBucket(bucket, group.id, move.index);
+        return writeBucket({ ...openBucket(id), groupId: group.id });
+      });
+    },
+    // Owner rule (2026-11-17): refused while overspent. A positive Available returns to Ready to assign
+    // in the same transaction; that is unreachable until assigning exists, and the month view slice books it.
+    // Idempotent: archiving an archived bucket returns it unchanged with nothing returned.
+    archiveBucket(id: string): ArchiveResult {
+      return transaction(() => {
+        const bucket = openBucket(id);
+        if (bucket.archived) return { bucket, returned: 0 };
+        if (bucket.available < 0) throw new BudgetError("bucket_overspent", "A bucket can't be archived while its Available is negative.");
+        const returned = bucket.available;
+        const archived = writeBucket({ ...bucket, archivedAt: timestamp() });
+        if (bucket.groupId) renumberBuckets(activeIds(bucket.groupId));
+        return { bucket: archived, returned };
+      });
+    },
+    // Restore appends to the end of the bucket's group, or of the first group if its group was deleted.
+    restoreBucket(id: string): Bucket {
+      return transaction(() => {
+        const bucket = openBucket(id);
+        if (!bucket.archived) return bucket;
+        const groupId = bucket.groupId ?? groupsOf.get(bucket.budgetId)?.id;
+        if (groupId === undefined || groupId === null) throw new BudgetError("invalid_input", "Create a group first.");
+        const restored = { ...bucket, groupId: String(groupId), archivedAt: null };
+        orderBucket.run(activeIds(restored.groupId).length + 1, id);
+        return writeBucket({ ...restored });
+      });
     },
     close(): void {
       database.close();

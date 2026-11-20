@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { ApiError, createClient } from "./client.js";
-import type { Account, AccountType, Budget } from "./core/index.js";
+import type { Account, AccountType, Bucket, BucketColour, BucketGroup, BucketTable, BucketType, Budget, NewBucketInput } from "./core/index.js";
 import { formatMoney, parseMoney } from "./core/money.js";
 import { BudgetError } from "./core/types.js";
 
@@ -16,13 +16,34 @@ const help = `Usage:
   bucketeer account edit <id> [--name <name>] [--starting-balance <amount>] [--date <YYYY-MM-DD>] [--json]
   bucketeer account close <id> [--json]
   bucketeer account reopen <id> [--json]
+  bucketeer group list --budget <id> [--json]
+  bucketeer group add --budget <id> --name <name> [--json]
+  bucketeer group rename <id> --name <name> [--json]
+  bucketeer group move <id> --position <n> [--json]
+  bucketeer group delete <id> [--json]
+  bucketeer bucket list --budget <id> [--archived] [--json]
+  bucketeer bucket add --budget <id> --name <name> (--group <id> | --new-group <name>)
+                       [--type recurring|goal|plain] [--amount <amount>] [--by <YYYY-MM>] [--colour <hue>] [--json]
+  bucketeer bucket edit <id> [--name <name>] [--group <id> | --new-group <name>] [--type <type>]
+                       [--amount <amount>] [--by <YYYY-MM>] [--colour <hue>] [--json]
+  bucketeer bucket move <id> [--group <id>] --position <n> [--json]
+  bucketeer bucket archive <id> [--json]
+  bucketeer bucket restore <id> [--json]
 
 Options:
   --url <url>    Server address (default: BUCKETEER_URL or http://localhost:3000)
-  --budget <id>  Budget for account list/add (default: BUCKETEER_BUDGET)
+  --budget <id>  Budget for list and add commands (default: BUCKETEER_BUDGET)
   --starting-balance <amount>
                  Dollars, signed: 1000, 1,000.50, -412.09 (a card's debt is negative; default 0)
   --date <date>  Balance date for a new account (default: today)
+  --type <type>  For buckets: recurring (--amount per month), goal (--amount by --by), or plain (default)
+  --amount <amount>
+                 Dollars: 160, 3,000.00
+  --by <month>   A goal's month, YYYY-MM
+  --colour <hue> sky, denim, blue, slate, teal, mint, green, forest,
+                 lime, olive, sun, cocoa, peach, tangerine, rose, plum (default: least used)
+  --position <n> 1 is first
+  --archived     Include archived buckets
   --json         Print machine-readable results and errors
   --help         Show this help
 `;
@@ -31,7 +52,7 @@ Options:
 function joinSignedAmount(args: string[]): string[] {
   const joined: string[] = [];
   for (const arg of args) {
-    if (joined.at(-1) === "--starting-balance" && /^-[\d.$]/.test(arg)) joined[joined.length - 1] += `=${arg}`;
+    if (["--starting-balance", "--amount", "--position"].includes(joined.at(-1) ?? "") && /^-[\d.$]/.test(arg)) joined[joined.length - 1] += `=${arg}`;
     else joined.push(arg);
   }
   return joined;
@@ -52,6 +73,13 @@ try {
       type: { type: "string" },
       "starting-balance": { type: "string" },
       date: { type: "string" },
+      group: { type: "string" },
+      "new-group": { type: "string" },
+      amount: { type: "string" },
+      by: { type: "string" },
+      colour: { type: "string" },
+      position: { type: "string" },
+      archived: { type: "boolean" },
     },
   });
   jsonOutput = values.json;
@@ -120,6 +148,75 @@ try {
       const account = await (action === "close" ? client.closeAccount(id) : client.reopenAccount(id));
       result = account;
       if (!jsonOutput) console.log(formatAccount(account));
+    } else if (command === "group" && action === "list") {
+      options(2, "budget");
+      const { groups } = await client.listBucketTable(budget());
+      result = groups;
+      if (!jsonOutput) console.log(groups.length ? groups.map(formatGroup).join("\n") : "No groups.");
+    } else if (command === "group" && action === "add" && values.name !== undefined) {
+      options(2, "budget", "name");
+      const group = await client.createGroup(budget(), { name: values.name });
+      result = group;
+      if (!jsonOutput) console.log(formatGroup(group));
+    } else if (command === "group" && action === "rename" && id && values.name !== undefined) {
+      options(3, "name");
+      const group = await client.renameGroup(id, { name: values.name });
+      result = group;
+      if (!jsonOutput) console.log(formatGroup(group));
+    } else if (command === "group" && action === "move" && id && values.position !== undefined) {
+      options(3, "position");
+      const group = await client.moveGroup(id, { index: position(values.position) });
+      result = group;
+      if (!jsonOutput) console.log(formatGroup(group));
+    } else if (command === "group" && action === "delete" && id) {
+      options(3);
+      await client.deleteGroup(id);
+      result = { id, deleted: true };
+      if (!jsonOutput) console.log(`Deleted group ${id}.`);
+    } else if (command === "bucket" && action === "list") {
+      options(2, "budget", "archived");
+      const table = await client.listBucketTable(budget());
+      const shown = values.archived ? table : { groups: table.groups, buckets: table.buckets.filter((bucket) => !bucket.archived) };
+      result = shown;
+      if (!jsonOutput) console.log(shown.buckets.length ? shown.buckets.map((bucket) => formatBucket(bucket, table)).join("\n") : "No buckets.");
+    } else if (command === "bucket" && action === "add" && values.name !== undefined) {
+      options(2, "budget", "name", "group", "new-group", "type", "amount", "by", "colour");
+      // The type defaults to plain, which takes no amount or month, so either without a type is a mistake.
+      if (values.type === undefined && (values.amount !== undefined || values.by !== undefined)) throw new ApiError("usage", "Choose a --type for --amount or --by.");
+      if ((values.group === undefined) === (values["new-group"] === undefined)) throw new ApiError("usage", "Choose a group with --group <id> or --new-group <name>.");
+      const budgetId = budget();
+      const input: NewBucketInput = { name: values.name, type: (values.type ?? "plain") as BucketType, ...bucketFields(values) };
+      const bucket = await client.createBucket(budgetId, input);
+      result = bucket;
+      if (!jsonOutput) console.log(formatBucket(bucket, await client.listBucketTable(budgetId)));
+    } else if (command === "bucket" && action === "edit" && id) {
+      options(3, "name", "group", "new-group", "type", "amount", "by", "colour");
+      if (values.group !== undefined && values["new-group"] !== undefined) throw new ApiError("usage", "Choose --group or --new-group, not both.");
+      const bucket = await client.editBucket(id, {
+        ...(values.name !== undefined && { name: values.name }),
+        ...(values.type !== undefined && { type: values.type as BucketType }),
+        ...bucketFields(values),
+      });
+      result = bucket;
+      if (!jsonOutput) console.log(formatBucket(bucket, await client.listBucketTable(bucket.budgetId)));
+    } else if (command === "bucket" && action === "move" && id && values.position !== undefined) {
+      options(3, "group", "position");
+      const index = position(values.position);
+      const groupId = values.group ?? (await client.openBucket(id)).groupId;
+      if (groupId === null) throw new ApiError("usage", "This bucket has no group; choose one with --group <id>.");
+      const bucket = await client.moveBucket(id, { groupId, index });
+      result = bucket;
+      if (!jsonOutput) console.log(formatBucket(bucket, await client.listBucketTable(bucket.budgetId)));
+    } else if (command === "bucket" && action === "archive" && id) {
+      options(3);
+      const archived = await client.archiveBucket(id);
+      result = archived;
+      if (!jsonOutput) console.log(formatBucket(archived.bucket, await client.listBucketTable(archived.bucket.budgetId)));
+    } else if (command === "bucket" && action === "restore" && id) {
+      options(3);
+      const bucket = await client.restoreBucket(id);
+      result = bucket;
+      if (!jsonOutput) console.log(formatBucket(bucket, await client.listBucketTable(bucket.budgetId)));
     } else {
       throw new ApiError("usage", help.trim());
     }
@@ -140,6 +237,37 @@ function formatBudget(budget: Budget): string {
 function formatAccount(account: Account): string {
   const fields = [account.id, account.name, account.type, formatMoney(account.balance)];
   return (account.closed ? [...fields, "closed"] : fields).join("\t");
+}
+
+// The bucket fields shared by add and edit; the server validates them.
+function bucketFields(values: { group?: string; "new-group"?: string; amount?: string; by?: string; colour?: string }) {
+  return {
+    ...(values.group !== undefined && { groupId: values.group }),
+    ...(values["new-group"] !== undefined && { newGroupName: values["new-group"] }),
+    ...(values.amount !== undefined && { amount: parseMoney(values.amount) }),
+    ...(values.by !== undefined && { goalMonth: values.by }),
+    ...(values.colour !== undefined && { colour: values.colour as BucketColour }),
+  };
+}
+
+// --position is 1-based; the API index is position - 1.
+function position(text: string): number {
+  if (!/^[1-9][0-9]{0,8}$/.test(text)) throw new BudgetError("invalid_input", "Position must be a whole number from 1.");
+  return Number(text) - 1;
+}
+
+function formatGroup(group: BucketGroup): string {
+  return `${group.id}\t${group.name}`;
+}
+
+// id, group, name, type, target, available, and "archived" when archived.
+function formatBucket(bucket: Bucket, table: BucketTable): string {
+  const group = table.groups.find((candidate) => candidate.id === bucket.groupId)?.name ?? "";
+  const target = bucket.amount === null ? ""
+    : bucket.type === "goal" ? `${formatMoney(bucket.amount)} by ${bucket.goalMonth}`
+    : `${formatMoney(bucket.amount)}/month`;
+  const fields = [bucket.id, group, bucket.name, bucket.type, target, formatMoney(bucket.available)];
+  return (bucket.archived ? [...fields, "archived"] : fields).join("\t");
 }
 
 // Today in the CLI's own timezone, as YYYY-MM-DD.

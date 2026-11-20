@@ -1,4 +1,7 @@
-import type { Account, AccountEditInput, Budget, BudgetNameInput, Health, NewAccountInput } from "./core/index.js";
+import type {
+  Account, AccountEditInput, ArchiveResult, Bucket, BucketEditInput, BucketGroup, BucketMoveInput, BucketTable, Budget, BudgetNameInput,
+  GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput,
+} from "./core/index.js";
 
 export class ApiError extends Error {
   constructor(public readonly code: string, message: string) {
@@ -18,6 +21,7 @@ export function createClient(baseUrl: string) {
     } catch {
       throw new ApiError("unreachable", "Cannot reach the Bucketeer server. Check its address and whether it is running.");
     }
+    if (response.status === 204) return undefined as T;
     let body;
     try {
       body = await response.json();
@@ -34,6 +38,9 @@ export function createClient(baseUrl: string) {
     ? { method }
     : { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
   const account = (id: string) => `/api/accounts/${encodeURIComponent(id)}`;
+  const budgetPath = (id: string) => `/api/budgets/${encodeURIComponent(id)}`;
+  const group = (id: string) => `/api/groups/${encodeURIComponent(id)}`;
+  const bucket = (id: string) => `/api/buckets/${encodeURIComponent(id)}`;
 
   return {
     status: () => request<Health>("/health"),
@@ -55,5 +62,16 @@ export function createClient(baseUrl: string) {
     editAccount: (id: string, input: AccountEditInput) => request<Account>(account(id), send("PATCH", input)),
     closeAccount: (id: string) => request<Account>(`${account(id)}/close`, send("POST")),
     reopenAccount: (id: string) => request<Account>(`${account(id)}/reopen`, send("POST")),
+    listBucketTable: (budgetId: string) => request<BucketTable>(`${budgetPath(budgetId)}/buckets`),
+    createGroup: (budgetId: string, input: GroupNameInput) => request<BucketGroup>(`${budgetPath(budgetId)}/groups`, send("POST", input)),
+    renameGroup: (id: string, input: GroupNameInput) => request<BucketGroup>(group(id), send("PATCH", input)),
+    moveGroup: (id: string, input: MoveInput) => request<BucketGroup>(`${group(id)}/move`, send("POST", input)),
+    deleteGroup: (id: string) => request<void>(group(id), send("DELETE")),
+    createBucket: (budgetId: string, input: NewBucketInput) => request<Bucket>(`${budgetPath(budgetId)}/buckets`, send("POST", input)),
+    openBucket: (id: string) => request<Bucket>(bucket(id)),
+    editBucket: (id: string, input: BucketEditInput) => request<Bucket>(bucket(id), send("PATCH", input)),
+    moveBucket: (id: string, input: BucketMoveInput) => request<Bucket>(`${bucket(id)}/move`, send("POST", input)),
+    archiveBucket: (id: string) => request<ArchiveResult>(`${bucket(id)}/archive`, send("POST")),
+    restoreBucket: (id: string) => request<Bucket>(`${bucket(id)}/restore`, send("POST")),
   };
 }

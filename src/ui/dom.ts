@@ -15,6 +15,12 @@ export function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Attrs =
   return node;
 }
 
+/** Sets custom properties through the CSSOM (the Content-Security-Policy blocks style attributes). */
+export function withVars<T extends HTMLElement>(node: T, vars: Record<string, string>): T {
+  for (const [name, value] of Object.entries(vars)) node.style.setProperty(name, value);
+  return node;
+}
+
 const svgNs = "http://www.w3.org/2000/svg";
 
 /** An icon from the symbol sprite in index.html. */

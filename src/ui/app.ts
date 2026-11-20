@@ -1,12 +1,15 @@
 // Entry point: routing and loading. The History API drives two kinds of page:
 //   /                          -> the last-used (or first) budget's Accounts page, or the first-run card
 //   /budgets/<id>/accounts     -> the Accounts page
+//   /budgets/<id>/buckets      -> the Buckets page
 import { createClient } from "../client.js";
 import type { Budget } from "../core/index.js";
 import { createAccountsPage } from "./accounts.js";
+import { createBucketsPage } from "./buckets.js";
 import { byId, el, messageOf, setNote } from "./dom.js";
 import { field, openSheet, textInput } from "./sheet.js";
 import { accountsPath, createShell } from "./shell.js";
+import type { Section } from "./shell.js";
 
 const client = createClient(window.location.origin);
 const main = byId("main");
@@ -123,11 +126,15 @@ async function route(): Promise<void> {
     }
 
     let id: string | undefined;
-    try {
-      id = /^\/budgets\/([^/]+)\/accounts$/.exec(path)?.[1];
-      if (id !== undefined) id = decodeURIComponent(id);
-    } catch {
-      id = "";
+    let section: Section = "accounts";
+    const match = /^\/budgets\/([^/]+)\/(accounts|buckets)$/.exec(path);
+    if (match) {
+      section = match[2] as Section;
+      try {
+        id = decodeURIComponent(match[1]!);
+      } catch {
+        id = "";
+      }
     }
     if (id === undefined) {
       const target = budgets.find((budget) => budget.id === lastUsedBudget()) ?? budgets[0]!;
@@ -136,6 +143,7 @@ async function route(): Promise<void> {
     }
     current = budgets.find((budget) => budget.id === id);
     shell.setBudgets(budgets, current);
+    shell.setSection(section);
     if (!current) {
       shell.setAccounts(null);
       showMessage("Budget not found", "That budget does not exist.", false);
@@ -143,6 +151,27 @@ async function route(): Promise<void> {
     }
     const budget = current;
     rememberBudget(budget.id);
+
+    if (section === "buckets") {
+      const [accounts, table] = await Promise.all([client.listAccounts(budget.id), client.listBucketTable(budget.id)]);
+      if (stale()) return;
+      const page = createBucketsPage({
+        client,
+        budget,
+        snack: shell.showSnack,
+        announce: shell.announce,
+        async reload() {
+          const next = await client.listBucketTable(budget.id);
+          if (stale()) throw new Error("This page has changed.");
+          return next;
+        },
+      });
+      shell.setAccounts(accounts);
+      page.render(table);
+      main.replaceChildren(page.root);
+      document.title = `Buckets · ${budget.name} · Bucketeer`;
+      return;
+    }
 
     const accounts = await client.listAccounts(budget.id);
     if (stale()) return;

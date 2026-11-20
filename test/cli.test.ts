@@ -188,3 +188,143 @@ test("CLI account commands handle dollars, signed amounts, budget selection, and
     core.close();
   }
 });
+
+test("CLI group and bucket commands handle dollars, positions, text output, and errors", async () => {
+  const core = openBucketeer(":memory:");
+  const server = createApi(core);
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const url = `http://127.0.0.1:${address.port}`;
+  function run(env: Record<string, string>, ...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+    return new Promise((resolveResult) => {
+      execFile(process.execPath, [resolve("dist/cli.js"), ...args], { env: { ...process.env, BUCKETEER_URL: url, BUCKETEER_BUDGET: "", ...env } }, (error, stdout, stderr) => {
+        resolveResult({ code: error ? Number(error.code) || 1 : 0, stdout: stdout.trim(), stderr: stderr.trim() });
+      });
+    });
+  }
+  const cli = (...args: string[]) => run({}, ...args);
+  const json = async (...args: string[]) => {
+    const result = await cli(...args, "--json");
+    assert.equal(result.code, 0, result.stdout || result.stderr);
+    return JSON.parse(result.stdout);
+  };
+  const failure = async (expected: string, ...args: string[]) => {
+    const result = await cli(...args, "--json");
+    assert.notEqual(result.code, 0, args.join(" "));
+    assert.equal(JSON.parse(result.stdout).error.code, expected, args.join(" "));
+    assert.ok(JSON.parse(result.stdout).error.message);
+  };
+  // A goal month comfortably in the future, whatever today is.
+  const future = `${new Date().getFullYear() + 2}-08`;
+  try {
+    const budget = core.createBudget({ name: "Household" });
+    const b = ["--budget", budget.id];
+    assert.deepEqual(await json("bucket", "list", ...b), { groups: [], buckets: [] });
+    assert.deepEqual(await cli("bucket", "list", ...b), { code: 0, stdout: "No buckets.", stderr: "" });
+    assert.deepEqual(await json("group", "list", ...b), []);
+    assert.deepEqual(await cli("group", "list", ...b), { code: 0, stdout: "No groups.", stderr: "" });
+
+    const fixed = await json("group", "add", ...b, "--name", "Fixed");
+    assert.deepEqual([fixed.name, fixed.order, fixed.budgetId], ["Fixed", 1, budget.id]);
+    const everydayText = await cli("group", "add", ...b, "--name", "Everyday");
+    const [everydayId, everydayName] = everydayText.stdout.split("\t");
+    assert.equal(everydayName, "Everyday");
+
+    const rent = await json("bucket", "add", ...b, "--name", "Rent", "--group", fixed.id, "--type", "recurring", "--amount", "1,650");
+    assert.deepEqual([rent.amount, rent.colour, rent.available, rent.goalMonth], [165_000, "sky", 0, null]);
+    const vacation = await json("bucket", "add", ...b, "--name", "Vacation", "--new-group", "Goals", "--type", "goal", "--amount", "3000", "--by", future);
+    assert.deepEqual([vacation.amount, vacation.goalMonth], [300_000, future]);
+    const clothingText = await cli("bucket", "add", ...b, "--name", "Clothing", "--group", everydayId!);
+    assert.match(clothingText.stdout, /^[^\t]+\tEveryday\tClothing\tplain\t\t0\.00$/);
+    const clothingId = clothingText.stdout.split("\t")[0]!;
+    const groups = await json("group", "list", ...b);
+    assert.deepEqual(groups.map((group: { name: string }) => group.name), ["Fixed", "Everyday", "Goals"]);
+    const goals = groups[2];
+    assert.equal(vacation.groupId, goals.id);
+    assert.deepEqual((await cli("group", "list", ...b)).stdout.split("\n"), groups.map((group: { id: string; name: string }) => `${group.id}\t${group.name}`));
+
+    assert.deepEqual((await cli("bucket", "list", ...b)).stdout.split("\n"), [
+      `${rent.id}\tFixed\tRent\trecurring\t1,650.00/month\t0.00`,
+      `${clothingId}\tEveryday\tClothing\tplain\t\t0.00`,
+      `${vacation.id}\tGoals\tVacation\tgoal\t3,000.00 by ${future}\t0.00`,
+    ]);
+    // BUCKETEER_BUDGET stands in for --budget.
+    assert.equal(JSON.parse((await run({ BUCKETEER_BUDGET: budget.id }, "bucket", "list", "--json")).stdout).buckets.length, 3);
+
+    // Edit: amount alone keeps the type; switching to plain clears the amount.
+    assert.equal((await json("bucket", "edit", rent.id, "--amount", "1700")).amount, 170_000);
+    const plainRent = await json("bucket", "edit", rent.id, "--type", "plain");
+    assert.deepEqual([plainRent.type, plainRent.amount], ["plain", null]);
+    assert.equal((await cli("bucket", "edit", rent.id, "--name", "Housing", "--colour", "plum")).stdout, `${rent.id}\tFixed\tHousing\tplain\t\t0.00`);
+    assert.equal((await json("bucket", "edit", rent.id, "--new-group", "Home")).order, 1);
+    assert.equal((await json("bucket", "edit", rent.id, "--group", fixed.id)).groupId, fixed.id);
+
+    // Positions are 1-based; --group defaults to the bucket's own group.
+    const moved = await json("bucket", "move", clothingId, "--group", fixed.id, "--position", "1");
+    assert.deepEqual([moved.groupId, moved.order], [fixed.id, 1]);
+    assert.equal((await json("bucket", "move", clothingId, "--position", "9")).order, 2);
+    assert.equal((await cli("bucket", "move", clothingId, "--position", "1")).stdout, `${clothingId}\tFixed\tClothing\tplain\t\t0.00`);
+    assert.equal((await json("group", "move", goals.id, "--position", "1")).order, 1);
+    assert.equal((await cli("group", "rename", goals.id, "--name", "Saving")).stdout, `${goals.id}\tSaving`);
+
+    const archived = await json("bucket", "archive", clothingId);
+    assert.deepEqual([archived.bucket.archived, archived.returned], [true, 0]);
+    assert.equal((await cli("bucket", "archive", clothingId)).stdout, `${clothingId}\tFixed\tClothing\tplain\t\t0.00\tarchived`);
+    assert.equal((await json("bucket", "list", ...b)).buckets.length, 2);
+    const withArchived = await json("bucket", "list", ...b, "--archived");
+    assert.equal(withArchived.buckets.at(-1).id, clothingId);
+    assert.equal((await cli("bucket", "list", ...b, "--archived")).stdout.split("\n").at(-1), `${clothingId}\tFixed\tClothing\tplain\t\t0.00\tarchived`);
+    await failure("name_taken", "bucket", "add", ...b, "--name", "clothing", "--group", fixed.id);
+    const restored = await json("bucket", "restore", clothingId);
+    assert.deepEqual([restored.archived, restored.groupId, restored.order], [false, fixed.id, 2]);
+
+    await failure("group_not_empty", "group", "delete", fixed.id);
+    assert.deepEqual(await json("group", "delete", everydayId!), { id: everydayId, deleted: true });
+    const spare = await json("group", "add", ...b, "--name", "Spare");
+    assert.equal((await cli("group", "delete", spare.id)).stdout, `Deleted group ${spare.id}.`);
+
+    await failure("invalid_input", "bucket", "edit", vacation.id, "--by", "2020-01");
+    await failure("invalid_input", "bucket", "add", ...b, "--name", "Car", "--group", fixed.id, "--type", "goal", "--amount", "100");
+    await failure("invalid_input", "bucket", "add", ...b, "--name", "Car", "--group", fixed.id, "--colour", "pink");
+    await failure("invalid_input", "bucket", "add", ...b, "--name", "Car", "--group", fixed.id, "--type", "recurring");
+    await failure("invalid_input", "bucket", "add", ...b, "--name", "Car", "--group", fixed.id, "--type", "recurring", "--amount", "-5");
+    await failure("invalid_input", "bucket", "add", ...b, "--name", "Car", "--group", fixed.id, "--type", "recurring", "--amount", "1.234");
+    await failure("invalid_input", "bucket", "add", ...b, "--name", "Car", "--group", fixed.id, "--type", "weekly");
+    await failure("invalid_input", "bucket", "move", clothingId, "--position", "0");
+    await failure("invalid_input", "bucket", "move", clothingId, "--position", "-1");
+    await failure("invalid_input", "group", "move", fixed.id, "--position", "first");
+    await failure("name_taken", "group", "add", ...b, "--name", "fixed");
+    await failure("not_found", "bucket", "archive", "missing");
+    await failure("not_found", "bucket", "restore", "missing");
+    await failure("not_found", "bucket", "edit", "missing", "--name", "X");
+    await failure("not_found", "bucket", "move", "missing", "--position", "1");
+    await failure("not_found", "bucket", "add", ...b, "--name", "Car", "--group", "missing");
+    await failure("not_found", "group", "delete", "missing");
+    await failure("not_found", "group", "rename", "missing", "--name", "X");
+    await failure("not_found", "bucket", "list", "--budget", "missing");
+    // Usage errors: --amount or --by without a type on add, group choice, missing positions.
+    await failure("usage", "bucket", "add", ...b, "--name", "Car", "--group", fixed.id, "--amount", "100");
+    await failure("usage", "bucket", "add", ...b, "--name", "Car", "--group", fixed.id, "--by", future);
+    await failure("usage", "bucket", "add", ...b, "--name", "Car");
+    await failure("usage", "bucket", "add", ...b, "--name", "Car", "--group", fixed.id, "--new-group", "X");
+    await failure("usage", "bucket", "add", "--name", "Car", "--group", fixed.id);
+    await failure("usage", "bucket", "edit", rent.id, "--group", fixed.id, "--new-group", "X");
+    await failure("usage", "bucket", "move", clothingId);
+    await failure("usage", "group", "move", fixed.id);
+    await failure("usage", "group", "add", ...b);
+    await failure("usage", "group", "rename", fixed.id);
+    await failure("usage", "group", "list");
+    await failure("usage", "bucket", "list", ...b, "--name", "X");
+    await failure("usage", "account", "list", ...b, "--archived");
+    const text = await cli("group", "delete", fixed.id);
+    assert.equal(text.stdout, "");
+    assert.match(text.stderr, /Move or archive/);
+    const helpText = (await cli("--help")).stdout;
+    for (const fragment of ["group list", "group delete", "bucket add", "bucket move", "bucket archive", "bucket restore", "--colour"]) assert.ok(helpText.includes(fragment), fragment);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    core.close();
+  }
+});

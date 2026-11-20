@@ -1,0 +1,962 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import type { Locator, Page } from "playwright-core";
+import { openApp, ready, seedBudget } from "./harness.js";
+import type { App } from "./harness.js";
+
+// Independent expectations, taken from the plan and the locked design (not from the code under test).
+const MINUS = "−";
+const overLight = "rgb(179, 36, 59)"; // --over #B3243B
+const overDark = "rgb(255, 150, 164)"; // --over #FF96A4
+const inkLight = "rgb(21, 48, 60)"; // --text #15303C
+const darkBackground = "rgb(15, 23, 30)"; // --bg #0F171E
+const hueNames = ["Sky", "Denim", "Blue", "Slate", "Teal", "Mint", "Green", "Forest", "Lime", "Olive", "Sun", "Cocoa", "Peach", "Tangerine", "Rose", "Plum"];
+
+interface Group { id: string; name: string }
+interface Bucket { id: string; name: string; groupId: string | null; colour: string; type: string; amount: number | null; goalMonth: string | null; archived: boolean }
+interface Table { groups: Group[]; buckets: Bucket[] }
+
+async function api<T>(app: App, method: string, path: string, body?: unknown): Promise<T> {
+  const response = await fetch(`${app.url}${path}`, {
+    method,
+    ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+  });
+  assert.ok(response.ok, `${method} ${path}: ${response.status} ${await response.clone().text()}`);
+  return (response.status === 204 ? undefined : await response.json()) as T;
+}
+
+const tableOf = (app: App, budgetId: string) => api<Table>(app, "GET", `/api/budgets/${budgetId}/buckets`);
+
+/** Group name -> active bucket names, in the server's order. */
+async function order(app: App, budgetId: string): Promise<Record<string, string[]>> {
+  const table = await tableOf(app, budgetId);
+  return Object.fromEntries(table.groups.map((group) => [group.name, table.buckets.filter((b) => !b.archived && b.groupId === group.id).map((b) => b.name)]));
+}
+
+interface Seeded { budgetId: string; groups: Record<string, string>; buckets: Record<string, string> }
+
+/** Fixed: Rent, Gym · Everyday: Groceries, Dining out, Fuel · Goals: Vacation · Kids (empty). */
+async function seed(app: App, options: { kids?: boolean } = {}): Promise<Seeded> {
+  const budgetId = await seedBudget(app.url, "Household");
+  const groups: Record<string, string> = {};
+  for (const name of ["Fixed", "Everyday", "Goals", ...(options.kids ? ["Kids"] : [])]) {
+    groups[name] = (await api<Group>(app, "POST", `/api/budgets/${budgetId}/groups`, { name })).id;
+  }
+  const buckets: Record<string, string> = {};
+  const specs: [string, string, Record<string, unknown>][] = [
+    ["Fixed", "Rent", { colour: "blue", type: "recurring", amount: 165000 }],
+    ["Fixed", "Gym", { colour: "plum", type: "recurring", amount: 4000 }],
+    ["Everyday", "Groceries", { colour: "green", type: "recurring", amount: 60000 }],
+    ["Everyday", "Dining out", { colour: "rose", type: "recurring", amount: 15000 }],
+    ["Everyday", "Fuel", { colour: "denim", type: "recurring", amount: 16000 }],
+    ["Goals", "Vacation", { colour: "teal", type: "goal", amount: 300000, goalMonth: "2027-08" }],
+  ];
+  for (const [group, name, fields] of specs) {
+    buckets[name] = (await api<Bucket>(app, "POST", `/api/budgets/${budgetId}/buckets`, { name, groupId: groups[group], ...fields })).id;
+  }
+  return { budgetId, groups, buckets };
+}
+
+async function openBuckets(app: App, budgetId: string): Promise<void> {
+  await app.page.goto(`${app.url}/budgets/${budgetId}/buckets`);
+  await ready(app.page);
+}
+
+const compact = (text: string | null) => (text ?? "").replace(/\s+/g, " ").trim();
+const colorOf = (locator: Locator) => locator.evaluate((node) => getComputedStyle(node).color);
+const snackText = (page: Page) => page.locator("#snack-msg").textContent();
+const announced = (page: Page, text: string) => page.waitForFunction((expected) => document.getElementById("announce")?.textContent === expected, text, { timeout: 3_000 });
+const focusedLabel = (page: Page) => page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? document.activeElement?.textContent ?? "");
+const noHorizontalScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+
+async function waitForSnack(page: Page, text: string): Promise<void> {
+  await page.waitForFunction((expected) => document.getElementById("snack-msg")?.textContent === expected && !document.getElementById("snack")?.hidden, text, { timeout: 5_000 });
+}
+
+/** Drags a row by its grip to a y position (a row's top edge marks "just above that row"). */
+async function drag(page: Page, row: Locator, toY: number, options: { cancel?: boolean } = {}): Promise<void> {
+  await row.hover();
+  const grip = await row.locator("[data-grip]").boundingBox();
+  assert.ok(grip, "The row has a grip.");
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(grip.x + 20, toY, { steps: 8 });
+  if (options.cancel) await page.keyboard.press("Escape");
+  await page.mouse.up();
+}
+
+/** Retries an assertion until it passes (the page saves and redraws after a click resolves). */
+async function eventually(check: () => Promise<void>, timeout = 5_000): Promise<void> {
+  const end = Date.now() + timeout;
+  for (;;) {
+    try {
+      return await check();
+    } catch (error) {
+      if (Date.now() > end) throw error;
+      await new Promise((done) => setTimeout(done, 50));
+    }
+  }
+}
+
+const rowTop = async (locator: Locator) => (await locator.boundingBox())!.y + 2;
+
+test("the Buckets page is reached from the nav and its deep link; / still opens Accounts", { timeout: 45_000 }, async (t) => {
+  const app = await openApp(t);
+  const { page } = app;
+  const { budgetId } = await seed(app);
+
+  await page.goto(app.url);
+  await ready(page);
+  assert.equal(new URL(page.url()).pathname, `/budgets/${budgetId}/accounts`);
+  assert.equal(await page.getByRole("heading", { level: 1 }).textContent(), "Accounts");
+  assert.deepEqual(await page.locator("#nav a").allTextContents(), ["Buckets", "Accounts"]);
+
+  await page.getByRole("link", { name: "Buckets" }).click();
+  await ready(page);
+  assert.equal(new URL(page.url()).pathname, `/budgets/${budgetId}/buckets`);
+  assert.equal(await page.getByRole("heading", { level: 1 }).textContent(), "Buckets");
+  assert.equal(await page.getByRole("link", { name: "Buckets" }).getAttribute("aria-current"), "page");
+  assert.equal(await page.getByRole("link", { name: "Accounts" }).getAttribute("aria-current"), null);
+
+  // The deep link survives a reload; back returns to Accounts.
+  await page.reload();
+  await ready(page);
+  assert.equal(await page.getByRole("heading", { level: 1 }).textContent(), "Buckets");
+  await page.goBack();
+  await ready(page);
+  assert.equal(await page.getByRole("heading", { level: 1 }).textContent(), "Accounts");
+
+  // Table content: group rows with counts and the three kinds of target.
+  await openBuckets(app, budgetId);
+  const grid = page.getByRole("table", { name: "Buckets" });
+  assert.deepEqual((await grid.locator(".bgroup .gname").allTextContents()), ["Fixed", "Everyday", "Goals"]);
+  assert.deepEqual(await grid.locator(".bgroup .gcount").allTextContents(), ["2", "3", "1"]);
+  const rent = grid.getByRole("row", { name: /Rent/ });
+  assert.equal(compact(await rent.locator(".det").innerText()), "$1,650.00 a month");
+  const vacation = grid.getByRole("row", { name: /Vacation/ });
+  assert.equal(compact(await vacation.locator(".gmeta").innerText()), "of $3,000.00 · Aug 2027");
+  assert.equal(await vacation.locator(".pct").textContent(), "0%");
+  assert.equal(await vacation.getByRole("img").getAttribute("aria-label"), "0% saved toward a $3,000.00 goal");
+  assert.equal(await rent.locator(".avail").textContent(), "0.00");
+  assert.deepEqual(app.pageErrors, []);
+  assert.deepEqual(app.foreignRequests, []);
+});
+
+test("buckets can be added, edited, archived and restored, with Undo for edit and archive", { timeout: 60_000 }, async (t) => {
+  const app = await openApp(t, { height: 800 });
+  const { page } = app;
+  const budgetId = await seedBudget(app.url, "Household");
+  await openBuckets(app, budgetId);
+  const dialog = page.locator("dialog");
+
+  // First run: an empty state with one Add bucket; the group starts as a new-group field.
+  assert.equal(compact(await page.locator(".bempty-state").innerText()), "No buckets yet Add bucket");
+  await page.getByRole("button", { name: "Add bucket" }).click();
+  assert.equal(await dialog.getByRole("heading").textContent(), "Add bucket");
+  assert.equal(await dialog.getByLabel("New group name").isVisible(), true);
+  assert.equal(await dialog.getByRole("combobox").isVisible(), false);
+  assert.equal(await dialog.getByRole("button", { name: "Choose existing" }).isVisible(), false);
+  // The default colour is the first in palette order when nothing is used yet.
+  assert.equal(await dialog.getByRole("radio", { name: "Sky" }).getAttribute("aria-checked"), "true");
+  await dialog.getByLabel("Name", { exact: true }).fill("Rent");
+  await dialog.getByLabel("New group name").fill("Fixed");
+  await dialog.getByLabel("Amount per month").fill("1,650");
+  await dialog.getByRole("button", { name: "Add bucket" }).click();
+  await dialog.waitFor({ state: "detached" });
+  let table = await tableOf(app, budgetId);
+  assert.deepEqual(table.groups.map((g) => g.name), ["Fixed"]);
+  assert.deepEqual(table.buckets.map((b) => [b.name, b.colour, b.type, b.amount, b.goalMonth]), [["Rent", "sky", "recurring", 165000, null]]);
+  assert.equal(await focusedLabel(page), "Edit Rent", "Focus lands on the new row.");
+
+  // A second bucket defaults to the next unused colour.
+  await page.getByRole("button", { name: "Add bucket" }).click();
+  assert.equal(await dialog.getByRole("radio", { name: "Denim" }).getAttribute("aria-checked"), "true");
+  await dialog.getByLabel("Name", { exact: true }).fill("Clothing");
+  await dialog.getByRole("radio", { name: "Plain" }).click();
+  await dialog.getByRole("button", { name: "Add bucket" }).click();
+  await dialog.waitFor({ state: "detached" });
+  table = await tableOf(app, budgetId);
+  assert.deepEqual(table.buckets.map((b) => [b.name, b.colour, b.type, b.amount]), [["Rent", "sky", "recurring", 165000], ["Clothing", "denim", "plain", null]]);
+
+  // A name clash: the server's message shows in neutral ink, the name field is marked and focused, and input is kept.
+  await page.getByRole("button", { name: "Add bucket" }).click();
+  await dialog.getByLabel("Name", { exact: true }).fill("rent");
+  await dialog.getByRole("radio", { name: "Plain" }).click();
+  await dialog.getByRole("button", { name: "Add bucket" }).click();
+  const note = dialog.locator(".snote");
+  await note.locator("span").waitFor();
+  assert.match(await note.innerText(), /already exists/);
+  assert.equal(await colorOf(note), inkLight);
+  const nameField = dialog.getByLabel("Name", { exact: true });
+  assert.equal(await nameField.getAttribute("aria-invalid"), "true");
+  assert.equal(await nameField.evaluate((node) => node === document.activeElement), true);
+  assert.equal(await nameField.inputValue(), "rent");
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "detached" });
+
+  // Edit: whole-row click opens Edit; change amount, colour and name; Undo puts every field back.
+  // A real click on the target text, well away from the name: the name button's hit area covers the row.
+  const targetBox = (await page.getByRole("table", { name: "Buckets" }).getByRole("row", { name: /Rent/ }).locator(".det").boundingBox())!;
+  await page.mouse.click(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2);
+  assert.equal(await dialog.getByRole("heading").textContent(), "Edit Rent");
+  assert.equal(await dialog.getByLabel("Amount per month").inputValue(), "1,650.00");
+  await dialog.getByLabel("Name", { exact: true }).fill("Mortgage");
+  await dialog.getByLabel("Amount per month").fill("1,700.50");
+  await dialog.getByRole("radio", { name: "Plum" }).click();
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await dialog.waitFor({ state: "detached" });
+  let rent = (await tableOf(app, budgetId)).buckets.find((b) => b.id === table.buckets[0]!.id)!;
+  assert.deepEqual([rent.name, rent.amount, rent.colour], ["Mortgage", 170050, "plum"]);
+  assert.equal(await focusedLabel(page), "Edit Mortgage");
+  await waitForSnack(page, "Saved Mortgage.");
+  await page.locator("#snack-undo").click();
+  await page.getByRole("button", { name: "Edit Rent" }).waitFor();
+  rent = (await tableOf(app, budgetId)).buckets.find((b) => b.id === rent.id)!;
+  assert.deepEqual([rent.name, rent.amount, rent.colour, rent.type], ["Rent", 165000, "sky", "recurring"]);
+
+  // Undo of a type change restores the old type and amount.
+  await page.getByRole("button", { name: "Edit Rent" }).click();
+  await dialog.getByRole("radio", { name: "Plain" }).click();
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await dialog.waitFor({ state: "detached" });
+  assert.equal((await tableOf(app, budgetId)).buckets.find((b) => b.id === rent.id)!.amount, null);
+  await waitForSnack(page, "Saved Rent.");
+  await page.locator("#snack-undo").click();
+  await eventually(async () => {
+    rent = (await tableOf(app, budgetId)).buckets.find((b) => b.id === rent.id)!;
+    assert.deepEqual([rent.type, rent.amount], ["recurring", 165000]);
+  });
+  await eventually(async () => assert.equal(compact(await page.getByRole("row", { name: /Rent/ }).locator(".det").innerText()), "$1,650.00 a month"));
+
+  // Archive from Edit (the zero case): the row moves to the fold; Undo restores it.
+  await page.getByRole("button", { name: "Edit Clothing" }).click();
+  await dialog.getByRole("button", { name: "Archive Clothing" }).click();
+  await dialog.waitFor({ state: "detached" });
+  await waitForSnack(page, "Archived Clothing.");
+  assert.equal(await page.getByRole("button", { name: "Edit Clothing" }).count(), 0);
+  assert.equal(compact(await page.locator("details.archived summary").innerText()), "Archived buckets · 1");
+  assert.equal((await tableOf(app, budgetId)).buckets.find((b) => b.name === "Clothing")!.archived, true);
+  await page.locator("#snack-undo").click();
+  await page.getByRole("button", { name: "Edit Clothing" }).waitFor();
+  assert.equal((await tableOf(app, budgetId)).buckets.find((b) => b.name === "Clothing")!.archived, false);
+  assert.equal(await page.locator("details.archived").count(), 0);
+
+  // Archive again, then Restore from the fold. An archived bucket offers no Edit.
+  await page.getByRole("button", { name: "Edit Clothing" }).click();
+  await dialog.getByRole("button", { name: "Archive Clothing" }).click();
+  await dialog.waitFor({ state: "detached" });
+  await page.locator("details.archived summary").click();
+  const archivedRow = page.locator("details.archived li");
+  assert.match(compact(await archivedRow.innerText()), /^Clothing Fixed · Archived [A-Z][a-z]{2} \d{1,2} Restore$/);
+  assert.equal(await page.getByRole("button", { name: "Edit Clothing" }).count(), 0);
+  await page.getByRole("button", { name: "Restore Clothing" }).click();
+  await page.getByRole("button", { name: "Edit Clothing" }).waitFor();
+  assert.deepEqual(await order(app, budgetId), { Fixed: ["Rent", "Clothing"] });
+  assert.deepEqual(app.pageErrors, []);
+});
+
+test("the group dropdown opens without changing the choice, has typeahead and a new-group mode", { timeout: 45_000 }, async (t) => {
+  const app = await openApp(t, { height: 800 });
+  const { page } = app;
+  const { budgetId, groups } = await seed(app);
+  await openBuckets(app, budgetId);
+  const dialog = page.locator("dialog");
+
+  // "Add bucket to Everyday" from the group menu preselects Everyday.
+  await page.getByRole("button", { name: "Everyday group actions" }).click();
+  assert.deepEqual(await page.getByRole("menuitem").allInnerTexts(), ["Add bucket to Everyday", "Rename group"]);
+  await page.getByRole("menuitem", { name: "Add bucket to Everyday" }).click();
+  const combo = dialog.getByRole("combobox", { name: "Group" });
+  const list = dialog.getByRole("listbox");
+  assert.equal(compact(await combo.innerText()), "Everyday");
+
+  // Arrowing opens the list on the current choice and moves the active option, but never picks.
+  await combo.focus();
+  await page.keyboard.press("ArrowDown");
+  assert.equal(await list.isVisible(), true);
+  assert.equal(await combo.getAttribute("aria-expanded"), "true");
+  const active = () => combo.evaluate((node) => document.getElementById(node.getAttribute("aria-activedescendant") ?? "")?.textContent ?? null);
+  assert.equal(await active(), "Everyday");
+  await page.keyboard.press("ArrowDown");
+  assert.equal(await active(), "Goals");
+  assert.equal(compact(await combo.innerText()), "Everyday");
+  assert.equal(await dialog.getByRole("option", { name: "Everyday" }).getAttribute("aria-selected"), "true");
+
+  // Escape closes only the list.
+  await page.keyboard.press("Escape");
+  assert.equal(await list.isVisible(), false);
+  assert.equal(await dialog.isVisible(), true);
+  assert.equal(compact(await combo.innerText()), "Everyday");
+
+  // Typeahead jumps without picking; Enter picks.
+  await page.keyboard.press("f");
+  assert.equal(await list.isVisible(), true);
+  assert.equal(await active(), "Fixed");
+  assert.equal(compact(await combo.innerText()), "Everyday");
+  await page.keyboard.press("Enter");
+  assert.equal(await list.isVisible(), false);
+  assert.equal(compact(await combo.innerText()), "Fixed");
+  assert.equal(await combo.evaluate((node) => node === document.activeElement), true);
+
+  // Pointer: click opens, clicking an option picks it.
+  await combo.click();
+  await dialog.getByRole("option", { name: "Goals" }).click();
+  assert.equal(compact(await combo.innerText()), "Goals");
+
+  // "New group" turns the control into a name field, with a way back.
+  await page.keyboard.press("n");
+  assert.equal(await active(), "New group");
+  await page.keyboard.press("Enter");
+  const newName = dialog.getByLabel("New group name");
+  assert.equal(await newName.evaluate((node) => node === document.activeElement), true);
+  await dialog.getByRole("button", { name: "Choose existing" }).click();
+  assert.equal(compact(await combo.innerText()), "Goals");
+  await combo.click();
+  await dialog.getByRole("option", { name: "New group" }).click();
+
+  await dialog.getByLabel("Name", { exact: true }).fill("Swimming");
+  await newName.fill("Kids");
+  await dialog.getByRole("radio", { name: "Plain" }).click();
+  await dialog.getByRole("button", { name: "Add bucket" }).click();
+  await dialog.waitFor({ state: "detached" });
+  const after = await order(app, budgetId);
+  assert.deepEqual(after.Kids, ["Swimming"]);
+  assert.deepEqual(after.Goals, ["Vacation"]);
+
+  // Edit: moving a bucket to another group through the dropdown, then Undo, puts it back in its old place.
+  await page.getByRole("button", { name: "Edit Groceries" }).click();
+  await combo.click();
+  await dialog.getByRole("option", { name: "Fixed" }).click();
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await dialog.waitFor({ state: "detached" });
+  assert.deepEqual((await order(app, budgetId)).Fixed, ["Rent", "Gym", "Groceries"]);
+  await waitForSnack(page, "Saved Groceries.");
+  await page.locator("#snack-undo").click();
+  await eventually(async () => assert.deepEqual(await order(app, budgetId), { Fixed: ["Rent", "Gym"], Everyday: ["Groceries", "Dining out", "Fuel"], Goals: ["Vacation"], Kids: ["Swimming"] }));
+  await eventually(async () => assert.deepEqual(await page.locator(".brow .name").allTextContents(), ["Rent", "Gym", "Groceries", "Dining out", "Fuel", "Vacation", "Swimming"]));
+  assert.ok(groups.Everyday);
+  assert.deepEqual(app.pageErrors, []);
+});
+
+test("colour swatches move by arrow keys and are named; each type keeps its own amount", { timeout: 45_000 }, async (t) => {
+  const app = await openApp(t, { height: 800 });
+  const { page } = app;
+  const { budgetId } = await seed(app);
+  await openBuckets(app, budgetId);
+  const dialog = page.locator("dialog");
+  await page.getByRole("button", { name: "Add bucket" }).click();
+
+  const radios = dialog.getByRole("radiogroup", { name: "Colour" }).getByRole("radio");
+  assert.deepEqual(await radios.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("aria-label"))), hueNames);
+  // Seeded buckets use blue, plum, green, rose, denim and teal: the least used in palette order is Sky.
+  const checked = () => dialog.getByRole("radiogroup", { name: "Colour" }).locator('[aria-checked="true"]').getAttribute("aria-label");
+  const hueText = () => dialog.locator(".hue-name").textContent();
+  const focused = () => page.evaluate(() => document.activeElement?.getAttribute("aria-label"));
+  assert.equal(await checked(), "Sky");
+  assert.equal(await hueText(), "Sky");
+  assert.deepEqual(await radios.evaluateAll((nodes) => nodes.filter((node) => (node as HTMLElement).tabIndex === 0).length), 1, "One tab stop for the whole group.");
+
+  await dialog.getByRole("radio", { name: "Sky" }).focus();
+  await page.keyboard.press("ArrowRight");
+  assert.deepEqual([await checked(), await focused(), await hueText()], ["Denim", "Denim", "Denim"]);
+  await page.keyboard.press("ArrowDown");
+  assert.deepEqual([await checked(), await focused()], ["Olive", "Olive"], "Down moves a whole row.");
+  await page.keyboard.press("ArrowUp");
+  assert.equal(await checked(), "Denim");
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowLeft");
+  assert.equal(await checked(), "Plum", "Left from the first colour wraps to the last.");
+  await page.keyboard.press("Home");
+  assert.equal(await checked(), "Sky");
+  await page.keyboard.press("End");
+  assert.equal(await checked(), "Plum");
+  // The title dot previews the choice.
+  assert.equal(await dialog.locator(".sheet-head .dot").evaluate((node) => getComputedStyle(node).backgroundColor),
+    await dialog.getByRole("radio", { name: "Plum" }).locator(".sw-dot").evaluate((node) => getComputedStyle(node).backgroundColor));
+
+  // Type switching: each type keeps its own draft; Plain folds the fields away.
+  await dialog.getByLabel("Name", { exact: true }).fill("Laptop");
+  await dialog.getByLabel("Amount per month").fill("160");
+  await dialog.getByRole("radio", { name: "Dated goal" }).click();
+  assert.equal(await dialog.getByLabel("Goal amount").inputValue(), "");
+  await dialog.getByLabel("Goal amount").fill("1800");
+  await dialog.getByLabel("By").fill("8/27");
+  await dialog.getByLabel("By").blur();
+  assert.equal(await dialog.getByLabel("By").inputValue(), "Aug 2027", "The month normalises on blur.");
+  await dialog.getByRole("radio", { name: "Recurring" }).click();
+  assert.equal(await dialog.getByLabel("Amount per month").inputValue(), "160.00", "The recurring draft is kept (tidied on blur).");
+  assert.equal(await dialog.getByLabel("By").isVisible(), false);
+  await dialog.getByRole("radio", { name: "Plain" }).click();
+  assert.equal(await dialog.getByLabel("Amount per month").isVisible(), false);
+  await dialog.getByRole("radio", { name: "Dated goal" }).click();
+  assert.equal(await dialog.getByLabel("Goal amount").inputValue(), "1,800.00");
+  assert.equal(await dialog.getByLabel("By").inputValue(), "Aug 2027");
+
+  // A goal month in the past is refused by the server; the By field gets the note and focus.
+  await dialog.getByLabel("By").fill("2020-01");
+  await dialog.getByRole("button", { name: "Add bucket" }).click();
+  await dialog.locator(".snote span").waitFor();
+  assert.equal(await dialog.getByLabel("By").getAttribute("aria-invalid"), "true");
+  assert.equal(await dialog.getByLabel("By").evaluate((node) => node === document.activeElement), true);
+  await dialog.getByLabel("By").fill("Aug 2027");
+  await dialog.getByRole("button", { name: "Add bucket" }).click();
+  await dialog.waitFor({ state: "detached" });
+  const laptop = (await tableOf(app, budgetId)).buckets.find((b) => b.name === "Laptop")!;
+  assert.deepEqual([laptop.type, laptop.amount, laptop.goalMonth, laptop.colour], ["goal", 180000, "2027-08", "plum"]);
+
+  // Desktop dialog: anchored near the top, so the top does not move when the height changes; nothing scrolls at 1280 x 800.
+  await page.getByRole("button", { name: "Edit Laptop" }).click();
+  const box = () => dialog.evaluate((node) => { const r = node.getBoundingClientRect(); return { top: r.top, height: r.height }; });
+  const before = await box();
+  assert.ok(before.top < 60, `The dialog sits near the top (${before.top}).`);
+  await dialog.getByRole("radio", { name: "Plain" }).click();
+  const after = await box();
+  assert.equal(after.top, before.top);
+  assert.ok(after.height < before.height);
+  assert.equal(await dialog.locator(".sheet-body").evaluate((node) => node.scrollHeight <= node.clientHeight), true);
+  assert.deepEqual(app.pageErrors, []);
+});
+
+test("groups render with No buckets, rename inline with Undo, and delete only when empty", { timeout: 45_000 }, async (t) => {
+  const app = await openApp(t);
+  const { page } = app;
+  const { budgetId, groups } = await seed(app, { kids: true });
+  await openBuckets(app, budgetId);
+
+  const kids = page.locator(".bempty");
+  assert.equal(compact(await kids.innerText()), "No buckets");
+
+  // Escape cancels a rename without saving.
+  await page.getByRole("button", { name: "Everyday group actions" }).click();
+  await page.getByRole("menuitem", { name: "Rename group" }).click();
+  const input = page.getByLabel("Group name", { exact: true });
+  assert.equal(await input.inputValue(), "Everyday");
+  await input.fill("Daily");
+  await page.keyboard.press("Escape");
+  assert.equal(await input.count(), 0);
+  assert.equal(await focusedLabel(page), "Everyday group actions");
+  assert.deepEqual((await tableOf(app, budgetId)).groups.map((g) => g.name), ["Fixed", "Everyday", "Goals", "Kids"]);
+
+  // A clash keeps the row open with the server's message.
+  await page.getByRole("button", { name: "Everyday group actions" }).click();
+  await page.getByRole("menuitem", { name: "Rename group" }).click();
+  await input.fill("fixed");
+  await page.keyboard.press("Enter");
+  await page.locator(".rn-err").waitFor();
+  assert.match(await page.locator(".rn-err").innerText(), /already exists/);
+  assert.equal(await input.getAttribute("aria-invalid"), "true");
+
+  // Enter saves; Undo renames back.
+  await input.fill("Daily");
+  await page.keyboard.press("Enter");
+  await waitForSnack(page, "Renamed Everyday to Daily.");
+  assert.equal((await tableOf(app, budgetId)).groups.find((g) => g.id === groups.Everyday)!.name, "Daily");
+  assert.equal(await focusedLabel(page), "Daily group actions");
+  await page.locator("#snack-undo").click();
+  await page.getByRole("button", { name: "Everyday group actions" }).waitFor();
+  assert.equal((await tableOf(app, budgetId)).groups.find((g) => g.id === groups.Everyday)!.name, "Everyday");
+
+  // An Undo the server refuses shows its message on the page.
+  await page.getByRole("button", { name: "Goals group actions" }).click();
+  await page.getByRole("menuitem", { name: "Rename group" }).click();
+  await input.fill("Savings");
+  await page.keyboard.press("Enter");
+  await waitForSnack(page, "Renamed Goals to Savings.");
+  await api(app, "POST", `/api/budgets/${budgetId}/groups`, { name: "Goals" });
+  await page.locator("#snack-undo").click();
+  await page.locator(".page > .note span").waitFor();
+  assert.match(await page.locator(".page > .note").innerText(), /already exists/);
+  assert.equal((await tableOf(app, budgetId)).groups.find((g) => g.id === groups.Goals)!.name, "Savings");
+
+  // Delete group is offered only for a group without active buckets.
+  await page.reload();
+  await ready(page);
+  await page.getByRole("button", { name: "Fixed group actions" }).click();
+  assert.equal(await page.getByRole("menuitem", { name: "Delete group" }).count(), 0);
+  await page.keyboard.press("Escape");
+  assert.equal(await focusedLabel(page), "Fixed group actions");
+  await page.getByRole("button", { name: "Kids group actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete group" }).click();
+  await page.getByRole("button", { name: "Kids group actions" }).waitFor({ state: "detached" });
+  assert.equal((await tableOf(app, budgetId)).groups.some((g) => g.id === groups.Kids), false);
+  assert.deepEqual(app.pageErrors, []);
+});
+
+test("drag reorders within and across groups and into an empty group; Escape cancels; a group carries its buckets", { timeout: 60_000 }, async (t) => {
+  const app = await openApp(t);
+  const { page } = app;
+  const { budgetId } = await seed(app, { kids: true });
+  await openBuckets(app, budgetId);
+  const grid = page.getByRole("table", { name: "Buckets" });
+  const bucketRow = (name: string) => grid.locator(".brow", { hasText: name });
+  const groupRow = (name: string) => grid.locator(".bgroup", { hasText: name });
+
+  // Within a group: Fuel above Groceries.
+  await drag(page, bucketRow("Fuel"), await rowTop(bucketRow("Groceries")));
+  await waitForSnack(page, "Moved Fuel up.");
+  assert.deepEqual((await order(app, budgetId)).Everyday, ["Fuel", "Groceries", "Dining out"]);
+  assert.deepEqual(await grid.locator(".brow .name").allTextContents(), ["Rent", "Gym", "Fuel", "Groceries", "Dining out", "Vacation"]);
+  assert.equal(await page.locator(".drag-ghost, .drop-line").count(), 0);
+
+  // While dragging across groups: a lifted copy, a drop line, the source faded, the target group tinted.
+  const fuel = bucketRow("Fuel");
+  await fuel.hover();
+  const grip = (await fuel.locator("[data-grip]").boundingBox())!;
+  await page.mouse.move(grip.x + 5, grip.y + 5);
+  await page.mouse.down();
+  await page.mouse.move(grip.x + 20, (await groupRow("Goals").boundingBox())!.y + 60, { steps: 8 });
+  assert.equal(await page.locator(".drag-ghost").count(), 1);
+  assert.equal(await page.locator(".drop-line").isVisible(), true);
+  assert.equal(await fuel.evaluate((node) => Number(getComputedStyle(node).opacity) < 1), true);
+  assert.deepEqual(await grid.locator(".bgroup.drop-into .gname").allTextContents(), ["Goals"]);
+  // Escape cancels: nothing saved, nothing left behind.
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  assert.equal(await page.locator(".drag-ghost, .drop-line, .drop-into").count(), 0);
+  assert.deepEqual((await order(app, budgetId)).Everyday, ["Fuel", "Groceries", "Dining out"]);
+  assert.equal(await page.locator("#snack-msg").textContent(), "Moved Fuel up.");
+
+  // Across groups: Fuel to the end of Goals.
+  await drag(page, bucketRow("Fuel"), (await bucketRow("Vacation").boundingBox())!.y + 38);
+  await waitForSnack(page, "Moved Fuel to Goals.");
+  assert.deepEqual(await order(app, budgetId), { Fixed: ["Rent", "Gym"], Everyday: ["Groceries", "Dining out"], Goals: ["Vacation", "Fuel"], Kids: [] });
+
+  // Into an empty group, onto its "No buckets" row.
+  const empty = grid.locator(".bempty");
+  const emptyBox = (await empty.boundingBox())!;
+  await drag(page, bucketRow("Rent"), emptyBox.y + emptyBox.height / 2);
+  await waitForSnack(page, "Moved Rent to Kids.");
+  assert.deepEqual((await order(app, budgetId)).Kids, ["Rent"]);
+  assert.equal(await grid.locator(".bempty").count(), 0);
+
+  // A group row carries its buckets: Goals above Fixed.
+  await drag(page, groupRow("Goals"), await rowTop(groupRow("Fixed")));
+  await waitForSnack(page, "Moved the Goals group up.");
+  assert.deepEqual((await tableOf(app, budgetId)).groups.map((g) => g.name), ["Goals", "Fixed", "Everyday", "Kids"]);
+  assert.deepEqual(await order(app, budgetId), { Goals: ["Vacation", "Fuel"], Fixed: ["Gym"], Everyday: ["Groceries", "Dining out"], Kids: ["Rent"] });
+  assert.deepEqual(await grid.locator(".bgroup .gname, .brow .name").allTextContents(),
+    ["Goals", "Vacation", "Fuel", "Fixed", "Gym", "Everyday", "Groceries", "Dining out", "Kids", "Rent"]);
+
+  // Undo of the group move.
+  await page.locator("#snack-undo").click();
+  await eventually(async () => assert.equal(await grid.locator(".bgroup .gname").first().textContent(), "Fixed"));
+  assert.deepEqual((await tableOf(app, budgetId)).groups.map((g) => g.name), ["Fixed", "Everyday", "Goals", "Kids"]);
+  assert.deepEqual(app.pageErrors, []);
+});
+
+test("Alt+arrows move rows across groups, keep focus, announce the position, and Undo moves back", { timeout: 45_000 }, async (t) => {
+  const app = await openApp(t);
+  const { page } = app;
+  const { budgetId, buckets } = await seed(app);
+  await openBuckets(app, budgetId);
+  const gym = page.getByRole("button", { name: "Edit Gym" });
+  assert.equal(await gym.getAttribute("aria-keyshortcuts"), "Alt+ArrowUp Alt+ArrowDown");
+
+  // Gym is last in Fixed: Alt+Down crosses into Everyday, first place.
+  await gym.focus();
+  await page.keyboard.press("Alt+ArrowDown");
+  await waitForSnack(page, "Moved Gym to Everyday.");
+  await announced(page, "Gym moved to Everyday, position 1 of 4.");
+  assert.deepEqual(await order(app, budgetId), { Fixed: ["Rent"], Everyday: ["Gym", "Groceries", "Dining out", "Fuel"], Goals: ["Vacation"] });
+  assert.equal(await focusedLabel(page), "Edit Gym");
+
+  // Within the group.
+  await page.keyboard.press("Alt+ArrowDown");
+  await waitForSnack(page, "Moved Gym down.");
+  await announced(page, "Gym moved to Everyday, position 2 of 4.");
+  assert.deepEqual((await order(app, budgetId)).Everyday, ["Groceries", "Gym", "Dining out", "Fuel"]);
+  assert.equal(await focusedLabel(page), "Edit Gym");
+
+  // Undo is the inverse move.
+  await page.locator("#snack-undo").click();
+  await announced(page, "Gym moved to Everyday, position 1 of 4.");
+  assert.deepEqual((await order(app, budgetId)).Everyday, ["Gym", "Groceries", "Dining out", "Fuel"]);
+  assert.equal(await focusedLabel(page), "Edit Gym");
+
+  // At the very top there is nowhere to go: nothing is saved and that is announced.
+  await page.getByRole("button", { name: "Edit Rent" }).focus();
+  await page.keyboard.press("Alt+ArrowUp");
+  await page.waitForFunction(() => /Rent/.test(document.getElementById("announce")?.textContent ?? "") && /first/.test(document.getElementById("announce")?.textContent ?? ""));
+  assert.deepEqual((await order(app, budgetId)).Fixed, ["Rent"]);
+
+  // Groups move with Alt+arrows on their menu button.
+  await page.getByRole("button", { name: "Goals group actions" }).focus();
+  await page.keyboard.press("Alt+ArrowUp");
+  await waitForSnack(page, "Moved the Goals group up.");
+  await announced(page, "Goals group moved to position 2 of 3.");
+  assert.deepEqual((await tableOf(app, budgetId)).groups.map((g) => g.name), ["Fixed", "Goals", "Everyday"]);
+  assert.equal(await focusedLabel(page), "Goals group actions");
+
+  // An Undo whose target has changed since is refused with a reason, and nothing moves.
+  await page.getByRole("button", { name: "Edit Fuel" }).focus();
+  await page.keyboard.press("Alt+ArrowUp");
+  await waitForSnack(page, "Moved Fuel up.");
+  await api(app, "POST", `/api/buckets/${buckets.Fuel}/move`, { groupId: (await tableOf(app, budgetId)).groups[0]!.id, index: 0 });
+  await page.locator("#snack-undo").click();
+  await page.locator(".page > .note span").waitFor();
+  assert.match(await page.locator(".page > .note").innerText(), /Fuel/);
+  assert.deepEqual((await order(app, budgetId)).Fixed, ["Fuel", "Rent"]);
+  assert.deepEqual(app.pageErrors, []);
+});
+
+test("available figures: positive and overspent rendering, and the archive section for each", { timeout: 45_000 }, async (t) => {
+  for (const scheme of ["light", "dark"] as const) {
+    const app = await openApp(t, { colorScheme: scheme, height: 800 });
+    const { page } = app;
+    const { budgetId } = await seed(app);
+    // Assigning does not exist yet, so Available comes from a fixture: Groceries 186.53, Dining out −18.25.
+    await page.route("**/api/budgets/*/buckets", async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      const response = await route.fetch();
+      const table = (await response.json()) as Table & { buckets: (Bucket & { available: number })[] };
+      for (const bucket of table.buckets) {
+        if (bucket.name === "Groceries") bucket.available = 18653;
+        if (bucket.name === "Dining out") bucket.available = -1825;
+        if (bucket.name === "Vacation") bucket.available = 124000;
+      }
+      await route.fulfill({ response, json: table });
+    });
+    await openBuckets(app, budgetId);
+    const grid = page.getByRole("table", { name: "Buckets" });
+    const dining = grid.getByRole("row", { name: /Dining out/ });
+    const groceries = grid.getByRole("row", { name: /Groceries/ });
+    const over = scheme === "light" ? overLight : overDark;
+
+    assert.equal(await dining.locator(".avail").textContent(), `${MINUS}18.25 overspent`, "Overspent is also said in words.");
+    assert.equal(await colorOf(dining.locator(".avail")), over);
+    assert.notEqual(await colorOf(groceries.locator(".avail")), over, "Red is only for overspent.");
+    assert.equal(await groceries.locator(".avail").textContent(), "186.53");
+    // Everyday total: 186.53 − 18.25 + 0.00 = 168.28.
+    assert.equal(await grid.locator(".bgroup", { hasText: "Everyday" }).locator(".avail").textContent(), "168.28");
+    // Vacation: 1,240.00 of 3,000.00 is 41%.
+    assert.equal(await grid.getByRole("row", { name: /Vacation/ }).locator(".pct").textContent(), "41%");
+    if (scheme === "dark") assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), darkBackground);
+
+    const dialog = page.locator("dialog");
+    await page.getByRole("button", { name: "Edit Dining out" }).click();
+    const blocked = dialog.getByRole("button", { name: "Archive Dining out" });
+    assert.equal(await blocked.isDisabled(), true);
+    const why = dialog.locator(`#${await blocked.getAttribute("aria-describedby")}`);
+    assert.equal(compact(await why.innerText()), `Can’t archive while Available is ${MINUS}18.25`);
+    assert.equal(await colorOf(why.locator(".over")), over);
+    assert.equal(await dialog.locator(".sheet-body").evaluate((node) => node.scrollHeight <= node.clientHeight), true);
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "detached" });
+
+    await page.getByRole("button", { name: "Edit Groceries" }).click();
+    assert.equal(compact(await dialog.locator(".arch-prev").innerText()), "Groceries 186.53 → 0.00 Ready to assign +186.53");
+    assert.equal(await dialog.getByRole("button", { name: "Archive and return $186.53" }).isEnabled(), true);
+    assert.equal(await dialog.locator(".sheet-body").evaluate((node) => node.scrollHeight <= node.clientHeight), true);
+    await page.keyboard.press("Escape");
+    assert.deepEqual(app.pageErrors, []);
+  }
+});
+
+test("at 390px: no horizontal scroll, Reorder mode with 44px move buttons and grip drag, and bottom sheets", { timeout: 60_000 }, async (t) => {
+  const app = await openApp(t, { width: 390, height: 844 });
+  const { page } = app;
+  const { budgetId } = await seed(app);
+  await openBuckets(app, budgetId);
+  assert.equal(await noHorizontalScroll(page), true);
+  const grid = page.getByRole("table", { name: "Buckets" });
+
+  // No grips until Reorder is on; the row opens Edit.
+  assert.equal(await grid.locator("[data-grip]").first().isVisible(), false);
+  const reorder = page.getByRole("button", { name: "Reorder" });
+  assert.equal(await reorder.getAttribute("aria-pressed"), "false");
+  const reorderBox = (await reorder.boundingBox())!;
+  assert.ok(reorderBox.width >= 44 && reorderBox.height >= 44);
+
+  // Dialog is a bottom sheet with 44px swatches.
+  await page.getByRole("button", { name: "Add bucket" }).click();
+  const dialog = page.locator("dialog");
+  const sheet = (await dialog.boundingBox())!;
+  assert.ok(Math.abs(sheet.y + sheet.height - 844) <= 1, "The sheet sits on the bottom edge.");
+  for (const box of await dialog.getByRole("radio").evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect()).map((r) => ({ w: r.width, h: r.height })))) {
+    assert.ok(box.w >= 44 && box.h >= 44, `swatch ${box.w}x${box.h}`);
+  }
+  assert.equal(await noHorizontalScroll(page), true);
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "detached" });
+
+  await reorder.click();
+  const done = page.getByRole("button", { name: "Done" });
+  assert.equal(await done.getAttribute("aria-pressed"), "true");
+  assert.equal(await page.getByRole("button", { name: /^Edit / }).count(), 0, "Taps do not open Edit while reordering.");
+  await grid.locator(".brow", { hasText: "Gym" }).click();
+  assert.equal(await dialog.count(), 0);
+  assert.equal(await page.getByRole("button", { name: "Move Rent up" }).getAttribute("aria-disabled"), "true");
+  const up = page.getByRole("button", { name: "Move Fuel up" });
+  const upBox = (await up.boundingBox())!;
+  assert.ok(upBox.width >= 44 && upBox.height >= 44);
+  assert.equal(await noHorizontalScroll(page), true);
+
+  await up.click();
+  await waitForSnack(page, "Moved Fuel up.");
+  assert.deepEqual((await order(app, budgetId)).Everyday, ["Groceries", "Fuel", "Dining out"]);
+  assert.equal(await focusedLabel(page), "Move Fuel up");
+  await page.getByRole("button", { name: "Move Groceries up" }).click();
+  await waitForSnack(page, "Moved Groceries to Fixed.");
+  assert.deepEqual((await order(app, budgetId)).Fixed, ["Rent", "Gym", "Groceries"]);
+
+  // Grip drag works in Reorder mode.
+  const vacation = grid.locator(".brow", { hasText: "Vacation" });
+  await drag(page, vacation, await rowTop(grid.locator(".brow", { hasText: "Rent" })));
+  await waitForSnack(page, "Moved Vacation to Fixed.");
+  assert.deepEqual((await order(app, budgetId)).Fixed, ["Vacation", "Rent", "Gym", "Groceries"]);
+
+  await done.click();
+  assert.equal(await page.getByRole("button", { name: "Reorder" }).getAttribute("aria-pressed"), "false");
+  assert.equal(await page.getByRole("button", { name: "Edit Rent" }).count(), 1);
+  assert.equal(await noHorizontalScroll(page), true);
+  assert.deepEqual(app.pageErrors, []);
+});
+
+// ----- Corrections after review -----
+
+const savedNote = /^Your change was saved, but the buckets could not refresh\. Reload to try again\.$/;
+const pageNote = (page: Page) => page.locator(".page > .note");
+
+/** Makes the page's table reads fail while `on()` is true; writes still reach the server. */
+async function failTableReads(page: Page, on: () => boolean): Promise<void> {
+  await page.route("**/api/budgets/*/buckets", async (route) => {
+    if (on() && route.request().method() === "GET") await route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "Down." } } });
+    else await route.continue();
+  });
+}
+
+test("a move the server refuses keeps its message, changes nothing and keeps focus", { timeout: 45_000 }, async (t) => {
+  const app = await openApp(t);
+  const { page } = app;
+  const { budgetId, groups } = await seed(app, { kids: true });
+  await openBuckets(app, budgetId);
+  // Kids is deleted elsewhere while this page still shows it as the drop below Vacation.
+  await api(app, "DELETE", `/api/groups/${groups.Kids}`);
+  await page.getByRole("button", { name: "Edit Vacation" }).focus();
+  await page.keyboard.press("Alt+ArrowDown");
+
+  // The page re-reads the table (Kids disappears) and the refusal stays on screen afterwards.
+  await page.locator(`.bgroup[data-group-id="${groups.Kids}"]`).waitFor({ state: "detached" });
+  await eventually(async () => assert.equal(compact(await pageNote(page).innerText()), "Group not found."));
+  await page.waitForTimeout(300);
+  assert.equal(compact(await pageNote(page).innerText()), "Group not found.");
+  assert.equal(await focusedLabel(page), "Edit Vacation");
+  assert.equal(await page.locator("#snack").isHidden(), true, "A refused move offers no Undo.");
+  assert.deepEqual(await order(app, budgetId), {
+    Fixed: ["Rent", "Gym"], Everyday: ["Groceries", "Dining out", "Fuel"], Goals: ["Vacation"],
+  });
+  assert.deepEqual(app.pageErrors, []);
+});
+
+test("a change that saved is reported as saved when the table cannot be re-read", { timeout: 60_000 }, async (t) => {
+  const app = await openApp(t);
+  const { page } = app;
+  const { budgetId, buckets, groups } = await seed(app);
+  let failing = false;
+  await failTableReads(page, () => failing);
+  await openBuckets(app, budgetId);
+  const dialog = page.locator("dialog");
+  const fresh = async () => {
+    failing = false;
+    await page.reload();
+    await ready(page);
+  };
+  const bucketNamed = async (name: string) => (await tableOf(app, budgetId)).buckets.filter((b) => b.name === name);
+
+  // Add: the dialog closes (nothing invites a second submit) and exactly one bucket exists.
+  failing = true;
+  await page.getByRole("button", { name: "Everyday group actions" }).click();
+  await page.getByRole("menuitem", { name: "Add bucket to Everyday" }).click();
+  await dialog.getByLabel("Name", { exact: true }).fill("Books");
+  await dialog.getByRole("radio", { name: "Plain" }).click();
+  await dialog.getByRole("button", { name: "Add bucket" }).click();
+  await dialog.waitFor({ state: "detached" });
+  assert.match(compact(await pageNote(page).innerText()), savedNote);
+  assert.deepEqual((await bucketNamed("Books")).map((b) => [b.groupId, b.type]), [[groups.Everyday, "plain"]]);
+
+  // A write the server refuses still shows its own message in the dialog, not "saved".
+  await page.getByRole("button", { name: "Everyday group actions" }).click();
+  await page.getByRole("menuitem", { name: "Add bucket to Everyday" }).click();
+  await dialog.getByLabel("Name", { exact: true }).fill("books");
+  await dialog.getByRole("radio", { name: "Plain" }).click();
+  await dialog.getByRole("button", { name: "Add bucket" }).click();
+  await dialog.locator(".snote span").waitFor();
+  assert.match(await dialog.locator(".snote").innerText(), /already exists/);
+  assert.equal((await bucketNamed("Books")).length, 1);
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "detached" });
+
+  // Edit: closes, saves once, and keeps a working Undo.
+  await fresh();
+  failing = true;
+  await page.getByRole("button", { name: "Edit Gym" }).click();
+  await dialog.getByLabel("Name", { exact: true }).fill("Gym and pool");
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await dialog.waitFor({ state: "detached" });
+  await waitForSnack(page, "Saved Gym and pool.");
+  assert.match(compact(await pageNote(page).innerText()), savedNote);
+  assert.deepEqual((await bucketNamed("Gym and pool")).map((b) => b.id), [buckets.Gym]);
+  failing = false;
+  await page.locator("#snack-undo").click();
+  await eventually(async () => assert.deepEqual((await bucketNamed("Gym")).map((b) => b.id), [buckets.Gym]));
+  await eventually(async () => assert.equal(compact(await pageNote(page).innerText()), ""), 2_000);
+
+  // Move: saved once, the snackbar still offers Undo, and Undo moves it back.
+  await fresh();
+  failing = true;
+  await page.getByRole("button", { name: "Edit Rent" }).focus();
+  await page.keyboard.press("Alt+ArrowDown");
+  await waitForSnack(page, "Moved Rent down.");
+  assert.match(compact(await pageNote(page).innerText()), savedNote);
+  assert.deepEqual((await order(app, budgetId)).Fixed, ["Gym", "Rent"]);
+  failing = false;
+  await page.locator("#snack-undo").click();
+  await eventually(async () => assert.deepEqual((await order(app, budgetId)).Fixed, ["Rent", "Gym"]));
+
+  // Rename: the inline field closes and the row shows the saved name.
+  await fresh();
+  failing = true;
+  await page.getByRole("button", { name: "Everyday group actions" }).click();
+  await page.getByRole("menuitem", { name: "Rename group" }).click();
+  await page.getByRole("textbox", { name: "Group name" }).fill("Daily");
+  await page.keyboard.press("Enter");
+  await waitForSnack(page, "Renamed Everyday to Daily.");
+  assert.equal(await page.getByRole("textbox", { name: "Group name" }).count(), 0);
+  assert.equal(await page.locator(`.bgroup[data-group-id="${groups.Everyday}"] .gname`).textContent(), "Daily");
+  assert.match(compact(await pageNote(page).innerText()), savedNote);
+  assert.deepEqual((await tableOf(app, budgetId)).groups.map((g) => g.name), ["Fixed", "Daily", "Goals"]);
+
+  // Archive: the dialog closes and the bucket is archived once.
+  await fresh();
+  failing = true;
+  await page.getByRole("button", { name: "Edit Fuel" }).click();
+  await dialog.getByRole("button", { name: "Archive Fuel" }).click();
+  await dialog.waitFor({ state: "detached" });
+  await waitForSnack(page, "Archived Fuel.");
+  assert.match(compact(await pageNote(page).innerText()), savedNote);
+  assert.equal((await bucketNamed("Fuel"))[0]!.archived, true);
+
+  // Restore from the fold.
+  await fresh();
+  failing = true;
+  await page.locator("details.archived summary").click();
+  await page.getByRole("button", { name: "Restore Fuel" }).click();
+  await eventually(async () => assert.match(compact(await pageNote(page).innerText()), savedNote));
+  assert.equal((await bucketNamed("Fuel"))[0]!.archived, false);
+  assert.deepEqual(app.pageErrors, []);
+});
+
+test("Undo of an archive restores to the end of the group, or the first group once its own is gone", { timeout: 45_000 }, async (t) => {
+  const app = await openApp(t);
+  const { page } = app;
+  const { budgetId } = await seed(app);
+  const spare = await api<Group>(app, "POST", `/api/budgets/${budgetId}/groups`, { name: "Spare" });
+  const clothing = await api<Bucket>(app, "POST", `/api/budgets/${budgetId}/buckets`, { name: "Clothing", groupId: spare.id, type: "plain" });
+  await openBuckets(app, budgetId);
+  const dialog = page.locator("dialog");
+
+  // Rent was first in Fixed; restoring appends, it does not move it back to the top.
+  await page.getByRole("button", { name: "Edit Rent" }).click();
+  await dialog.getByRole("button", { name: "Archive Rent" }).click();
+  await waitForSnack(page, "Archived Rent.");
+  await page.locator("#snack-undo").click();
+  await page.getByRole("button", { name: "Edit Rent" }).waitFor();
+  assert.deepEqual((await order(app, budgetId)).Fixed, ["Gym", "Rent"]);
+
+  // Clothing's group is deleted while it is archived: Undo puts it at the end of the first group.
+  await page.getByRole("button", { name: "Edit Clothing" }).click();
+  await dialog.getByRole("button", { name: "Archive Clothing" }).click();
+  await waitForSnack(page, "Archived Clothing.");
+  await api(app, "DELETE", `/api/groups/${spare.id}`);
+  await page.locator("#snack-undo").click();
+  await page.getByRole("button", { name: "Edit Clothing" }).waitFor();
+  assert.deepEqual(await order(app, budgetId), {
+    Fixed: ["Gym", "Rent", "Clothing"], Everyday: ["Groceries", "Dining out", "Fuel"], Goals: ["Vacation"],
+  });
+  const restored = (await tableOf(app, budgetId)).buckets.find((b) => b.id === clothing.id)!;
+  assert.equal(restored.archived, false);
+  assert.deepEqual(app.pageErrors, []);
+});
+
+test("an archive Undo the server refuses shows why and leaves the bucket archived", { timeout: 30_000 }, async (t) => {
+  const app = await openApp(t);
+  const { page } = app;
+  const budgetId = await seedBudget(app.url, "Solo");
+  const only = await api<Group>(app, "POST", `/api/budgets/${budgetId}/groups`, { name: "Only" });
+  const lamp = await api<Bucket>(app, "POST", `/api/budgets/${budgetId}/buckets`, { name: "Lamp", groupId: only.id, type: "plain" });
+  await openBuckets(app, budgetId);
+  await page.getByRole("button", { name: "Edit Lamp" }).click();
+  await page.locator("dialog").getByRole("button", { name: "Archive Lamp" }).click();
+  await waitForSnack(page, "Archived Lamp.");
+  // With no group left anywhere, a restore has nowhere to go.
+  await api(app, "DELETE", `/api/groups/${only.id}`);
+  await page.locator("#snack-undo").click();
+  await eventually(async () => assert.equal(compact(await pageNote(page).innerText()), "Create a group first."));
+  const stored = (await tableOf(app, budgetId)).buckets.find((b) => b.id === lamp.id)!;
+  assert.equal(stored.archived, true);
+  assert.deepEqual(app.pageErrors, []);
+});
+
+test("on a touch phone, only the grip drags in Reorder mode; swipes on rows scroll the page", { timeout: 60_000 }, async (t) => {
+  const app = await openApp(t, { width: 390, height: 600, touch: true });
+  const { page } = app;
+  const { budgetId } = await seed(app);
+  await openBuckets(app, budgetId);
+  const grid = page.getByRole("table", { name: "Buckets" });
+  const seeded = { Fixed: ["Rent", "Gym"], Everyday: ["Groceries", "Dining out", "Fuel"], Goals: ["Vacation"] };
+  // Real touch input through Chromium's input pipeline, so scrolling and pointer events come from the browser.
+  const cdp = await page.context().newCDPSession(page);
+  const touch = (type: string, points: { x: number; y: number }[]) => cdp.send("Input.dispatchTouchEvent", { type: type as "touchStart", touchPoints: points });
+  async function swipe(from: { x: number; y: number }, toY: number): Promise<void> {
+    await touch("touchStart", [from]);
+    for (let i = 1; i <= 10; i++) await touch("touchMove", [{ x: from.x, y: from.y + ((toY - from.y) * i) / 10 }]);
+    await touch("touchEnd", []);
+  }
+  const centre = async (locator: Locator) => {
+    const box = (await locator.boundingBox())!;
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  };
+  const tap = async (locator: Locator) => {
+    const point = await centre(locator);
+    await page.touchscreen.tap(point.x, point.y);
+  };
+  const scrollY = () => page.evaluate(() => window.scrollY);
+
+  // Reorder mode: a swipe up starting on a row's name scrolls the page and moves nothing.
+  await page.getByRole("button", { name: "Reorder" }).tap();
+  assert.ok(await page.evaluate(() => document.documentElement.scrollHeight > window.innerHeight), "The page is tall enough to scroll.");
+  const fuelName = await centre(grid.locator(".brow", { hasText: "Fuel" }).locator(".name"));
+  await swipe(fuelName, fuelName.y - 150);
+  await eventually(async () => assert.ok((await scrollY()) > 0, "The swipe scrolled the page."));
+  assert.equal(await page.locator(".drag-ghost").count(), 0);
+  assert.deepEqual(await order(app, budgetId), seeded);
+
+  // A tap on a row in Reorder mode opens nothing and moves nothing.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await tap(grid.locator(".brow", { hasText: "Gym" }).locator(".name"));
+  await page.waitForTimeout(200);
+  assert.equal(await page.locator("dialog").count(), 0);
+  assert.equal(await page.locator("#snack").isHidden(), true);
+
+  // A touch drag from Groceries' grip to just above Rent moves it, and the move is saved.
+  const grip = await centre(grid.locator(".brow", { hasText: "Groceries" }).locator("[data-grip]"));
+  const rentTop = (await grid.locator(".brow", { hasText: "Rent" }).boundingBox())!.y + 2;
+  await swipe(grip, rentTop);
+  await waitForSnack(page, "Moved Groceries to Fixed.");
+  assert.deepEqual(await order(app, budgetId), { ...seeded, Fixed: ["Groceries", "Rent", "Gym"], Everyday: ["Dining out", "Fuel"] });
+
+  // Out of Reorder mode there is no grip to drag; a swipe on a row scrolls, and a tap opens Edit.
+  await page.getByRole("button", { name: "Done" }).tap();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const before = await order(app, budgetId);
+  const gymName = await centre(grid.locator(".brow", { hasText: "Gym" }).locator(".name"));
+  await swipe(gymName, gymName.y - 150);
+  await eventually(async () => assert.ok((await scrollY()) > 0));
+  assert.equal(await page.locator(".drag-ghost").count(), 0);
+  assert.equal(await page.locator("dialog").count(), 0);
+  assert.deepEqual(await order(app, budgetId), before);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await tap(grid.locator(".brow", { hasText: "Gym" }).locator(".name"));
+  assert.equal(await page.locator("dialog").getByRole("heading").textContent(), "Edit Gym");
+  assert.deepEqual(app.pageErrors, []);
+});

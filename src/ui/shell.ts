@@ -12,7 +12,9 @@ export interface ShellHandlers {
   undoFailed(message: string): void;
 }
 
-export const accountsPath = (budgetId: string) => `/budgets/${encodeURIComponent(budgetId)}/accounts`;
+export type Section = "accounts" | "buckets";
+export const sectionPath = (budgetId: string, section: Section) => `/budgets/${encodeURIComponent(budgetId)}/${section}`;
+export const accountsPath = (budgetId: string) => sectionPath(budgetId, "accounts");
 
 export function createShell(handlers: ShellHandlers) {
   const wrap = byId("budget-wrap");
@@ -23,6 +25,8 @@ export function createShell(handlers: ShellHandlers) {
   const renameItem = byId<HTMLButtonElement>("menu-rename");
   const nav = byId("nav");
   const navAccounts = byId<HTMLAnchorElement>("nav-accounts");
+  const navBuckets = byId<HTMLAnchorElement>("nav-buckets");
+  let section: Section = "accounts";
   const sideAccounts = byId("side-accounts");
   const sideList = byId<HTMLUListElement>("side-list");
   const snack = byId("snack");
@@ -69,7 +73,7 @@ export function createShell(handlers: ShellHandlers) {
   renameItem.addEventListener("click", () => { closeMenu(); handlers.renameBudget(); });
 
   // Brand and nav are real links; plain clicks route in the page.
-  for (const link of [navAccounts, document.querySelector<HTMLAnchorElement>(".wordmark")]) {
+  for (const link of [navBuckets, navAccounts, document.querySelector<HTMLAnchorElement>(".wordmark")]) {
     link?.addEventListener("click", (event) => {
       if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       event.preventDefault();
@@ -119,12 +123,23 @@ export function createShell(handlers: ShellHandlers) {
         }
         item.addEventListener("click", () => {
           closeMenu();
-          handlers.navigate(accountsPath(budget.id));
+          handlers.navigate(sectionPath(budget.id, section));
         });
         return el("li", {}, item);
       }));
       nav.hidden = !current;
-      if (current) navAccounts.href = accountsPath(current.id);
+      if (current) {
+        navAccounts.href = sectionPath(current.id, "accounts");
+        navBuckets.href = sectionPath(current.id, "buckets");
+      }
+    },
+    /** Marks the current page in the nav; switching budgets stays on it. */
+    setSection(next: Section): void {
+      section = next;
+      for (const [link, name] of [[navAccounts, "accounts"], [navBuckets, "buckets"]] as const) {
+        if (name === next) link.setAttribute("aria-current", "page");
+        else link.removeAttribute("aria-current");
+      }
     },
     /** null hides the sidebar list (no budget, or nothing to show). */
     setAccounts(accounts: Account[] | null): void {

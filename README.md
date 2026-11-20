@@ -28,6 +28,19 @@ docker compose exec -T bucketeer bucketeer budget save --id <id> --name "Family 
 
 Saving without `--id` creates a budget. Saving with `--id` changes its name and preserves its identity and creation time. Names are trimmed and must contain 1 to 120 Unicode code points, with no null characters. Different budgets can share a name; their IDs distinguish them.
 
+Buckets live in groups. Amounts are dollars on the command line and integer cents in JSON; `--position` is 1-based:
+
+```sh
+docker compose exec -T bucketeer bucketeer group add --budget <id> --name "Fixed" --json
+docker compose exec -T bucketeer bucketeer bucket add --budget <id> --name "Rent" --group <group-id> --type recurring --amount 1650 --json
+docker compose exec -T bucketeer bucketeer bucket add --budget <id> --name "Vacation" --new-group "Goals" --type goal --amount 3000 --by 2027-08 --json
+docker compose exec -T bucketeer bucketeer bucket list --budget <id> [--archived] --json
+docker compose exec -T bucketeer bucketeer bucket move <bucket-id> [--group <group-id>] --position 1 --json
+docker compose exec -T bucketeer bucketeer bucket archive <bucket-id> --json
+```
+
+`--type` defaults to plain (no amount). A goal month must be this month or later when it is set or changed. Without `--colour`, a bucket gets the least used colour among active buckets. Bucket names stay unique within a budget, archived buckets included. A group can be deleted only when it has no active buckets.
+
 For a remote server, use `--url http://<vpn-address>:3000` or `BUCKETEER_URL`. The CLI always uses HTTP and never accesses the SQLite file directly.
 
 ## Development and verification

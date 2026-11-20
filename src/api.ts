@@ -18,6 +18,8 @@ const assets = new Map<string, Asset>([
   // Shared with the browser: money.js imports types.js at runtime.
   ["/core/money.js", { file: "./core/money.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
   ["/core/types.js", { file: "./core/types.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
+  // Palette order and the least-used colour rule, shared with the browser like money.js.
+  ["/core/colours.js", { file: "./core/colours.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
 ]);
 
 // Bundled fonts and their licences, copied into dist/ui/fonts by the build.
@@ -26,7 +28,7 @@ function findAsset(pathname: string): Asset | undefined {
   const known = assets.get(pathname);
   if (known) return known;
   // Path-routed pages: the UI reads the budget ID from the URL.
-  if (/^\/budgets\/[^/]+\/accounts\/?$/.test(pathname)) return assets.get("/");
+  if (/^\/budgets\/[^/]+\/(?:accounts|buckets)\/?$/.test(pathname)) return assets.get("/");
   // Compiled UI modules (app.js, theme.js, accounts.js, ...) live flat in dist/ui.
   const script = /^\/ui\/([a-z][a-z0-9-]*\.js)$/.exec(pathname)?.[1];
   if (script) return { file: `./ui/${script}`, type: "text/javascript; charset=utf-8", cache: revalidate };
@@ -52,7 +54,7 @@ class HttpError extends Error {
   }
 }
 
-const statuses = { invalid_input: 400, not_found: 404, name_taken: 409, balance_not_zero: 409 } as const;
+const statuses = { invalid_input: 400, not_found: 404, name_taken: 409, balance_not_zero: 409, group_not_empty: 409, bucket_overspent: 409 } as const;
 
 function decodeId(segment: string, what: string): string {
   try {
@@ -134,6 +136,62 @@ export function createApi(core: Bucketeer) {
         }
         if (action && request.method === "POST") {
           json(response, 200, action === "close" ? core.closeAccount(id) : core.reopenAccount(id));
+          return;
+        }
+      }
+      const budgetBuckets = /^\/api\/budgets\/([^/]+)\/(buckets|groups)$/.exec(pathname);
+      if (budgetBuckets?.[1]) {
+        const budgetId = decodeId(budgetBuckets[1], "Budget");
+        if (budgetBuckets[2] === "buckets" && request.method === "GET") {
+          json(response, 200, core.listBucketTable(budgetId));
+          return;
+        }
+        if (budgetBuckets[2] === "buckets" && request.method === "POST") {
+          const bucket = core.createBucket(budgetId, await readJson(request));
+          response.setHeader("location", `/api/buckets/${encodeURIComponent(bucket.id)}`);
+          json(response, 201, bucket);
+          return;
+        }
+        if (budgetBuckets[2] === "groups" && request.method === "POST") {
+          const group = core.createGroup(budgetId, await readJson(request));
+          response.setHeader("location", `/api/groups/${encodeURIComponent(group.id)}`);
+          json(response, 201, group);
+          return;
+        }
+      }
+      const groupRoute = /^\/api\/groups\/([^/]+)(?:\/(move))?$/.exec(pathname);
+      if (groupRoute?.[1]) {
+        const id = decodeId(groupRoute[1], "Group");
+        if (!groupRoute[2] && request.method === "PATCH") {
+          json(response, 200, core.renameGroup(id, await readJson(request)));
+          return;
+        }
+        if (!groupRoute[2] && request.method === "DELETE") {
+          core.deleteGroup(id);
+          response.writeHead(204, { "cache-control": "no-store" });
+          response.end();
+          return;
+        }
+        if (groupRoute[2] && request.method === "POST") {
+          json(response, 200, core.moveGroup(id, await readJson(request)));
+          return;
+        }
+      }
+      const bucketRoute = /^\/api\/buckets\/([^/]+)(?:\/(move|archive|restore))?$/.exec(pathname);
+      if (bucketRoute?.[1]) {
+        const id = decodeId(bucketRoute[1], "Bucket");
+        const action = bucketRoute[2];
+        if (!action && request.method === "GET") {
+          json(response, 200, core.openBucket(id));
+          return;
+        }
+        if (!action && request.method === "PATCH") {
+          json(response, 200, core.editBucket(id, await readJson(request)));
+          return;
+        }
+        if (action && request.method === "POST") {
+          json(response, 200, action === "move" ? core.moveBucket(id, await readJson(request))
+            : action === "archive" ? core.archiveBucket(id) : core.restoreBucket(id));
           return;
         }
       }

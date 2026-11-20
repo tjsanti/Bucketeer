@@ -50,12 +50,12 @@ test("accounts can be added, edited, closed, undone and reopened", { timeout: 60
   const patches: string[] = [];
   page.on("request", (request) => { if (request.method() === "PATCH") patches.push(request.postData() ?? ""); });
 
-  // Nothing yet: a quiet line, one Add button, no sidebar list, no closed section, only Accounts in the nav.
+  // Nothing yet: a quiet line, one Add button, no sidebar list, no closed section; Accounts is current in the nav.
   assert.equal(await page.getByRole("heading", { level: 1 }).textContent(), "Accounts");
   assert.equal(await page.locator(".empty").textContent(), "No accounts yet.");
   assert.equal(await page.locator("#side-accounts").isVisible(), false);
   assert.equal(await page.locator("details.closed").count(), 0);
-  assert.deepEqual(await page.locator("#nav a").allTextContents(), ["Accounts"]);
+  assert.deepEqual(await page.locator("#nav a").allTextContents(), ["Buckets", "Accounts"]);
   assert.equal(await page.locator("#nav-accounts").getAttribute("aria-current"), "page");
 
   await addAccount(page, { name: "Checking", type: "Checking", amount: "1,000.00" });
