@@ -846,7 +846,7 @@ test("a change that saved is reported as saved when the table cannot be re-read"
   assert.deepEqual(app.pageErrors, []);
 });
 
-test("Undo of an archive restores to the end of the group, or the first group once its own is gone", { timeout: 45_000 }, async (t) => {
+test("Undo of an archive restores the bucket's position, or the end of the first group once its own is gone", { timeout: 45_000 }, async (t) => {
   const app = await openApp(t);
   const { page } = app;
   const { budgetId } = await seed(app);
@@ -855,13 +855,20 @@ test("Undo of an archive restores to the end of the group, or the first group on
   await openBuckets(app, budgetId);
   const dialog = page.locator("dialog");
 
-  // Rent was first in Fixed; restoring appends, it does not move it back to the top.
+  // Rent was first in Fixed and Dining out is in the middle of Everyday: Undo puts each back where it was.
   await page.getByRole("button", { name: "Edit Rent" }).click();
   await dialog.getByRole("button", { name: "Archive Rent" }).click();
   await waitForSnack(page, "Archived Rent.");
   await page.locator("#snack-undo").click();
   await page.getByRole("button", { name: "Edit Rent" }).waitFor();
-  assert.deepEqual((await order(app, budgetId)).Fixed, ["Gym", "Rent"]);
+  assert.deepEqual((await order(app, budgetId)).Fixed, ["Rent", "Gym"]);
+  await page.getByRole("button", { name: "Edit Dining out" }).click();
+  await dialog.getByRole("button", { name: "Archive Dining out" }).click();
+  await waitForSnack(page, "Archived Dining out.");
+  assert.deepEqual((await order(app, budgetId)).Everyday, ["Groceries", "Fuel"]);
+  await page.locator("#snack-undo").click();
+  await eventually(async () => assert.deepEqual((await order(app, budgetId)).Everyday, ["Groceries", "Dining out", "Fuel"]));
+  await eventually(async () => assert.deepEqual(await page.locator(".brow .name").allTextContents(), ["Rent", "Gym", "Groceries", "Dining out", "Fuel", "Vacation", "Clothing"]));
 
   // Clothing's group is deleted while it is archived: Undo puts it at the end of the first group.
   await page.getByRole("button", { name: "Edit Clothing" }).click();
@@ -871,10 +878,92 @@ test("Undo of an archive restores to the end of the group, or the first group on
   await page.locator("#snack-undo").click();
   await page.getByRole("button", { name: "Edit Clothing" }).waitFor();
   assert.deepEqual(await order(app, budgetId), {
-    Fixed: ["Gym", "Rent", "Clothing"], Everyday: ["Groceries", "Dining out", "Fuel"], Goals: ["Vacation"],
+    Fixed: ["Rent", "Gym", "Clothing"], Everyday: ["Groceries", "Dining out", "Fuel"], Goals: ["Vacation"],
   });
   const restored = (await tableOf(app, budgetId)).buckets.find((b) => b.id === clothing.id)!;
   assert.equal(restored.archived, false);
+  assert.deepEqual(app.pageErrors, []);
+});
+
+test("Undo of a goal edit puts the goal back, and Undo of an edit that made a new group removes that group", { timeout: 60_000 }, async (t) => {
+  const app = await openApp(t, { height: 800 });
+  const { page } = app;
+  const { budgetId, buckets } = await seed(app);
+  await openBuckets(app, budgetId);
+  const dialog = page.locator("dialog");
+  const bucketNow = async (name: string) => (await tableOf(app, budgetId)).buckets.find((b) => b.name === name)!;
+
+  // The goal's amount and month change, then Undo restores both through the revert path.
+  await page.getByRole("button", { name: "Edit Vacation" }).click();
+  await dialog.getByLabel("Goal amount").fill("4,000.00");
+  await dialog.getByLabel("By").fill("Mar 2028");
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await dialog.waitFor({ state: "detached" });
+  assert.deepEqual([(await bucketNow("Vacation")).amount, (await bucketNow("Vacation")).goalMonth], [400000, "2028-03"]);
+  await waitForSnack(page, "Saved Vacation.");
+  await page.locator("#snack-undo").click();
+  await eventually(async () => assert.deepEqual([(await bucketNow("Vacation")).amount, (await bucketNow("Vacation")).goalMonth], [300000, "2027-08"]));
+  assert.equal(await page.locator("#snack").isHidden(), true, "Undo succeeded without an error.");
+
+  // Moving Gym (second in Fixed) into a brand-new group creates it; Undo puts Gym back and deletes the empty group.
+  await page.getByRole("button", { name: "Edit Gym" }).click();
+  await dialog.getByRole("combobox").click();
+  await dialog.getByRole("option", { name: "New group" }).click();
+  await dialog.getByLabel("New group name").fill("Temp");
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await dialog.waitFor({ state: "detached" });
+  assert.deepEqual((await order(app, budgetId)).Temp, ["Gym"]);
+  await waitForSnack(page, "Saved Gym.");
+  await page.locator("#snack-undo").click();
+  await eventually(async () => assert.deepEqual(await order(app, budgetId), { Fixed: ["Rent", "Gym"], Everyday: ["Groceries", "Dining out", "Fuel"], Goals: ["Vacation"] }));
+  await eventually(async () => assert.deepEqual(await page.locator(".bgroup .gname").allTextContents(), ["Fixed", "Everyday", "Goals"]));
+
+  // If the new group has gained a bucket since, Undo still puts Gym back but leaves that group alone.
+  await page.getByRole("button", { name: "Edit Gym" }).click();
+  await dialog.getByRole("combobox").click();
+  await dialog.getByRole("option", { name: "New group" }).click();
+  await dialog.getByLabel("New group name").fill("Temp");
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await dialog.waitFor({ state: "detached" });
+  await waitForSnack(page, "Saved Gym.");
+  const temp = (await tableOf(app, budgetId)).groups.find((g) => g.name === "Temp")!;
+  await api(app, "POST", `/api/buckets/${buckets.Rent}/move`, { groupId: temp.id, index: 0 });
+  await page.locator("#snack-undo").click();
+  await eventually(async () => assert.deepEqual((await order(app, budgetId)).Fixed, ["Gym"]));
+  assert.deepEqual((await order(app, budgetId)).Temp, ["Rent"]);
+
+  // An Undo of an edit to a bucket that has changed since is refused with a reason.
+  await page.getByRole("button", { name: "Edit Gym" }).click();
+  await dialog.getByLabel("Name", { exact: true }).fill("Fitness");
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await dialog.waitFor({ state: "detached" });
+  await waitForSnack(page, "Saved Fitness.");
+  await api(app, "PATCH", `/api/buckets/${buckets.Gym}`, { colour: "plum" });
+  await page.locator("#snack-undo").click();
+  await eventually(async () => assert.equal(compact(await pageNote(page).innerText()), "Fitness has changed since, so the edit was not undone."));
+  assert.equal((await bucketNow("Fitness")).name, "Fitness");
+  assert.deepEqual(app.pageErrors, []);
+});
+
+test("a name that clashes with an archived bucket marks Name, even when it contains the word group", { timeout: 45_000 }, async (t) => {
+  const app = await openApp(t);
+  const { page } = app;
+  const { budgetId, groups } = await seed(app);
+  const old = await api<Bucket>(app, "POST", `/api/budgets/${budgetId}/buckets`, { name: "Kids group", groupId: groups.Fixed, type: "plain" });
+  await api(app, "POST", `/api/buckets/${old.id}/archive`);
+  await openBuckets(app, budgetId);
+  const dialog = page.locator("dialog");
+  await page.getByRole("button", { name: "Everyday group actions" }).click();
+  await page.getByRole("menuitem", { name: "Add bucket to Everyday" }).click();
+  await dialog.getByLabel("Name", { exact: true }).fill("kids group");
+  await dialog.getByRole("radio", { name: "Plain" }).click();
+  await dialog.getByRole("button", { name: "Add bucket" }).click();
+  await dialog.locator(".snote span").waitFor();
+  assert.match(await dialog.locator(".snote").innerText(), /archived bucket is already named Kids group/);
+  const nameField = dialog.getByLabel("Name", { exact: true });
+  assert.equal(await nameField.getAttribute("aria-invalid"), "true");
+  assert.equal(await nameField.evaluate((node) => node === document.activeElement), true);
+  assert.equal(await dialog.getByRole("combobox").getAttribute("aria-invalid"), null);
   assert.deepEqual(app.pageErrors, []);
 });
 

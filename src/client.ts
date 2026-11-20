@@ -1,10 +1,10 @@
 import type {
-  Account, AccountEditInput, ArchiveResult, Bucket, BucketEditInput, BucketGroup, BucketMoveInput, BucketTable, Budget, BudgetNameInput,
+  Account, AccountEditInput, ArchiveResult, Bucket, BucketEditInput, BucketGroup, BucketRevertInput, BucketMoveInput, BucketTable, Budget, BudgetNameInput,
   GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput,
 } from "./core/index.js";
 
 export class ApiError extends Error {
-  constructor(public readonly code: string, message: string) {
+  constructor(public readonly code: string, message: string, public readonly field?: string) {
     super(message);
     this.name = "ApiError";
   }
@@ -29,7 +29,7 @@ export function createClient(baseUrl: string) {
       throw new ApiError("invalid_response", "Server returned an invalid JSON response.");
     }
     if (!response.ok) {
-      throw new ApiError(body?.error?.code ?? "request_failed", body?.error?.message ?? `Request failed with HTTP ${response.status}.`);
+      throw new ApiError(body?.error?.code ?? "request_failed", body?.error?.message ?? `Request failed with HTTP ${response.status}.`, body?.error?.field);
     }
     return body as T;
   }
@@ -70,6 +70,7 @@ export function createClient(baseUrl: string) {
     createBucket: (budgetId: string, input: NewBucketInput) => request<Bucket>(`${budgetPath(budgetId)}/buckets`, send("POST", input)),
     openBucket: (id: string) => request<Bucket>(bucket(id)),
     editBucket: (id: string, input: BucketEditInput) => request<Bucket>(bucket(id), send("PATCH", input)),
+    revertBucket: (id: string, input: BucketRevertInput) => request<Bucket>(`${bucket(id)}/revert`, send("POST", input)),
     moveBucket: (id: string, input: BucketMoveInput) => request<Bucket>(`${bucket(id)}/move`, send("POST", input)),
     archiveBucket: (id: string) => request<ArchiveResult>(`${bucket(id)}/archive`, send("POST")),
     restoreBucket: (id: string) => request<Bucket>(`${bucket(id)}/restore`, send("POST")),

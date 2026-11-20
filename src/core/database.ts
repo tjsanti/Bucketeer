@@ -58,6 +58,8 @@ export function openDatabase(filename: string): DatabaseSync {
         archived_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
+        -- The goal month before the latest edit; the only past month an undo may put back. Never exposed.
+        previous_goal_month TEXT CHECK(previous_goal_month GLOB '[0-9][0-9][0-9][0-9]-[01][0-9]' AND substr(previous_goal_month, 6, 2) BETWEEN '01' AND '12'),
         -- A bucket's group is in the same budget. Only an archived bucket may lose its group.
         FOREIGN KEY (group_id, budget_id) REFERENCES bucket_groups(id, budget_id),
         CHECK(group_id IS NOT NULL OR archived_at IS NOT NULL),
@@ -70,6 +72,11 @@ export function openDatabase(filename: string): DatabaseSync {
       CREATE UNIQUE INDEX IF NOT EXISTS buckets_name ON buckets(budget_id, name COLLATE NOCASE);
       CREATE INDEX IF NOT EXISTS buckets_by_group ON buckets(budget_id, group_id, sort_order);
     `);
+    // Databases created before previous_goal_month existed gain the column (CREATE TABLE IF NOT EXISTS won't).
+    const columns = database.prepare("PRAGMA table_info(buckets)").all();
+    if (!columns.some((column) => column.name === "previous_goal_month")) {
+      database.exec(`ALTER TABLE buckets ADD COLUMN previous_goal_month TEXT CHECK(previous_goal_month GLOB '[0-9][0-9][0-9][0-9]-[01][0-9]' AND substr(previous_goal_month, 6, 2) BETWEEN '01' AND '12')`);
+    }
     return database;
   } catch (error) {
     database.close();

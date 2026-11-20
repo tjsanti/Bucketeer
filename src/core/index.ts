@@ -3,7 +3,7 @@ import type { SQLOutputValue } from "node:sqlite";
 import { openDatabase } from "./database.js";
 import { accountBalance, accountKey, readAccountEdit, readNewAccount, sumReadyToAssign } from "./accounts.js";
 import { readBudgetName } from "./budget.js";
-import { bucketAvailable, monthOf, nameKey, readBucketEdit, readBucketMove, readGroupName, readMove, readNewBucket, resolveShape } from "./buckets.js";
+import { bucketAvailable, monthOf, nameKey, readBucketEdit, readBucketMove, readBucketRevert, readGroupName, readMove, readNewBucket, resolveShape } from "./buckets.js";
 import type { BucketFields, GroupChoice } from "./buckets.js";
 import { leastUsedColour } from "./colours.js";
 import type { BucketColour } from "./colours.js";
@@ -13,8 +13,8 @@ import type { Account, AccountType, ArchiveResult, Bucket, BucketGroup, BucketTa
 export { BudgetError } from "./types.js";
 export type { BucketColour } from "./colours.js";
 export type {
-  Account, AccountEditInput, AccountType, ArchiveResult, Bucket, BucketEditInput, BucketGroup, BucketMoveInput, BucketTable, BucketType,
-  Budget, BudgetErrorCode, BudgetNameInput, GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput,
+  Account, AccountEditInput, AccountType, ArchiveResult, Bucket, BucketEditInput, BucketGroup, BucketMoveInput, BucketRevertInput, BucketTable, BucketType,
+  Budget, BudgetErrorCode, BudgetErrorField, BudgetNameInput, GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput,
 } from "./types.js";
 
 export interface BucketeerOptions {
@@ -120,6 +120,8 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM buckets WHERE group_id = ? AND archived_at IS NULL), ?, ?)`);
   const updateBucket = database.prepare(`
     UPDATE buckets SET group_id = ?, name = ?, colour = ?, type = ?, amount = ?, goal_month = ?, archived_at = ?, updated_at = ? WHERE id = ?`);
+  const setPreviousMonth = database.prepare("UPDATE buckets SET previous_goal_month = ? WHERE id = ?");
+  const previousMonthOf = database.prepare("SELECT previous_goal_month FROM buckets WHERE id = ?");
   const orderBucket = database.prepare("UPDATE buckets SET sort_order = ? WHERE id = ?");
   const orphanArchived = database.prepare("UPDATE buckets SET group_id = NULL WHERE group_id = ? AND archived_at IS NOT NULL");
 
@@ -185,7 +187,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   function assertGroupNameFree(budgetId: string, name: string, exceptId?: string): void {
     const key = nameKey(name);
     if (groupsOf.all(budgetId).map(groupFromRow).some((group) => group.id !== exceptId && nameKey(group.name) === key)) {
-      throw new BudgetError("name_taken", "A group with that name already exists in this budget.");
+      throw new BudgetError("name_taken", "A group with that name already exists in this budget.", "group");
     }
   }
 
@@ -196,7 +198,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
     if (!clash) return;
     throw new BudgetError("name_taken", clash.archived
       ? `An archived bucket is already named ${clash.name}. Restore it or choose another name.`
-      : "A bucket with that name already exists in this budget.");
+      : "A bucket with that name already exists in this budget.", "name");
   }
 
   function insertNewGroup(budgetId: string, name: string): BucketGroup {
@@ -211,7 +213,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   function chooseGroup(budgetId: string, choice: NonNullable<GroupChoice>): BucketGroup {
     if ("newGroupName" in choice) return insertNewGroup(budgetId, choice.newGroupName);
     const group = findGroup.get(choice.groupId);
-    if (!group || String(group.budget_id) !== budgetId) throw new BudgetError("not_found", "Group not found.");
+    if (!group || String(group.budget_id) !== budgetId) throw new BudgetError("not_found", "Group not found.", "group");
     return groupFromRow(group);
   }
 
@@ -242,6 +244,33 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
 
   function activeBucketsOf(budgetId: string): Bucket[] {
     return bucketsOf.all(budgetId).map(bucketFromRow).filter((bucket) => !bucket.archived);
+  }
+
+  // Shared by edit and revert. With `revertOf`, the bucket must still carry that updatedAt, and the month
+  // being restored may be past only if it is exactly the goal month the bucket had before the edit being
+  // undone (previous_goal_month). Every edit records the month it replaced; a revert clears it.
+  function editBucketRow(id: string, edit: BucketFields, revertOf?: string): Bucket {
+    return transaction(() => {
+      const bucket = openBucket(id);
+      assertActive(bucket, "editing");
+      if (revertOf !== undefined && bucket.updatedAt !== revertOf) {
+        throw new BudgetError("bucket_changed", `${bucket.name} has changed since, so the edit was not undone.`);
+      }
+      const restorable = revertOf === undefined ? null : (previousMonthOf.get(id)?.previous_goal_month as string | null | undefined) ?? null;
+      const shape = resolveShape(bucket, edit, monthOf(clock()), restorable);
+      if (edit.name !== undefined) assertBucketNameFree(bucket.budgetId, edit.name, id);
+      const group = edit.group ? chooseGroup(bucket.budgetId, edit.group) : undefined;
+      // A group change appends the bucket to the end of the new group.
+      if (group && group.id !== bucket.groupId) placeBucket(bucket, group.id, Number.MAX_SAFE_INTEGER);
+      const written = writeBucket({
+        ...bucket, ...shape,
+        name: edit.name ?? bucket.name,
+        colour: edit.colour ?? bucket.colour,
+        groupId: group?.id ?? bucket.groupId,
+      });
+      setPreviousMonth.run(revertOf === undefined ? bucket.goalMonth : null, id);
+      return written;
+    });
   }
 
   function openBudget(id: string): Budget {
@@ -365,22 +394,13 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
     },
     openBucket,
     editBucket(id: string, input: unknown): Bucket {
-      const edit: BucketFields = readBucketEdit(input);
-      return transaction(() => {
-        const bucket = openBucket(id);
-        assertActive(bucket, "editing");
-        const shape = resolveShape(bucket, edit, monthOf(clock()));
-        if (edit.name !== undefined) assertBucketNameFree(bucket.budgetId, edit.name, id);
-        const group = edit.group ? chooseGroup(bucket.budgetId, edit.group) : undefined;
-        // A group change appends the bucket to the end of the new group.
-        if (group && group.id !== bucket.groupId) placeBucket(bucket, group.id, Number.MAX_SAFE_INTEGER);
-        return writeBucket({
-          ...bucket, ...shape,
-          name: edit.name ?? bucket.name,
-          colour: edit.colour ?? bucket.colour,
-          groupId: group?.id ?? bucket.groupId,
-        });
-      });
+      return editBucketRow(id, readBucketEdit(input));
+    },
+    // Undo of an edit: applies the inverse only if nothing has touched the bucket since (`revertOf` is the
+    // updatedAt that edit left), in one transaction. The month being restored may be past.
+    revertBucket(id: string, input: unknown): Bucket {
+      const { fields, revertOf } = readBucketRevert(input);
+      return editBucketRow(id, fields, revertOf);
     },
     moveBucket(id: string, input: unknown): Bucket {
       const move = readBucketMove(input);

@@ -128,6 +128,128 @@ test("a goal month is checked against the injected current month only when it is
   }
 });
 
+test("revertBucket only lets the month from before the undone edit be past", () => {
+  const { core, budget, setNow } = setup("2026-06-10T12:00:00.000Z");
+  try {
+    const group = core.createGroup(budget.id, { name: "Goals" });
+    const trip = core.createBucket(budget.id, { name: "Trip", groupId: group.id, type: "goal", amount: 300_000, goalMonth: "2026-06" });
+    const future = core.createBucket(budget.id, { name: "Car", groupId: group.id, type: "goal", amount: 500_000, goalMonth: "2027-01" });
+    setNow("2026-11-20T12:00:00.000Z");
+    // Overdue goal -> recurring: the old past month is restorable, any other past month is not.
+    const recurring = core.editBucket(trip.id, { type: "recurring" });
+    assert.throws(() => core.revertBucket(trip.id, { type: "goal", amount: 300_000, goalMonth: "2020-01", revertOf: recurring.updatedAt }), code("invalid_input", /past/));
+    const back = core.revertBucket(trip.id, { type: "goal", amount: 300_000, goalMonth: "2026-06", revertOf: recurring.updatedAt });
+    assert.deepEqual([back.type, back.goalMonth], ["goal", "2026-06"]);
+    // A different past month on an otherwise valid revert is refused, with the month field.
+    const moved = core.editBucket(trip.id, { goalMonth: "2027-03" });
+    assert.throws(() => core.revertBucket(trip.id, { goalMonth: "2020-01", revertOf: moved.updatedAt }), (error: unknown) =>
+      error instanceof BudgetError && error.code === "invalid_input" && error.field === "month");
+    assert.equal(core.openBucket(trip.id).goalMonth, "2027-03");
+    // The previous month was in the future, so no past month is restorable.
+    const movedFuture = core.editBucket(future.id, { goalMonth: "2027-05" });
+    assert.throws(() => core.revertBucket(future.id, { goalMonth: "2026-06", revertOf: movedFuture.updatedAt }), code("invalid_input", /past/));
+    assert.equal(core.revertBucket(future.id, { goalMonth: "2027-01", revertOf: movedFuture.updatedAt }).goalMonth, "2027-01");
+  } finally {
+    core.close();
+  }
+});
+
+test("a database from before previous_goal_month gains the column on open", () => {
+  const directory = mkdtempSync(join(tmpdir(), "bucketeer-upgrade-"));
+  const filename = join(directory, "old.sqlite");
+  try {
+    const first = openBucketeer(filename);
+    first.close();
+    const raw = new DatabaseSync(filename);
+    raw.exec("ALTER TABLE buckets DROP COLUMN previous_goal_month");
+    raw.close();
+    const core = openBucketeer(filename);
+    const budget = core.createBudget({ name: "Household" });
+    const group = core.createGroup(budget.id, { name: "Goals" });
+    const trip = core.createBucket(budget.id, { name: "Trip", groupId: group.id, type: "goal", amount: 100, goalMonth: "2099-01" });
+    const moved = core.editBucket(trip.id, { goalMonth: "2099-02" });
+    assert.equal(core.revertBucket(trip.id, { goalMonth: "2099-01", revertOf: moved.updatedAt }).goalMonth, "2099-01");
+    core.close();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("revertBucket puts back an overdue goal month and a type change, only while the bucket is unchanged", () => {
+  const { core, budget, setNow } = setup("2026-06-10T12:00:00.000Z");
+  try {
+    const group = core.createGroup(budget.id, { name: "Goals" });
+    const trip = core.createBucket(budget.id, { name: "Trip", groupId: group.id, type: "goal", amount: 300_000, goalMonth: "2026-06" });
+    setNow("2026-11-20T12:00:00.000Z");
+    // The goal is overdue. Moving it on is fine; a plain edit back is refused, but a revert restores it.
+    const moved = core.editBucket(trip.id, { goalMonth: "2027-03" });
+    assert.throws(() => core.editBucket(trip.id, { goalMonth: "2026-06" }), code("invalid_input", /past/));
+    const reverted = core.revertBucket(trip.id, { goalMonth: "2026-06", revertOf: moved.updatedAt });
+    assert.equal(reverted.goalMonth, "2026-06");
+
+    // An overdue goal switched to recurring, then reverted to goal with its old month.
+    setNow("2026-11-21T12:00:00.000Z");
+    const recurring = core.editBucket(trip.id, { type: "recurring" });
+    assert.deepEqual([recurring.type, recurring.goalMonth, recurring.amount], ["recurring", null, 300_000]);
+    setNow("2026-11-22T12:00:00.000Z");
+    const back = core.revertBucket(trip.id, { type: "goal", amount: 300_000, goalMonth: "2026-06", revertOf: recurring.updatedAt });
+    assert.deepEqual([back.type, back.goalMonth, back.amount], ["goal", "2026-06", 300_000]);
+
+    // Stale: anything that touched the bucket since refuses the revert and changes nothing.
+    setNow("2026-11-23T12:00:00.000Z");
+    const edited = core.editBucket(trip.id, { goalMonth: "2027-01" });
+    setNow("2026-11-24T12:00:00.000Z");
+    core.editBucket(trip.id, { colour: "plum" });
+    assert.throws(() => core.revertBucket(trip.id, { goalMonth: "2026-06", revertOf: edited.updatedAt }), code("bucket_changed"));
+    assert.equal(core.openBucket(trip.id).goalMonth, "2027-01");
+    // Shape errors still apply to a revert, and revertOf is required.
+    assert.throws(() => core.revertBucket(trip.id, { goalMonth: "2026-13", revertOf: core.openBucket(trip.id).updatedAt }), code("invalid_input"));
+    assert.throws(() => core.revertBucket(trip.id, { goalMonth: "2026-06" }), code("invalid_input", /revertOf/));
+    assert.throws(() => core.revertBucket(trip.id, { revertOf: core.openBucket(trip.id).updatedAt }), code("invalid_input"));
+  } finally {
+    core.close();
+  }
+});
+
+test("validation errors carry the field they belong to", () => {
+  const { core, budget } = setup();
+  try {
+    const group = core.createGroup(budget.id, { name: "Kids group" });
+    const field = (run: () => unknown) => {
+      try {
+        run();
+      } catch (error) {
+        assert.ok(error instanceof BudgetError);
+        return error.field;
+      }
+      assert.fail("Expected an error.");
+    };
+    const make = (input: Record<string, unknown>) => () => core.createBucket(budget.id, { groupId: group.id, type: "plain", name: "X", ...input });
+    assert.equal(field(make({ name: "" })), "name");
+    assert.equal(field(make({ colour: "pink" })), "colour");
+    assert.equal(field(make({ type: "weekly" })), "type");
+    assert.equal(field(make({ type: "recurring", amount: 0 })), "amount");
+    assert.equal(field(make({ type: "recurring" })), "amount");
+    assert.equal(field(make({ type: "plain", amount: 100 })), "amount");
+    assert.equal(field(make({ type: "goal", amount: 100 })), "month");
+    assert.equal(field(make({ type: "goal", amount: 100, goalMonth: "2020-01" })), "month");
+    assert.equal(field(make({ type: "goal", amount: 100, goalMonth: "soon" })), "month");
+    assert.equal(field(make({ groupId: "missing" })), "group");
+    assert.equal(field(make({ newGroupName: "Kids group", groupId: undefined })), "group");
+    assert.equal(field(() => core.createGroup(budget.id, { name: "kids group" })), "group");
+    // A bucket name that contains other fields' words is still a name clash.
+    for (const name of ["Kids group", "Car amount", "Goal month"]) {
+      core.createBucket(budget.id, { name, groupId: group.id, type: "plain" });
+      assert.equal(field(make({ name: name.toUpperCase() })), "name", name);
+    }
+    const archived = core.createBucket(budget.id, { name: "Old Kids group", groupId: group.id, type: "plain" });
+    core.archiveBucket(archived.id);
+    assert.equal(field(make({ name: "old kids group" })), "name");
+  } finally {
+    core.close();
+  }
+});
+
 test("colour defaults to the least used among active buckets and is validated", () => {
   const { core, budget } = setup();
   try {

@@ -119,12 +119,19 @@ export interface ArchiveResult {
   returned: number;
 }
 
-export type BudgetErrorCode = "invalid_input" | "not_found" | "name_taken" | "balance_not_zero" | "group_not_empty" | "bucket_overspent";
+export type BudgetErrorCode = "invalid_input" | "not_found" | "name_taken" | "balance_not_zero" | "group_not_empty" | "bucket_overspent" | "bucket_changed";
+
+/** The input a validation error belongs to, so clients can mark the right field without reading the message. */
+export type BudgetErrorField = "name" | "group" | "colour" | "type" | "amount" | "month";
+
+/** An edit that undoes an earlier edit: bucket fields plus the `updatedAt` the earlier edit left behind. */
+export type BucketRevertInput = BucketEditInput & { revertOf: string };
 
 export class BudgetError extends Error {
   constructor(
     public readonly code: BudgetErrorCode,
     message: string,
+    public readonly field?: BudgetErrorField,
   ) {
     super(message);
     this.name = "BudgetError";

@@ -61,7 +61,7 @@ function target(bucket: Bucket): Node[] {
   }
   if (bucket.type === "goal" && bucket.amount !== null && bucket.goalMonth) {
     const share = Math.max(0, Math.min(1, bucket.available / bucket.amount));
-    const percent = Math.round(share * 100);
+    const percent = Math.floor(share * 100);
     const goal = formatMoney(bucket.amount, { symbol: true });
     const when = monthLabel(bucket.goalMonth);
     return [

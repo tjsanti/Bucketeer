@@ -1,6 +1,7 @@
 // The Add and Edit bucket dialog: name, group, colour, type and its amounts, and (in Edit) Archive.
 // Rules (type shapes, goal months, name clashes, archiving) are checked by the server; this module only
 // turns what was typed into cents and "YYYY-MM", and shows the server's message beside the right field.
+import { ApiError } from "../client.js";
 import type { createClient } from "../client.js";
 import { BUCKET_COLOURS, leastUsedColour } from "../core/colours.js";
 import type { BucketColour } from "../core/colours.js";
@@ -63,15 +64,6 @@ export function parseMonthText(text: string): string | null {
 }
 
 const dot = (colour: string) => withVars(el("span", { class: "dot", "aria-hidden": "true" }), { "--c": `var(--b-${colour})` });
-
-/** Where an error message from the server belongs. */
-function fieldKind(message: string): "name" | "group" | "amount" | "month" | null {
-  if (/goal month|month to reach/i.test(message)) return "month";
-  if (/amount/i.test(message)) return "amount";
-  if (/group/i.test(message)) return "group";
-  if (/bucket name|named|bucket with that name/i.test(message)) return "name";
-  return null;
-}
 
 export function openBucketDialog(ctx: BucketDialogContext, options: { bucket?: Bucket; groupId?: string; returnFocus: () => HTMLElement | null }): void {
   const { client, budget } = ctx;
@@ -170,7 +162,7 @@ export function openBucketDialog(ctx: BucketDialogContext, options: { bucket?: B
   }
 
   const fieldFor = (error: unknown) => {
-    switch (fieldKind(error instanceof Error ? error.message : "")) {
+    switch (error instanceof ApiError ? error.field : undefined) {
       case "name": return nameInput;
       case "group": return group.control();
       case "amount": return amountInput;
@@ -251,11 +243,20 @@ export function openBucketDialog(ctx: BucketDialogContext, options: { bucket?: B
     const label = available > 0 ? `Archive and return ${formatMoney(available, { symbol: true })}` : `Archive ${bucket.name}`;
     const button = el("button", { class: "btn btn-danger wrap", type: "button" }, label);
     button.addEventListener("click", () => void sheet.run(async () => {
+      const place = locateBucket(ctx.table(), bucket.id);
       const { returned } = await client.archiveBucket(bucket.id);
       await ctx.refresh();
-      // Undo is a restore: it appends to the end of the bucket's group, or the first group if that one is gone.
+      // Undo restores (which appends to its group), then moves the bucket back to where it was.
       ctx.snack(returned > 0 ? `Archived ${bucket.name} and returned ${formatMoney(returned, { symbol: true })}.` : `Archived ${bucket.name}.`, async () => {
         await client.restoreBucket(bucket.id);
+        // Back to its old place if that group still exists (the table here may be stale, so the server decides).
+        if (place) {
+          try {
+            await client.moveBucket(bucket.id, place);
+          } catch (error) {
+            if (!(error instanceof ApiError && error.code === "not_found")) throw error;
+          }
+        }
         await ctx.refresh(bucket.id);
       });
     }));
@@ -273,10 +274,8 @@ export function locateBucket(table: BucketTable, id: string): { groupId: string;
   return { groupId: bucket.groupId, index };
 }
 
-/** Puts back the fields an edit changed, refusing if the bucket has changed since. */
+/** Puts back the fields an edit changed. Core refuses (bucket_changed) if the bucket has changed since. */
 async function undoEdit(ctx: BucketDialogContext, before: Bucket, saved: Bucket, changes: BucketEditInput, place: { groupId: string; index: number } | null): Promise<void> {
-  const current = await ctx.client.openBucket(before.id);
-  if (current.updatedAt !== saved.updatedAt) throw new Error(`${saved.name} has changed since, so the edit was not undone.`);
   const inverse: BucketEditInput = {};
   if (changes.name !== undefined) inverse.name = before.name;
   if (changes.colour !== undefined) inverse.colour = before.colour;
@@ -290,8 +289,16 @@ async function undoEdit(ctx: BucketDialogContext, before: Bucket, saved: Bucket,
     if (changes.amount !== undefined) inverse.amount = before.amount;
     if (changes.goalMonth !== undefined) inverse.goalMonth = before.goalMonth;
   }
-  await ctx.client.editBucket(before.id, inverse);
+  await ctx.client.revertBucket(before.id, { ...inverse, revertOf: saved.updatedAt });
   // A group change appends to the end of the group; put it back where it was.
   if (groupChanged && place) await ctx.client.moveBucket(before.id, place);
+  // An edit that made a new group leaves it empty after the undo; remove it.
+  if (changes.newGroupName !== undefined && saved.groupId && saved.groupId !== before.groupId) {
+    try {
+      await ctx.client.deleteGroup(saved.groupId);
+    } catch (error) {
+      if (!(error instanceof ApiError && (error.code === "group_not_empty" || error.code === "not_found"))) throw error;
+    }
+  }
   await ctx.refresh(before.id);
 }

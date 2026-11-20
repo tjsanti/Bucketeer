@@ -264,6 +264,24 @@ test("HTTP exposes groups and buckets with status codes for every error and serv
     assert.deepEqual(await statuses(`/api/budgets/${budget.id}/buckets`, "POST", { name: "X", groupId: fixed.id, type: "plain", available: 5 }), [400, "invalid_input"]);
     assert.deepEqual(await statuses(`/api/budgets/${budget.id}/buckets`, "POST", { name: "X", groupId: "missing", type: "plain" }), [404, "not_found"]);
     assert.deepEqual(await statuses(`/api/buckets/${rent.id}`, "PATCH", {}), [400, "invalid_input"]);
+    // Validation errors name their field in the JSON body; errors with no single field omit it.
+    const errorBody = async (path: string, method: string, body?: unknown) => (await (await send(path, method, body)).json()).error;
+    assert.deepEqual(await errorBody(`/api/budgets/${budget.id}/buckets`, "POST", { name: "Clothing", groupId: fixed.id, type: "plain" }),
+      { code: "name_taken", message: "A bucket with that name already exists in this budget.", field: "name" });
+    assert.equal((await errorBody(`/api/budgets/${budget.id}/buckets`, "POST", { name: "Kids group", groupId: fixed.id, type: "goal", amount: 1 })).field, "month");
+    assert.equal((await errorBody(`/api/budgets/${budget.id}/buckets`, "POST", { name: "X", groupId: fixed.id, type: "recurring", amount: 0 })).field, "amount");
+    assert.equal((await errorBody(`/api/budgets/${budget.id}/groups`, "POST", { name: "fixed" })).field, "group");
+    assert.equal((await errorBody(`/api/buckets/${rent.id}`, "PATCH", {})).field, undefined);
+    // The revert route: refused with bucket_changed (409) when updatedAt is stale, applied when it matches.
+    assert.deepEqual(await statuses(`/api/buckets/${rent.id}/revert`, "POST", { type: "plain", revertOf: "2000-01-01T00:00:00.000Z" }), [409, "bucket_changed"]);
+    assert.deepEqual(await statuses(`/api/buckets/${rent.id}/revert`, "POST", { type: "plain" }), [400, "invalid_input"]);
+    const revertible = await client.openBucket(rent.id);
+    const reverted = await client.revertBucket(rent.id, { type: "recurring", amount: 165_100, revertOf: revertible.updatedAt });
+    assert.deepEqual([reverted.type, reverted.amount], ["recurring", 165_100]);
+    // A past month that is not the one before the undone edit is refused with 400.
+    const goal = await client.createBucket(budget.id, { name: "Holiday", groupId: fixed.id, type: "goal", amount: 100, goalMonth: "2099-01" });
+    const shifted = await client.editBucket(goal.id, { goalMonth: "2099-02" });
+    assert.deepEqual(await statuses(`/api/buckets/${goal.id}/revert`, "POST", { goalMonth: "2020-01", revertOf: shifted.updatedAt }), [400, "invalid_input"]);
     assert.deepEqual(await statuses(`/api/buckets/${rent.id}/move`, "POST", { index: 0 }), [400, "invalid_input"]);
     assert.deepEqual(await statuses(`/api/groups/${fixed.id}/move`, "POST", { index: "first" }), [400, "invalid_input"]);
     assert.deepEqual(await statuses(`/api/groups/${fixed.id}`, "PATCH", { name: "" }), [400, "invalid_input"]);

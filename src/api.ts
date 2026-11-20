@@ -54,7 +54,7 @@ class HttpError extends Error {
   }
 }
 
-const statuses = { invalid_input: 400, not_found: 404, name_taken: 409, balance_not_zero: 409, group_not_empty: 409, bucket_overspent: 409 } as const;
+const statuses = { invalid_input: 400, not_found: 404, name_taken: 409, balance_not_zero: 409, group_not_empty: 409, bucket_overspent: 409, bucket_changed: 409 } as const;
 
 function decodeId(segment: string, what: string): string {
   try {
@@ -177,7 +177,7 @@ export function createApi(core: Bucketeer) {
           return;
         }
       }
-      const bucketRoute = /^\/api\/buckets\/([^/]+)(?:\/(move|archive|restore))?$/.exec(pathname);
+      const bucketRoute = /^\/api\/buckets\/([^/]+)(?:\/(move|archive|restore|revert))?$/.exec(pathname);
       if (bucketRoute?.[1]) {
         const id = decodeId(bucketRoute[1], "Bucket");
         const action = bucketRoute[2];
@@ -191,6 +191,7 @@ export function createApi(core: Bucketeer) {
         }
         if (action && request.method === "POST") {
           json(response, 200, action === "move" ? core.moveBucket(id, await readJson(request))
+            : action === "revert" ? core.revertBucket(id, await readJson(request))
             : action === "archive" ? core.archiveBucket(id) : core.restoreBucket(id));
           return;
         }
@@ -217,7 +218,7 @@ export function createApi(core: Bucketeer) {
       throw new HttpError(404, "not_found", "Route not found.");
     } catch (error) {
       if (error instanceof BudgetError) {
-        json(response, statuses[error.code], { error: { code: error.code, message: error.message } });
+        json(response, statuses[error.code], { error: { code: error.code, message: error.message, ...(error.field && { field: error.field }) } });
       } else if (error instanceof HttpError) {
         json(response, error.status, { error: { code: error.code, message: error.message } });
       } else {

@@ -1,6 +1,7 @@
 import { MAX_CENTS } from "./accounts.js";
 import { isBucketColour } from "./colours.js";
 import { BudgetError } from "./types.js";
+import type { BudgetErrorField } from "./types.js";
 import type { BucketColour } from "./colours.js";
 import type { BucketType } from "./types.js";
 
@@ -21,8 +22,8 @@ export function monthOf(date: Date): string {
   return `${String(date.getFullYear()).padStart(4, "0")}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function invalid(message: string): never {
-  throw new BudgetError("invalid_input", message);
+function invalid(message: string, field?: BudgetErrorField): never {
+  throw new BudgetError("invalid_input", message, field);
 }
 
 function readObject(input: unknown, what: string, allowed: readonly string[]): Record<string, unknown> {
@@ -36,37 +37,38 @@ function readObject(input: unknown, what: string, allowed: readonly string[]): R
 
 function readName(value: unknown, what: string): string {
   const name = typeof value === "string" ? value.trim() : "";
-  if (!name || [...name].length > MAX_BUCKET_NAME_LENGTH) invalid(`${what} name must be between 1 and ${MAX_BUCKET_NAME_LENGTH} characters.`);
-  if (name.includes("\0")) invalid(`${what} name cannot contain null characters.`);
+  const field = what === "Group" ? "group" : "name";
+  if (!name || [...name].length > MAX_BUCKET_NAME_LENGTH) invalid(`${what} name must be between 1 and ${MAX_BUCKET_NAME_LENGTH} characters.`, field);
+  if (name.includes("\0")) invalid(`${what} name cannot contain null characters.`, field);
   return name;
 }
 
 function readId(value: unknown, what: string): string {
-  if (typeof value !== "string" || !value) invalid(`${what} ID must be a non-empty string.`);
+  if (typeof value !== "string" || !value) invalid(`${what} ID must be a non-empty string.`, what === "Group" ? "group" : undefined);
   return value;
 }
 
 function readColour(value: unknown): BucketColour {
-  if (!isBucketColour(value)) invalid("Colour must be one of the 16 bucket colours, such as sky or plum.");
+  if (!isBucketColour(value)) invalid("Colour must be one of the 16 bucket colours, such as sky or plum.", "colour");
   return value;
 }
 
 function readType(value: unknown): BucketType {
-  if (!BUCKET_TYPES.includes(value as BucketType)) invalid(`Bucket type must be one of: ${BUCKET_TYPES.join(", ")}.`);
+  if (!BUCKET_TYPES.includes(value as BucketType)) invalid(`Bucket type must be one of: ${BUCKET_TYPES.join(", ")}.`, "type");
   return value as BucketType;
 }
 
 function readAmount(value: unknown): number | null {
   if (value === null) return null;
   if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > MAX_CENTS) {
-    invalid("Amount must be a whole number of cents between 1 and 99,999,999,999.");
+    invalid("Amount must be a whole number of cents between 1 and 99,999,999,999.", "amount");
   }
   return value as number;
 }
 
 function readMonth(value: unknown): string | null {
   if (value === null) return null;
-  if (typeof value !== "string" || !/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(value)) invalid("Goal month must be a real month written YYYY-MM.");
+  if (typeof value !== "string" || !/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(value)) invalid("Goal month must be a real month written YYYY-MM.", "month");
   return value;
 }
 
@@ -108,7 +110,7 @@ const bucketKeys = ["name", "groupId", "newGroupName", "colour", "type", "amount
 
 function readBucketFields(input: unknown): BucketFields {
   const fields = readObject(input, "bucket", bucketKeys);
-  if ("groupId" in fields && "newGroupName" in fields) invalid("Choose a group or name a new one, not both.");
+  if ("groupId" in fields && "newGroupName" in fields) invalid("Choose a group or name a new one, not both.", "group");
   const result: BucketFields = {
     group: "groupId" in fields ? { groupId: readId(fields.groupId, "Group") }
       : "newGroupName" in fields ? { newGroupName: readName(fields.newGroupName, "Group") }
@@ -124,9 +126,9 @@ function readBucketFields(input: unknown): BucketFields {
 
 export function readNewBucket(input: unknown): BucketFields & { name: string; group: NonNullable<GroupChoice>; type: BucketType } {
   const fields = readBucketFields(input);
-  if (fields.name === undefined) invalid("A bucket name is required.");
-  if (!fields.group) invalid("Choose a group or name a new one.");
-  if (!fields.type) invalid(`Bucket type must be one of: ${BUCKET_TYPES.join(", ")}.`);
+  if (fields.name === undefined) invalid("A bucket name is required.", "name");
+  if (!fields.group) invalid("Choose a group or name a new one.", "group");
+  if (!fields.type) invalid(`Bucket type must be one of: ${BUCKET_TYPES.join(", ")}.`, "type");
   return fields as BucketFields & { name: string; group: NonNullable<GroupChoice>; type: BucketType };
 }
 
@@ -134,6 +136,14 @@ export function readBucketEdit(input: unknown): BucketFields {
   const fields = readBucketFields(input);
   if (Object.keys(input as object).length === 0) invalid("Provide a field to change.");
   return fields;
+}
+
+/** An undo: the fields to put back plus `revertOf`, the `updatedAt` the edit being undone left on the bucket. */
+export function readBucketRevert(input: unknown): { fields: BucketFields; revertOf: string } {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) invalid("A bucket object is required.");
+  const { revertOf, ...rest } = input as Record<string, unknown>;
+  if (typeof revertOf !== "string" || !revertOf) invalid("revertOf must be the updatedAt the edit being undone left on the bucket.");
+  return { fields: readBucketEdit(rest), revertOf };
 }
 
 export interface BucketShape {
@@ -146,23 +156,23 @@ export interface BucketShape {
  * The type shape after a create (current = null) or an edit. Recurring needs an amount and no month;
  * goal needs an amount and a month; plain has neither. Switching type keeps the amount where it still
  * applies. A goal month must be the current month or later, but only when it is set or changed, so an
- * overdue goal stays editable.
+ * overdue goal stays editable. An undo passes `restorableMonth`, the goal month before the edit being undone: only that exact month may be past.
  */
-export function resolveShape(current: BucketShape | null, change: BucketFields, currentMonth: string): BucketShape {
+export function resolveShape(current: BucketShape | null, change: BucketFields, currentMonth: string, restorableMonth: string | null = null): BucketShape {
   const type = change.type ?? current?.type ?? "plain";
   if (type === "plain") {
-    if (change.amount != null) invalid("A plain bucket has no amount.");
-    if (change.goalMonth != null) invalid("A plain bucket has no goal month.");
+    if (change.amount != null) invalid("A plain bucket has no amount.", "amount");
+    if (change.goalMonth != null) invalid("A plain bucket has no goal month.", "month");
     return { type, amount: null, goalMonth: null };
   }
   const amount = change.amount !== undefined ? change.amount : current?.amount ?? null;
-  if (amount === null) invalid(type === "goal" ? "A goal needs a goal amount." : "A recurring bucket needs an amount per month.");
+  if (amount === null) invalid(type === "goal" ? "A goal needs a goal amount." : "A recurring bucket needs an amount per month.", "amount");
   if (type === "recurring") {
-    if (change.goalMonth != null) invalid("Only a goal has a goal month.");
+    if (change.goalMonth != null) invalid("Only a goal has a goal month.", "month");
     return { type, amount, goalMonth: null };
   }
   const goalMonth = change.goalMonth !== undefined ? change.goalMonth : current?.goalMonth ?? null;
-  if (goalMonth === null) invalid("A goal needs a month to reach it by.");
-  if (goalMonth !== current?.goalMonth && goalMonth < currentMonth) invalid("Goal month cannot be in the past.");
+  if (goalMonth === null) invalid("A goal needs a month to reach it by.", "month");
+  if (goalMonth !== current?.goalMonth && goalMonth !== restorableMonth && goalMonth < currentMonth) invalid("Goal month cannot be in the past.", "month");
   return { type, amount, goalMonth };
 }
