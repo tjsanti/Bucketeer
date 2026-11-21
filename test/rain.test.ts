@@ -146,3 +146,17 @@ test("undo reverses the whole rain, or is refused with money_moved once a filled
     core.close();
   }
 });
+
+test("undo is refused with money_moved when a later month would be left with less than the fill", () => {
+  const { core, budget, fuel, row } = household(16_000);
+  try {
+    const rain = core.rain(budget.id, "2026-11");
+    // December takes Fuel's money back, so November still shows the fill but December holds none of it.
+    core.assign(fuel.id, { month: "2026-12", amount: -16_000 });
+    assert.equal(row("2026-11", fuel.id).available, 16_000);
+    assert.throws(() => core.undoRain(rain.rainId!), code("money_moved"));
+    assert.equal(row("2026-12", fuel.id).available, 0);
+  } finally {
+    core.close();
+  }
+});

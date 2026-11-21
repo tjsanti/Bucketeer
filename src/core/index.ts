@@ -3,7 +3,7 @@ import type { SQLOutputValue } from "node:sqlite";
 import { openDatabase } from "./database.js";
 import { accountBalance, accountKey, readAccountEdit, readNewAccount, sumReadyToAssign } from "./accounts.js";
 import { readBudgetName } from "./budget.js";
-import { assertAssignable, monthFigures, readAssignment, shownIn, totalsOf } from "./assignments.js";
+import { assertAssignable, lowestAvailableFrom, monthFigures, readAssignment, shownIn, totalsOf } from "./assignments.js";
 import type { MonthActivity } from "./assignments.js";
 import { bucketAvailable, nameKey, readBucketEdit, readBucketMove, readBucketRevert, readGroupName, readMove, readNewBucket, resolveShape } from "./buckets.js";
 import type { BucketFields, GroupChoice } from "./buckets.js";
@@ -488,6 +488,11 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
     return { ...bucket, month, ...figures, need: needOf(bucket, figures, month) };
   }
 
+  /** The lowest Available the bucket has from `month` on, later months' ledger entries included. */
+  function lowestAvailable(bucket: Bucket, month: string): number {
+    return lowestAvailableFrom(activityByBucket(bucket.budgetId, "9999-12").get(bucket.id) ?? [], month);
+  }
+
   function bucketInMonth(bucket: Bucket, month: string): BucketMonth {
     return withFigures(bucket, activityByBucket(bucket.budgetId, month).get(bucket.id) ?? [], month);
   }
@@ -605,8 +610,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
       return transaction(() => {
         const bucket = openBucket(bucketId);
         const entry = readAssignment(input, monthRange(bucket.budgetId));
-        const before = bucketInMonth(bucket, entry.month);
-        assertAssignable(bucket, entry, readyToAssign(bucket.budgetId), before.available);
+        assertAssignable(bucket, entry, readyToAssign(bucket.budgetId), lowestAvailable(bucket, entry.month));
         insertAssignment.run(randomUUID(), bucket.budgetId, bucket.id, entry.month, entry.amount, null, timestamp());
         return bucketInMonth(openBucket(bucketId), entry.month);
       });
@@ -626,14 +630,15 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
         return { rainId, ...plan };
       });
     },
-    /** Reverses a whole rain, or refuses with money_moved if any bucket now holds less than the rain gave it. */
+    /** Reverses a whole rain, or refuses with money_moved if any bucket now holds less than the rain gave it, in its month or later. */
     undoRain(rainId: string): void {
       transaction(() => {
         const entries = rainEntries.all(rainId);
         if (entries.length === 0) throw new BudgetError("not_found", "Rain not found.");
         for (const entry of entries) {
-          const bucket = bucketInMonth(openBucket(String(entry.bucket_id)), String(entry.month));
-          if (bucket.available < Number(entry.amount)) {
+          // Removing the fill lowers its month and every later one, so each must still hold it.
+          const bucket = openBucket(String(entry.bucket_id));
+          if (lowestAvailable(bucket, String(entry.month)) < Number(entry.amount)) {
             throw new BudgetError("money_moved", `Money has moved out of ${bucket.name} since it rained, so this rain can't be undone.`);
           }
         }

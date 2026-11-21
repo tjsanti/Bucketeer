@@ -63,12 +63,24 @@ export function monthFigures(activity: readonly MonthActivity[], month: string):
   return { assigned, spent, carriedIn, available: carriedIn + assigned - spent };
 }
 
+/**
+ * The lowest Available from `month` on: that month's and every later month's with activity. A take in
+ * `month` lowers each of them, since Available carries forward (ADR-0004), so this is the most it can take.
+ */
+export function lowestAvailableFrom(activity: readonly MonthActivity[], month: string): number {
+  const later = activity.filter((entry) => entry.month > month).map((entry) => entry.month);
+  return Math.min(...[month, ...later].map((each) => monthFigures(activity, each).available));
+}
+
 /** Whether a bucket appears in a month: every active bucket, and an archived one only with activity that month. */
 export function shownIn(bucket: Bucket, activity: readonly MonthActivity[], month: string): boolean {
   return !bucket.archived || activity.some((entry) => entry.month === month && entry.entries > 0);
 }
 
-/** Checks a signed entry against the pool and the bucket's month (ADR-0001, ADR-0003). */
+/**
+ * Checks a signed entry against the pool and the bucket (ADR-0001, ADR-0003). `available` is the lowest
+ * Available from the entry's month on (lowestAvailableFrom), so a take never leaves a later month overspent.
+ */
 export function assertAssignable(bucket: Bucket, entry: AssignInput, readyToAssign: number, available: number): void {
   if (bucket.archived) throw new BudgetError("bucket_archived", `${bucket.name} is archived. Restore it to assign money to it.`);
   if (entry.amount > 0 && entry.amount > readyToAssign) {

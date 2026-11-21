@@ -261,3 +261,27 @@ test("archiving is refused while a bucket is overspent or has entries in a futur
     core.close();
   }
 });
+
+test("a take is refused when a later month carrying the money would be left overspent", () => {
+  const { core, budget, groceries, spend, row } = household();
+  try {
+    // October's 100.00 carries into November, where 80.00 of it is spent.
+    core.assign(groceries.id, { month: "2026-10", amount: 10_000 });
+    spend(groceries.id, "2026-11-05", -8_000);
+    assert.equal(row("2026-10", groceries.id).available, 10_000);
+    assert.equal(row("2026-11", groceries.id).available, 2_000);
+    assert.throws(() => core.assign(groceries.id, { month: "2026-10", amount: -2_001 }),
+      (error: unknown) => code("not_enough_available")(error) && (error as BudgetError).message === "Only $20.00 is available in Groceries.");
+    assert.equal(core.assign(groceries.id, { month: "2026-10", amount: -2_000 }).available, 8_000);
+    assert.equal(row("2026-11", groceries.id).available, 0);
+
+    // A take in this month also answers to a future month's entries.
+    core.assign(groceries.id, { month: "2026-11", amount: 5_000 });
+    core.assign(groceries.id, { month: "2027-01", amount: -3_000 });
+    assert.throws(() => core.assign(groceries.id, { month: "2026-11", amount: -2_001 }), code("not_enough_available"));
+    assert.equal(core.assign(groceries.id, { month: "2026-11", amount: -2_000 }).available, 3_000);
+    assert.equal(core.readyToAssign(budget.id), 500_000 - 10_000 + 2_000 - 5_000 + 3_000 + 2_000);
+  } finally {
+    core.close();
+  }
+});
