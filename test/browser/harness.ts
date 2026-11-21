@@ -47,13 +47,13 @@ export interface App {
 }
 
 /** A fresh server and browser page; tracks page errors and requests that leave the app's origin. */
-export async function openApp(t: TestContext, options: { colorScheme?: "light" | "dark"; width?: number; height?: number; touch?: boolean } = {}): Promise<App> {
+export async function openApp(t: TestContext, options: { colorScheme?: "light" | "dark"; width?: number; height?: number; touch?: boolean; reducedMotion?: "reduce" | "no-preference" } = {}): Promise<App> {
   const url = await startServer(t);
   const browser = await launchBrowser(t);
   const context = await browser.newContext({
     colorScheme: options.colorScheme ?? "light",
     viewport: { width: options.width ?? 1280, height: options.height ?? 900 },
-    reducedMotion: "reduce",
+    reducedMotion: options.reducedMotion ?? "reduce",
     ...(options.touch ? { hasTouch: true, isMobile: true } : {}),
   });
   const page = await context.newPage();

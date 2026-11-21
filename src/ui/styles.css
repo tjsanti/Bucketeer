@@ -495,7 +495,30 @@ main { padding: var(--s-8) var(--s-10) var(--s-16); min-width: 0; max-width: 110
 .ready-figure .cents { font-size: .58em; letter-spacing: 0; margin-left: 1px; }
 .ready.neg { background: var(--over-soft); box-shadow: inset -1px 0 0 var(--border); }
 .ready.neg .ready-label, .ready.neg .ready-figure { color: var(--over); }
-.rain-slot:empty { display: none; }
+.ready { position: relative; overflow: hidden; }
+.ready > .rain-layer { position: absolute; inset: 0; pointer-events: none; }
+.rain-layer i {
+  position: absolute; top: -24px; left: var(--x); width: 2px; height: 16px; border-radius: 2px;
+  background: var(--unassigned); opacity: 0;
+  animation: fall var(--dur-rain) var(--ease) var(--d) forwards;
+}
+@keyframes fall {
+  0% { transform: translateY(0); opacity: 0; }
+  15% { opacity: .55; }
+  100% { transform: translateY(130px); opacity: 0; }
+}
+.btn-rain { background: var(--unassigned); color: var(--on-unassigned); box-shadow: var(--shadow-btn); flex: none; }
+.btn-rain:hover { background: var(--unassigned-hover); }
+.rain-sheet .btn-primary:not(:disabled) { background: var(--unassigned); color: var(--on-unassigned); }
+.rain-sheet .btn-primary:not(:disabled):hover { background: var(--unassigned-hover); }
+/* The Make it rain preview: each bucket and its fill, the total, and Ready to assign before and after. */
+.rain-fills { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.rain-fills li { display: flex; align-items: center; gap: var(--s-2); min-height: 40px; border-bottom: 1px solid var(--border); }
+.rain-fills .rn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rain-total, .rain-ready { display: flex; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap; }
+.rain-total { font-weight: var(--fw-semibold); }
+.rain-ready { color: var(--unassigned); font-weight: var(--fw-medium); }
+.rain-empty { margin: 0; color: var(--text-muted); }
 .stat { padding: var(--s-4) var(--s-5); display: flex; flex-direction: column; justify-content: center; gap: 4px; min-width: 0; }
 .stat + .stat { border-left: 1px solid var(--border); }
 .stat .label { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--fs-sm); font-weight: var(--fw-medium); }
@@ -958,6 +981,7 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
   .ready.neg { box-shadow: inset 0 -1px 0 var(--border); }
   .ready-label { font-size: 13px; }
   .ready-figure { font-size: 34px; }
+  .ready .btn-rain { padding: 0 var(--s-4); height: var(--touch); }
   .stat { padding: 10px var(--s-3); gap: 2px; }
   .stat .label { font-size: var(--fs-xs); }
   .stat .label .icon { display: none; }
@@ -1113,4 +1137,5 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0ms !important; animation-duration: 0ms !important; scroll-behavior: auto !important; }
   .btn:active { transform: none; }
+  .rain-layer { display: none; }
 }

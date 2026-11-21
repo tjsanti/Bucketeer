@@ -7,6 +7,7 @@ import type { Bucket, BucketGroup, BucketMonth, BucketMonthView, BucketTable, Bu
 import { formatMoney } from "../core/money.js";
 import { monthLabel, openBucketDialog } from "./bucket-dialog.js";
 import { el, icon, messageOf, setNote, withVars } from "./dom.js";
+import { openRainPreview, rainButton } from "./rain.js";
 import { textInput, uid } from "./sheet.js";
 import { attachReorder, locate } from "./reorder.js";
 import type { Layout, MoveKey, MoveTarget } from "./reorder.js";
@@ -22,6 +23,8 @@ export interface BucketsContext {
   budget: Budget;
   /** The month header, beside the page title. */
   monthHeader: HTMLElement;
+  /** The server's current month: Make it rain is offered for it and later months only. */
+  thisMonth: string;
   /** Re-reads the table and the month. Throws if the page was left meanwhile. */
   reload(): Promise<BucketsData>;
   snack(message: string, undo: () => Promise<void>): void;
@@ -107,9 +110,9 @@ function target(bucket: BucketMonth): Node[] {
 
 /**
  * The month's summary strip (ADR-0003): Ready to assign, largest, with small cents, violet or the overspent red
- * when negative; a slot for Make it rain; then the month's Income, Assigned and Spent.
+ * when negative; Make it rain beside it (absent for past months); then the month's Income, Assigned and Spent.
  */
-function renderSummary(summary: MonthSummary): HTMLElement {
+function renderSummary(summary: MonthSummary, rain: HTMLElement | null): HTMLElement {
   const ready = formatMoney(summary.readyToAssign, { symbol: true });
   const dot = ready.lastIndexOf(".");
   const stat = (name: string, label: string, cents: number) => el("div", { class: "stat" },
@@ -119,7 +122,8 @@ function renderSummary(summary: MonthSummary): HTMLElement {
       el("div", {},
         el("div", { class: "ready-label", id: "ready-label" }, icon("drop", "sm"), "Ready to assign"),
         el("div", { class: "ready-figure num", "aria-labelledby": "ready-label" }, ready.slice(0, dot), el("span", { class: "cents" }, ready.slice(dot)))),
-      el("div", { class: "rain-slot" })),
+      rain,
+      el("div", { class: "rain-layer", "aria-hidden": "true" })),
     stat("in", "Income", summary.income),
     stat("assign", "Assigned", summary.assigned),
     stat("receipt", "Spent", summary.spent));
@@ -588,6 +592,16 @@ export function createBucketsPage(ctx: BucketsContext) {
     }
   }, { signal });
 
+  function openRain(): void {
+    closeMenu(false);
+    void openRainPreview({
+      client, budget, month: month.summary.month, readyToAssign: month.summary.readyToAssign, buckets: month.buckets,
+      refresh: () => refresh(), snack: ctx.snack,
+      returnFocus: () => find(".btn-rain") ?? find("h1"),
+      layer: () => find(".rain-layer"),
+    }, (error) => setNote(note, messageOf(error)));
+  }
+
   function render(next: BucketsData): void {
     table = next.table;
     month = next.month;
@@ -610,7 +624,7 @@ export function createBucketsPage(ctx: BucketsContext) {
     } else {
       main = renderTable();
     }
-    strip.replaceChildren(renderSummary(month.summary));
+    strip.replaceChildren(renderSummary(month.summary, month.summary.month >= ctx.thisMonth ? rainButton(openRain) : null));
     content.replaceChildren(main, ...(archived.length ? [renderArchived(archived)] : []));
     movedKey = null;
   }
