@@ -414,6 +414,33 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
     }
   }
 
+  /** The money a transaction files to each bucket, keyed by bucket and month. */
+  function bucketMoney(transaction: { date: string; amount: number; category: CategoryInput }): Map<string, number> {
+    const month = transaction.date.slice(0, 7);
+    const lines = transaction.category.kind === "split" ? transaction.category.lines
+      : transaction.category.kind === "bucket" ? [{ bucketId: transaction.category.bucketId, amount: transaction.amount }] : [];
+    const money = new Map<string, number>();
+    for (const line of lines) money.set(`${line.bucketId} ${month}`, (money.get(`${line.bucketId} ${month}`) ?? 0) + line.amount);
+    return money;
+  }
+
+  // Archiving zeroed the bucket's Available, so money it holds through a transaction can't move until it's
+  // restored: no change of amount, month or category that alters what it files there, and no delete.
+  // Payee, memo and a date in the same month are still free.
+  function assertArchivedKept(existing: Transaction, next: { date: string; amount: number; category: CategoryInput } | null): void {
+    const before = bucketMoney(existing);
+    const after = next === null ? new Map<string, number>() : bucketMoney(next);
+    for (const bucketId of bucketIdsOf(existing.category)) {
+      const bucket = openBucket(bucketId);
+      if (!bucket.archived) continue;
+      const keys = new Set([...before.keys(), ...after.keys()].filter((key) => key.startsWith(`${bucketId} `)));
+      if ([...keys].some((key) => before.get(key) !== after.get(key))) {
+        const field = next === null ? undefined : next.amount !== existing.amount ? "amount" : next.date.slice(0, 7) !== existing.date.slice(0, 7) ? "date" : "category";
+        throw new BudgetError("bucket_archived", `${bucket.name} is archived. Restore it to change its money.`, field);
+      }
+    }
+  }
+
   function assertOpen(account: Account): void {
     if (account.closed) throw new BudgetError("account_closed", `${account.name} is closed. Reopen it first.`);
   }
@@ -678,6 +705,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
         assertConsistent(next);
         if (edit.date !== undefined) assertDateAllowed(openBudget(existing.budgetId), next.date);
         assertCategoryAllowed(existing.budgetId, next.category, existing.category);
+        assertArchivedKept(existing, next);
         const otherId = transferAccountOf(next.category);
         const sameTransfer = otherId !== null && transferAccountOf(existing.category) === otherId;
         if (otherId && !sameTransfer) assertTransferTarget(account, otherId);
@@ -694,11 +722,12 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
         return openTransaction(id);
       });
     },
-    // Deleting either side of a transfer deletes both.
+    // Deleting either side of a transfer deletes both. A transaction holding money in an archived bucket stays.
     deleteTransaction(id: string): void {
       transaction(() => {
         const existing = openTransaction(id);
         assertOpen(openAccount(existing.accountId));
+        assertArchivedKept(existing, null);
         const partner = partnerOf(existing);
         if (partner) {
           assertOpen(openAccount(partner.accountId));

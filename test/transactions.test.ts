@@ -207,7 +207,42 @@ test("archived buckets refuse new money and refiling, but keep what they already
     const edited = core.editTransaction(old.id, { memo: "Still groceries" });
     assert.deepEqual([edited.memo, edited.category], ["Still groceries", { kind: "bucket", bucketId: groceries.id }]);
     // Resending the same category isn't a change.
-    assert.equal(core.editTransaction(old.id, { amount: -2_500, category: { kind: "bucket", bucketId: groceries.id } }).amount, -2_500);
+    assert.equal(core.editTransaction(old.id, { payee: "Market", category: { kind: "bucket", bucketId: groceries.id } }).payee, "Market");
+  } finally {
+    core.close();
+  }
+});
+
+test("a transaction filed to an archived bucket can't change its money or be deleted until the bucket is restored", () => {
+  const { core, budget, visa, eatingOut, groceries } = withBuckets();
+  try {
+    const old = core.addTransaction(visa.id, { date: "2026-11-10", amount: -2_000, category: { kind: "bucket", bucketId: groceries.id } });
+    const split = core.addTransaction(visa.id, { date: "2026-11-10", amount: -3_000, category: { kind: "split", lines: [
+      { bucketId: groceries.id, amount: -1_000, memo: "" }, { bucketId: eatingOut.id, amount: -2_000, memo: "" },
+    ] } });
+    core.assign(groceries.id, { month: "2026-11", amount: 5_000 });
+    core.archiveBucket(groceries.id);
+    const ready = core.readyToAssign(budget.id);
+    const archived = code("bucket_archived");
+    assert.throws(() => core.editTransaction(old.id, { amount: -2_500 }), archived);
+    assert.throws(() => core.editTransaction(old.id, { date: "2026-10-31" }), archived);
+    assert.throws(() => core.editTransaction(old.id, { category: { kind: "bucket", bucketId: eatingOut.id } }), archived);
+    assert.throws(() => core.deleteTransaction(old.id), archived);
+    assert.throws(() => core.editTransaction(split.id, { category: { kind: "split", lines: [
+      { bucketId: groceries.id, amount: -500, memo: "" }, { bucketId: eatingOut.id, amount: -2_500, memo: "" },
+    ] } }), archived);
+    assert.throws(() => core.deleteTransaction(split.id), archived);
+    assert.equal(core.readyToAssign(budget.id), ready);
+    assert.equal(core.openBucket(groceries.id).available, 0);
+
+    // Payee, memo, a date in the same month and a split line's memo leave the bucket's money alone.
+    assert.equal(core.editTransaction(old.id, { payee: "Market", memo: "Weekly", date: "2026-11-12" }).payee, "Market");
+    assert.equal(core.editTransaction(split.id, { category: { kind: "split", lines: [
+      { bucketId: groceries.id, amount: -1_000, memo: "Bread" }, { bucketId: eatingOut.id, amount: -2_000, memo: "" },
+    ] } }).memo, "");
+    // Restored, the bucket's transactions are free to change again.
+    core.restoreBucket(groceries.id);
+    core.deleteTransaction(old.id);
   } finally {
     core.close();
   }
