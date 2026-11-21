@@ -3,11 +3,11 @@
 // does both. Every add, edit and delete offers Undo.
 import type { createClient } from "../client.js";
 import { ApiError } from "../client.js";
-import type { Account, AccountMonth, BucketTable, Category, NewTransactionInput, PayeeHistory, RegisterTransaction, TransactionEditInput } from "../core/index.js";
+import type { Account, AccountMonth, BucketTable, CategoryInput, NewTransactionInput, PayeeHistory, RegisterTransaction, TransactionEditInput } from "../core/index.js";
 import { formatMoney, parseMoney } from "../core/money.js";
 import { lastDayOf } from "../core/months.js";
 import { BudgetError } from "../core/types.js";
-import { categoryDot, categoryLabel, categoryPicker, sameCategory } from "./category-picker.js";
+import { categoryDot, categoryLabel, categoryPicker, sameCategory, transferLabel } from "./category-picker.js";
 import type { CategoryPicker } from "./category-picker.js";
 import { el, icon, messageOf, setNote } from "./dom.js";
 import { segmented, uid } from "./sheet.js";
@@ -32,6 +32,8 @@ export interface RegisterData {
   register: AccountMonth;
   table: BucketTable;
   payees: PayeeHistory[];
+  /** Every account in the budget, closed ones included, with today's balances. */
+  accounts: Account[];
 }
 
 const columns = ["Date", "Payee", "Category", "Memo", "Amount", "Balance"] as const;
@@ -78,7 +80,9 @@ interface Draft {
   setSign(sign: Sign): void;
   load(transaction: RegisterTransaction | null, keepDate?: boolean): void;
   /** The values to save, or a thrown error naming the field at fault. */
-  read(): { date: string; payee: string; memo: string; amount: number; category: Category };
+  read(): { date: string; payee: string; memo: string; amount: number; category: CategoryInput };
+  /** For a transfer, the other account's balance before → after this transaction; hidden otherwise. */
+  preview: HTMLElement;
   mark(field: string | undefined): void;
   clearMarks(): void;
 }
@@ -89,8 +93,22 @@ class DraftError extends Error {
   }
 }
 
+/**
+ * Where a transfer can go from this account: every other open account, the likeliest first (from checking, the
+ * card; from anything else, checking), otherwise in account order.
+ */
+function transferTargets(accounts: readonly Account[], self: Account): Account[] {
+  const rank = (other: Account) => self.type === "checking" ? (other.type === "credit-card" ? 0 : 1) : (other.type === "checking" ? 0 : 1);
+  return accounts.filter((other) => !other.closed && other.id !== self.id)
+    .map((other, index) => ({ other, index }))
+    .sort((a, b) => rank(a.other) - rank(b.other) || a.index - b.index)
+    .map(({ other }) => other);
+}
+
 function createDraft(config: {
   table: () => BucketTable;
+  accounts: () => readonly Account[];
+  transferAccounts: () => readonly Account[];
   payees: () => PayeeHistory[];
   payeeList: string;
   /** The date a new draft starts on. */
@@ -101,6 +119,8 @@ function createDraft(config: {
 }): Draft {
   let sign: Sign = -1;
   let categoryChosen = false;
+  let loaded: RegisterTransaction | null = null;
+  const preview = el("div", { class: "xfer-prev", hidden: true });
   const input = (name: string, attrs: Record<string, string> = {}) =>
     el("input", { class: config.inputClass, name, "aria-label": name[0]!.toUpperCase() + name.slice(1), autocomplete: "off", ...attrs });
   const date = input("date", { type: "date", class: `${config.inputClass} num` });
@@ -111,18 +131,40 @@ function createDraft(config: {
     sign = next;
     amount.setAttribute("aria-label", `Amount, ${sign > 0 ? "inflow" : "outflow"}`);
     config.onSign(sign);
+    paintPreview();
   };
   const picker = categoryPicker({
     label: "Category",
     table: config.table,
+    accounts: config.accounts,
+    transferAccounts: config.transferAccounts,
     value: null,
     inline: config.inline,
     inputClass: `${config.inputClass} has-chev`,
     onPick: (category) => {
       categoryChosen = true;
       if (category.kind === "income") setSign(1);
+      paintPreview();
     },
   });
+
+  // "Visa −412.09 → 0.00": the other account's balance now (without this transfer, when editing it) and after.
+  function paintPreview(): void {
+    const category = picker.value();
+    const other = category?.kind === "transfer" ? config.accounts().find((account) => account.id === category.accountId) : undefined;
+    preview.hidden = !other;
+    if (!other) return preview.replaceChildren();
+    let cents = 0;
+    try {
+      cents = amount.value.trim() ? Math.abs(parseMoney(amount.value)) * sign : 0;
+    } catch {
+      // An amount that doesn't parse yet previews as nothing moving.
+    }
+    const before = other.balance + (loaded?.category.kind === "transfer" && loaded.category.accountId === other.id ? loaded.amount : 0);
+    preview.replaceChildren(icon("xfer", "sm"),
+      el("span", {}, `${other.name} `, el("span", { class: "num" }, formatMoney(before)), " → ", el("strong", { class: "num" }, formatMoney(before - cents))));
+  }
+  amount.addEventListener("input", paintPreview);
 
   amount.addEventListener("keydown", (event) => {
     if (event.key !== "-" && event.key !== "+") return;
@@ -142,19 +184,22 @@ function createDraft(config: {
     const known = key ? config.payees().find((entry) => entry.payee.toLowerCase() === key) : undefined;
     if (!known) return;
     const category = known.category;
-    // History never offers an archived bucket.
+    // History never offers an archived bucket, or a transfer to an account that isn't offered.
     if (category.kind === "bucket" && !config.table().buckets.some((bucket) => bucket.id === category.bucketId && !bucket.archived)) return;
+    if (category.kind === "transfer" && !config.transferAccounts().some((account) => account.id === category.accountId)) return;
     picker.set(category);
     if (category.kind === "income") setSign(1);
+    paintPreview();
   });
 
   const fields: Record<string, HTMLInputElement> = { date, payee, memo, amount, category: picker.input };
   const draft: Draft = {
-    date, payee, picker, memo, amount,
+    date, payee, picker, memo, amount, preview,
     sign: () => sign,
     setSign,
     load(transaction, keepDate = false) {
       categoryChosen = !!transaction;
+      loaded = transaction;
       payee.value = transaction?.payee ?? "";
       memo.value = transaction?.memo ?? "";
       amount.value = transaction ? formatMoney(Math.abs(transaction.amount)).replaceAll(",", "") : "";
@@ -162,6 +207,7 @@ function createDraft(config: {
       else if (!keepDate || !date.value) date.value = config.defaultDate();
       picker.set(transaction?.category ?? null);
       setSign(transaction && transaction.amount > 0 ? 1 : -1);
+      paintPreview();
       draft.clearMarks();
     },
     read() {
@@ -207,6 +253,8 @@ export function createRegisterPage(ctx: RegisterContext) {
   const { client } = ctx;
   let account = ctx.account;
   let table: BucketTable = { groups: [], buckets: [] };
+  let accounts: Account[] = [];
+  const draftData = { table: () => table, accounts: () => accounts, transferAccounts: () => transferTargets(accounts, account) };
   let payees: PayeeHistory[] = [];
   let transactions: RegisterTransaction[] = [];
   let editing: { id: string; node: HTMLElement; draft: Draft } | null = null;
@@ -238,12 +286,12 @@ export function createRegisterPage(ctx: RegisterContext) {
   function rowEditor(kind: "new" | "edit"): { node: HTMLFormElement; draft: Draft; footer: HTMLElement } {
     let sign!: HTMLButtonElement;
     const draft = createDraft({
-      table: () => table, payees: () => payees, payeeList: payeeListId, defaultDate, inputClass: "cin", inline: false,
+      ...draftData, payees: () => payees, payeeList: payeeListId, defaultDate, inputClass: "cin", inline: false,
       onSign: (next) => { if (sign) paintSign(sign, next); },
     });
     sign = signButton(() => draft);
     const cell = (index: number, child: HTMLElement) => el("div", { class: `c ${columnClass[index]}` }, child);
-    const footer = el("div", { class: "efoot" });
+    const footer = el("div", { class: "efoot" }, draft.preview);
     const node = el("form", { class: `editor ${kind === "new" ? "entry" : "edit"}`, novalidate: true, "aria-label": kind === "new" ? "New transaction" : "Edit transaction" },
       el("div", { class: "erow" }, cell(0, draft.date), cell(1, draft.payee), cell(2, draft.picker.root), cell(3, draft.memo),
         cell(4, el("div", { class: "amt-wrap" }, sign, draft.amount)), el("div", { class: "c bal" })),
@@ -256,7 +304,6 @@ export function createRegisterPage(ctx: RegisterContext) {
   const entryRow = rowEditor("new");
   const entry = entryRow.node;
   const entryDraft = entryRow.draft;
-  entryRow.footer.remove();
   entryDraft.load(null);
 
   const body = el("div", { role: "rowgroup", class: "rbody" });
@@ -439,7 +486,7 @@ export function createRegisterPage(ctx: RegisterContext) {
     let signSeg!: ReturnType<typeof segmented<"out" | "in">>;
     const prefix = el("span", { class: "sign", "aria-hidden": "true" }, `${MINUS}$`);
     const draft = createDraft({
-      table: () => table, payees: () => payees, payeeList: payeeListId, defaultDate, inputClass: "input", inline: true,
+      ...draftData, payees: () => payees, payeeList: payeeListId, defaultDate, inputClass: "input", inline: true,
       onSign: (next) => {
         signSeg?.set(next > 0 ? "in" : "out");
         prefix.textContent = `${next > 0 ? "+" : MINUS}$`;
@@ -482,6 +529,7 @@ export function createRegisterPage(ctx: RegisterContext) {
         el("div", { class: "amt-row" }, amountField, signSeg.root),
         labelled("Payee", draft.payee, draft.payee),
         labelled("Category", draft.picker.root, draft.picker.input),
+        draft.preview,
         el("div", { class: "two" }, labelled("Date", draft.date, draft.date), labelled("Memo", draft.memo, draft.memo))),
       el("div", { class: "sheet-footer" }, primary, el("div", { class: "frow2" }, secondary)));
     const dialog = el("dialog", { class: "sheet tx-sheet", "aria-labelledby": titleId }, form);
@@ -565,7 +613,8 @@ export function createRegisterPage(ctx: RegisterContext) {
   }
 
   function renderRow(transaction: RegisterTransaction): HTMLElement {
-    const name = categoryLabel(transaction.category, table);
+    const { category } = transaction;
+    const name = category.kind === "transfer" ? transferLabel(category.accountId, transaction.amount, accounts) : categoryLabel(category, table);
     const sub = el("span", { class: "sub" }, el("span", { class: "st" }, `${name} · ${shortDate(transaction.date)}`));
     const row = el("div", { role: "row", class: `rrow${transaction.id === highlightId ? " just-saved" : ""}`, tabindex: "0", "data-id": transaction.id },
       el("div", { role: "cell", class: "c date num" }, shortDate(transaction.date)),
@@ -598,6 +647,7 @@ export function createRegisterPage(ctx: RegisterContext) {
     render(data: RegisterData): void {
       account = data.account;
       table = data.table;
+      accounts = data.accounts;
       payees = data.payees;
       transactions = data.register.transactions;
       heading.textContent = account.name;

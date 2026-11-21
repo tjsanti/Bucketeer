@@ -188,11 +188,29 @@ try {
   const kept = JSON.parse(cli("tx", "edit", coat.id, "--memo", "Winter", "--json"));
   assert.deepEqual([kept.memo, kept.category], ["Winter", { kind: "bucket", bucketId: clothing.id }]);
   cli("bucket", "restore", clothing.id);
+  // Transfers: paying the card off moves money between accounts and touches no bucket or Ready to assign.
+  const balanceOf = (id: string) => JSON.parse(cli("account", "list", ...budgetArgs, "--json")).find((account: { id: string }) => account.id === id).balance;
+  const readyBeforeTransfer = ready();
+  const owed = balanceOf(visa.id);
+  const checkingBefore = balanceOf(checking.id);
+  const payoff = JSON.parse(cli("tx", "add", ...accountArgs, "--amount", (owed / 100).toFixed(2), "--transfer", visa.id, "--json"));
+  assert.equal(payoff.category.kind, "transfer");
+  assert.deepEqual([balanceOf(visa.id), balanceOf(checking.id), ready()], [0, checkingBefore + owed, readyBeforeTransfer]);
+  cliFails("invalid_input", "tx", "add", ...accountArgs, "--amount", "-5", "--transfer", checking.id);
+  cliFails("usage", "tx", "add", ...accountArgs, "--amount", "-5", "--transfer", visa.id, "--income");
+  // Deleting the card's side removes both.
+  const cardSide = JSON.parse(cli("tx", "list", "--account", visa.id, "--json")).transactions.find((row: { category: { kind: string } }) => row.category.kind === "transfer");
+  cli("tx", "delete", cardSide.id);
+  assert.deepEqual([balanceOf(visa.id), balanceOf(checking.id)], [owed, checkingBefore]);
+  cliFails("not_found", "tx", "edit", payoff.id, "--memo", "Gone");
+  // A transfer that stays, to persist across the recreate below.
+  const payment = cli("tx", "add", ...accountArgs, "--amount", "-100", "--transfer", visa.id, "--payee", "Card payment").split("\t");
+  assert.deepEqual(payment.slice(2, 5), ["Card payment", "Transfer \u2192 Visa", "\u2212100.00"]);
   accounts = JSON.parse(cli("account", "list", ...budgetArgs, "--json"));
   register = JSON.parse(cli("tx", "list", ...accountArgs, "--json"));
   const bucketsBefore = JSON.parse(cli("bucket", "list", ...budgetArgs, "--archived", "--json"));
   assert.deepEqual(bucketsBefore.groups.map((group: { name: string }) => group.name), ["Goals", "Fixed"]);
-  console.log("Budget saved and updated, accounts added and edited, income recorded, spending and reimbursements filed to buckets, buckets and groups added, moved, archived and restored. Recreating with the same volume and a non-default port...");
+  console.log("Budget saved and updated, accounts added and edited, income recorded, spending and reimbursements filed to buckets, transfers made and deleted, buckets and groups added, moved, archived and restored. Recreating with the same volume and a non-default port...");
   port = 4317;
   compose("up", "-d", "--force-recreate", "--wait", "--wait-timeout", "60");
   assert.deepEqual(JSON.parse(cli("budget", "open", saved.id, "--json")), updated);

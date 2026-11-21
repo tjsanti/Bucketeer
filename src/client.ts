@@ -77,6 +77,7 @@ export function createClient(baseUrl: string) {
     restoreBucket: (id: string) => request<Bucket>(`${bucket(id)}/restore`, send("POST")),
     payees: (budgetId: string) => request<PayeeHistory[]>(`${budgetPath(budgetId)}/payees`),
     readyToAssign: (budgetId: string) => request<{ readyToAssign: number }>(`${budgetPath(budgetId)}/ready-to-assign`),
+    recentTransactions: (budgetId: string, limit: number) => request<Transaction[]>(`${budgetPath(budgetId)}/transactions?limit=${limit}`),
     listTransactions: (accountId: string) => request<{ transactions: RegisterTransaction[] }>(`${account(accountId)}/transactions`),
     addTransaction: (accountId: string, input: NewTransactionInput) => request<Transaction>(`${account(accountId)}/transactions`, send("POST", input)),
     openTransaction: (id: string) => request<Transaction>(transaction(id)),

@@ -1,7 +1,7 @@
 // Transaction input rules. Rules that need the database or the clock (dates, closed accounts) live in index.ts.
 import { MAX_CENTS } from "./accounts.js";
 import { BudgetError } from "./types.js";
-import type { BudgetErrorField, Category, TransactionEditInput } from "./types.js";
+import type { BudgetErrorField, CategoryInput, TransactionEditInput } from "./types.js";
 
 export const MAX_PAYEE_LENGTH = 120;
 export const MAX_MEMO_LENGTH = 500;
@@ -12,7 +12,7 @@ export interface TransactionFields {
   payee?: string;
   memo?: string;
   amount?: number;
-  category?: Category;
+  category?: CategoryInput;
 }
 
 function invalid(message: string, field?: BudgetErrorField): never {
@@ -57,18 +57,24 @@ export function readDate(value: unknown): string {
   return invalid("Date must be a real date written YYYY-MM-DD.", "date");
 }
 
-function readCategory(value: unknown): Category {
+function readCategory(value: unknown): CategoryInput {
   const fields = typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
   const keys = Object.keys(fields).sort().join();
   if (fields.kind === "income" && keys === "kind") return { kind: "income" };
   if (fields.kind === "bucket" && keys === "bucketId,kind" && typeof fields.bucketId === "string" && fields.bucketId !== "") {
     return { kind: "bucket", bucketId: fields.bucketId };
   }
-  return invalid("Category must be Income or a bucket.", "category");
+  // A transfer's transferId belongs to the pair, so one sent back (an Undo resending the whole category) is ignored.
+  if (fields.kind === "transfer" && ["accountId,kind", "accountId,kind,transferId"].includes(keys) && typeof fields.accountId === "string" && fields.accountId !== "") {
+    return { kind: "transfer", accountId: fields.accountId };
+  }
+  return invalid("Category must be Income, a bucket or a transfer account.", "category");
 }
 
-export function sameCategory(a: Category, b: Category): boolean {
-  return a.kind === b.kind && (a.kind !== "bucket" || a.bucketId === (b as typeof a).bucketId);
+export function sameCategory(a: CategoryInput, b: CategoryInput): boolean {
+  if (a.kind === "bucket") return b.kind === "bucket" && a.bucketId === b.bucketId;
+  if (a.kind === "transfer") return b.kind === "transfer" && a.accountId === b.accountId;
+  return a.kind === b.kind;
 }
 
 function readFields(fields: Record<string, unknown>): TransactionFields {
@@ -81,11 +87,11 @@ function readFields(fields: Record<string, unknown>): TransactionFields {
   return read;
 }
 
-export function readNewTransaction(input: unknown): TransactionFields & { amount: number; category: Category } {
+export function readNewTransaction(input: unknown): TransactionFields & { amount: number; category: CategoryInput } {
   const fields = readObject(input);
   if (!("amount" in fields)) invalid("An amount is required.", "amount");
   if (!("category" in fields)) invalid("A category is required.", "category");
-  return readFields(fields) as TransactionFields & { amount: number; category: Category };
+  return readFields(fields) as TransactionFields & { amount: number; category: CategoryInput };
 }
 
 export function readTransactionEdit(input: unknown): TransactionEditInput {
@@ -95,6 +101,6 @@ export function readTransactionEdit(input: unknown): TransactionEditInput {
 }
 
 /** The rules between amount and category, checked on the transaction as it will be saved. */
-export function assertConsistent(transaction: { amount: number; category: Category }): void {
+export function assertConsistent(transaction: { amount: number; category: CategoryInput }): void {
   if (transaction.category.kind === "income" && transaction.amount <= 0) invalid("Income must be more than 0.00.", "amount");
 }

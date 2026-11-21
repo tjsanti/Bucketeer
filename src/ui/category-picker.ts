@@ -1,46 +1,61 @@
 // The category combobox for transactions: Income first, then each bucket group with its active buckets
-// (colour dot and Available, overspent in red). Typing filters; the arrows and Enter pick. Archived buckets
-// are never offered, but a transaction already filed to one still shows its name.
-import type { Bucket, BucketTable, Category } from "../core/index.js";
+// (colour dot and Available, overspent in red), then the accounts money can be transferred to (with their
+// balances). Typing filters; the arrows and Enter pick. Archived buckets are never offered, but a transaction
+// already filed to one still shows its name.
+import type { Account, Bucket, BucketTable, Category, CategoryInput } from "../core/index.js";
 import { formatMoney } from "../core/money.js";
 import { el, icon, withVars } from "./dom.js";
 import { uid } from "./sheet.js";
 
 interface Option {
-  category: Category;
+  category: CategoryInput;
   label: string;
   group: string;
   bucket?: Bucket;
+  account?: Account;
 }
 
 export interface CategoryPicker {
   root: HTMLElement;
   input: HTMLInputElement;
-  value(): Category | null;
+  value(): CategoryInput | null;
   /** Sets the value without counting as the user's choice. */
-  set(category: Category | null): void;
+  set(category: CategoryInput | null): void;
   isOpen(): boolean;
 }
 
-export function sameCategory(a: Category | null, b: Category | null): boolean {
+/** A transfer is the same category whatever its transferId: the server keeps the pair's. */
+export function sameCategory(a: CategoryInput | null, b: CategoryInput | null): boolean {
   if (!a || !b) return a === b;
-  return a.kind === b.kind && (a.kind !== "bucket" || a.bucketId === (b as typeof a).bucketId);
+  if (a.kind === "bucket") return b.kind === "bucket" && a.bucketId === b.bucketId;
+  if (a.kind === "transfer") return b.kind === "transfer" && a.accountId === b.accountId;
+  return a.kind === b.kind;
 }
 
-export function categoryLabel(category: Category, table: BucketTable): string {
+const accountName = (accounts: readonly Account[], id: string) => accounts.find((account) => account.id === id)?.name ?? "";
+
+/** The category as its field shows it: "Income", the bucket's name, or "Transfer · Visa". */
+export function categoryLabel(category: CategoryInput | Category, table: BucketTable, accounts: readonly Account[] = []): string {
   if (category.kind === "income") return "Income";
+  if (category.kind === "transfer") return `Transfer · ${accountName(accounts, category.accountId)}`;
   return table.buckets.find((bucket) => bucket.id === category.bucketId)?.name ?? "";
 }
 
-/** The dot shown before a category: the bucket's colour, or a violet ring for Income. */
-export function categoryDot(category: Category | null, table: BucketTable): HTMLElement | null {
+/** A transfer in a register row: "To Visa" for money out, "From Checking" for money in. */
+export function transferLabel(otherAccountId: string, amount: number, accounts: readonly Account[]): string {
+  return `${amount < 0 ? "To" : "From"} ${accountName(accounts, otherAccountId)}`;
+}
+
+/** The dot shown before a category: the bucket's colour, a violet ring for Income, or the transfer arrows. */
+export function categoryDot(category: CategoryInput | Category | null, table: BucketTable): HTMLElement | null {
   if (!category) return null;
   if (category.kind === "income") return withVars(el("span", { class: "dot ring", "aria-hidden": "true" }), { "--c": "var(--unassigned)" });
+  if (category.kind === "transfer") return el("span", { class: "lead-ic", "aria-hidden": "true" }, icon("xfer", "sm"));
   const bucket = table.buckets.find((candidate) => candidate.id === category.bucketId);
   return bucket ? withVars(el("span", { class: "dot", "aria-hidden": "true" }), { "--c": `var(--b-${bucket.colour})` }) : null;
 }
 
-function optionsOf(table: BucketTable): Option[] {
+function optionsOf(table: BucketTable, accounts: readonly Account[]): Option[] {
   const options: Option[] = [{ category: { kind: "income" }, label: "Income", group: "" }];
   for (const group of table.groups) {
     for (const bucket of table.buckets) {
@@ -48,6 +63,7 @@ function optionsOf(table: BucketTable): Option[] {
       options.push({ category: { kind: "bucket", bucketId: bucket.id }, label: bucket.name, group: group.name, bucket });
     }
   }
+  for (const account of accounts) options.push({ category: { kind: "transfer", accountId: account.id }, label: account.name, group: "Transfer", account });
   return options;
 }
 
@@ -58,12 +74,18 @@ function optionsOf(table: BucketTable): Option[] {
 export function categoryPicker(config: {
   label: string;
   table: () => BucketTable;
-  value: Category | null;
+  /** Every account in the budget, for naming a transfer's other account. */
+  accounts?: () => readonly Account[];
+  /** The accounts this transaction can be transferred to, in the order to offer them. */
+  transferAccounts?: () => readonly Account[];
+  value: CategoryInput | null;
   inline?: boolean;
-  onPick?: (category: Category) => void;
+  onPick?: (category: CategoryInput) => void;
   inputClass?: string;
 }): CategoryPicker {
   let value = config.value;
+  const transferAccounts = config.transferAccounts ?? (() => []);
+  const labelOf = (category: CategoryInput) => categoryLabel(category, config.table(), config.accounts?.() ?? transferAccounts());
   let shown: Option[] = [];
   let active = 0;
   const listId = uid("cat-list");
@@ -79,7 +101,7 @@ export function categoryPicker(config: {
 
   function paintValue(): void {
     const table = config.table();
-    input.value = value ? categoryLabel(value, table) : "";
+    input.value = value ? labelOf(value) : "";
     lead.replaceChildren(...[categoryDot(value, table)].filter((node): node is HTMLElement => !!node));
     root.classList.toggle("has-lead", !!value);
   }
@@ -100,7 +122,7 @@ export function categoryPicker(config: {
 
   function render(filter: string): void {
     const text = filter.trim().toLowerCase();
-    shown = optionsOf(config.table()).filter((option) => !text || option.label.toLowerCase().includes(text) || (option.group && option.group.toLowerCase().startsWith(text)));
+    shown = optionsOf(config.table(), transferAccounts()).filter((option) => !text || option.label.toLowerCase().includes(text) || (option.group && option.group.toLowerCase().startsWith(text)));
     const current = shown.findIndex((option) => sameCategory(option.category, value));
     active = text ? 0 : Math.max(0, current);
     const nodes: HTMLElement[] = [];
@@ -110,7 +132,8 @@ export function categoryPicker(config: {
         group = option.group;
         if (group) nodes.push(el("div", { class: "og", role: "presentation" }, group));
       }
-      const figure = option.bucket ? el("span", { class: `ov num${option.bucket.available < 0 ? " neg" : ""}` }, formatMoney(option.bucket.available)) : null;
+      const figure = option.bucket ? el("span", { class: `ov num${option.bucket.available < 0 ? " neg" : ""}` }, formatMoney(option.bucket.available))
+        : option.account ? el("span", { class: "ov num" }, formatMoney(option.account.balance)) : null;
       const node = el("div", { class: "opt", role: "option", id: `${listId}-${index}`, "aria-selected": "false" },
         categoryDot(option.category, config.table()), el("span", { class: "on" }, option.label), figure);
       node.addEventListener("click", () => choose(index));
@@ -192,7 +215,7 @@ export function categoryPicker(config: {
       paintValue();
     } else if (event.key === "Tab" && isOpen()) {
       // Typeahead: Tab takes the highlighted match for what was typed.
-      if (input.value && input.value !== (value ? categoryLabel(value, config.table()) : "")) choose(active);
+      if (input.value && input.value !== (value ? labelOf(value) : "")) choose(active);
       else close();
     }
   });

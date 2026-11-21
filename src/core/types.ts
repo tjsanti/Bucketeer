@@ -123,9 +123,16 @@ export interface ArchiveResult {
 
 /**
  * What a transaction is filed under. Income is always positive; a bucket takes either sign, where money in counts
- * as assigned to it, never as negative spending (ADR-0003). Splits and transfers come next.
+ * as assigned to it, never as negative spending (ADR-0003). A transfer names the other account of the pair, and both
+ * sides share its transferId; it touches no bucket and never Ready to assign.
  */
-export type Category = { kind: "income" } | { kind: "bucket"; bucketId: string };
+export type Category =
+  | { kind: "income" }
+  | { kind: "bucket"; bucketId: string }
+  | { kind: "transfer"; accountId: string; transferId: string };
+
+/** A category as a client sends it: the server assigns a new transfer's transferId, so it may be left out. */
+export type CategoryInput = Exclude<Category, { kind: "transfer" }> | { kind: "transfer"; accountId: string; transferId?: string };
 
 export interface Transaction {
   id: string;
@@ -155,7 +162,7 @@ export interface NewTransactionInput {
   payee?: string;
   memo?: string;
   amount: number;
-  category: Category;
+  category: CategoryInput;
 }
 
 export type TransactionEditInput = Partial<NewTransactionInput>;

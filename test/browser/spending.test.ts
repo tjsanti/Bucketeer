@@ -55,12 +55,13 @@ test("desktop entry: the category picker, the sign control, payee history, a hig
   assert.equal(await category.inputValue(), "");
   assert.equal(await sign.textContent(), MINUS);
 
-  // The picker: Income first, then each group's active buckets with Available; archived buckets never appear.
+  // The picker: Income first, then each group's active buckets with Available (archived buckets never appear),
+  // then the accounts to transfer to.
   await category.click();
   const list = page.getByRole("listbox", { name: "Categories" });
   await list.waitFor();
   assert.deepEqual((await list.locator(".og, .opt").evaluateAll((nodes) => nodes.map((node) => node.classList.contains("og") ? node.textContent : (node as HTMLElement).innerText))).map(compact),
-    ["Income", "Everyday", "Eating out 0.00", "Groceries " + MINUS + "25.00", "Fixed", "Rent 0.00"]);
+    ["Income", "Everyday", "Eating out 0.00", "Groceries " + MINUS + "25.00", "Fixed", "Rent 0.00", "Transfer", "Checking 975.00"]);
   assert.equal(await colorOf(list.locator(".opt", { hasText: "Groceries" }).locator(".ov")), over.light);
   // Typing filters; the arrows and Enter pick without saving the row.
   await category.fill("eat");

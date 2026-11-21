@@ -134,6 +134,14 @@ export function createApi(core: Bucketeer) {
         json(response, 200, core.payees(decodeId(budgetPayees, "Budget")));
         return;
       }
+      // Recent activity: ?limit=n, the ten newest by default.
+      const budgetTransactions = /^\/api\/budgets\/([^/]+)\/transactions$/.exec(pathname)?.[1];
+      if (budgetTransactions && request.method === "GET") {
+        const limit = new URL(request.url ?? "/", "http://localhost").searchParams.get("limit");
+        const read = limit === null ? 10 : /^\d{1,9}$/.test(limit) ? Number(limit) : limit;
+        json(response, 200, core.listBudgetTransactions(decodeId(budgetTransactions, "Budget"), { limit: read }));
+        return;
+      }
       const budgetRange = /^\/api\/budgets\/([^/]+)\/month-range$/.exec(pathname)?.[1];
       if (budgetRange && request.method === "GET") {
         json(response, 200, core.monthRange(decodeId(budgetRange, "Budget")));
