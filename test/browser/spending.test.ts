@@ -182,6 +182,27 @@ test("desktop: clicking a row edits it in place, and Undo restores an edit and r
   assert.deepEqual(app.pageErrors, []);
 });
 
+test("an edit that only adds spaces around the payee or memo saves nothing and offers no Undo", { timeout: 60_000 }, async (t) => {
+  const app = await openApp(t);
+  const { page } = app;
+  const { budgetId, visa, eatingOut } = await household(app.url);
+  await api(app.url, "POST", `/api/accounts/${visa.id}/transactions`, { date: iso(localDate(2)), payee: "Noodle Bar", memo: "Friday", amount: -12_000, category: { kind: "bucket", bucketId: eatingOut.id } });
+  await page.goto(`${app.url}/budgets/${budgetId}/accounts/${visa.id}`);
+  await ready(page);
+  const edits: string[] = [];
+  page.on("request", (request) => { if (request.method() === "PATCH") edits.push(request.url()); });
+
+  await page.locator(".rrow").first().click();
+  const editor = page.locator("form.edit");
+  await editor.getByLabel("Payee").fill("  Noodle Bar ");
+  await editor.getByLabel("Memo").fill("Friday  ");
+  await editor.getByLabel("Memo").press("Enter");
+  await editor.waitFor({ state: "detached" });
+  assert.deepEqual(edits, []);
+  assert.equal(await page.locator("#snack").getByRole("button", { name: "Undo" }).isVisible(), false);
+  assert.deepEqual(app.pageErrors, []);
+});
+
 for (const scheme of ["light", "dark"] as const) {
   test(`the Buckets page shows real Available, overspent in red with a left rule (${scheme})`, { timeout: 45_000 }, async (t) => {
     const app = await openApp(t, { colorScheme: scheme });

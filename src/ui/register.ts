@@ -79,7 +79,7 @@ interface Draft {
   sign(): Sign;
   setSign(sign: Sign): void;
   load(transaction: RegisterTransaction | null, keepDate?: boolean): void;
-  /** The values to save, or a thrown error naming the field at fault. */
+  /** The values to save, payee and memo trimmed, or a thrown error naming the field at fault. */
   read(): { date: string; payee: string; memo: string; amount: number; category: CategoryInput };
   /** For a transfer, the other account's balance before → after this transaction; hidden otherwise. */
   preview: HTMLElement;
@@ -245,7 +245,8 @@ function createDraft(config: {
       const chosen = picker.value();
       if (!chosen) throw new DraftError("Choose a category.", "category");
       const category: CategoryInput = chosen.kind === "split" ? { kind: "split", lines: splits.read(sign) } : chosen;
-      return { date: date.value, payee: payee.value, memo: memo.value, amount: cents * sign, category };
+      // Trimmed as the server trims them, so spaces alone never count as an edit.
+      return { date: date.value, payee: payee.value.trim(), memo: memo.value.trim(), amount: cents * sign, category };
     },
     mark(field) {
       const target = field ? fields[field] : undefined;
