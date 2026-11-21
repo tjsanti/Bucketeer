@@ -213,13 +213,15 @@ test("archived buckets refuse new money and refiling, but keep what they already
   }
 });
 
-test("archiving refuses an overspent bucket and, until the ledger exists, one holding money", () => {
-  const { core, checking, visa, eatingOut, groceries } = withBuckets();
+test("archiving refuses an overspent bucket and returns a reimbursement to Ready to assign", () => {
+  const { core, budget, checking, visa, eatingOut, groceries } = withBuckets();
   try {
     const dinner = core.addTransaction(visa.id, { amount: -12_000, category: { kind: "bucket", bucketId: eatingOut.id } });
     assert.throws(() => core.archiveBucket(eatingOut.id), code("bucket_overspent"));
     core.addTransaction(checking.id, { amount: 2_000, category: { kind: "bucket", bucketId: groceries.id } });
-    assert.throws(() => core.archiveBucket(groceries.id), code("bucket_has_money"));
+    const ready = core.readyToAssign(budget.id);
+    assert.equal(core.archiveBucket(groceries.id).returned, 2_000);
+    assert.equal(core.readyToAssign(budget.id), ready + 2_000);
     core.deleteTransaction(dinner.id);
     assert.equal(core.archiveBucket(eatingOut.id).bucket.archived, true);
   } finally {

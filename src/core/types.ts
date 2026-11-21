@@ -221,7 +221,7 @@ export interface PayeeHistory {
   category: Category;
 }
 
-export type BudgetErrorCode = "invalid_input" | "not_found" | "name_taken" | "balance_not_zero" | "group_not_empty" | "bucket_overspent" | "bucket_changed" | "account_closed" | "bucket_archived" | "bucket_has_money" | "not_enough_ready" | "not_enough_available";
+export type BudgetErrorCode = "invalid_input" | "not_found" | "name_taken" | "balance_not_zero" | "group_not_empty" | "bucket_overspent" | "bucket_changed" | "account_closed" | "bucket_archived" | "bucket_has_future" | "not_enough_ready" | "not_enough_available";
 
 /** The input a validation error belongs to, so clients can mark the right field without reading the message. */
 export type BudgetErrorField = "name" | "group" | "colour" | "type" | "amount" | "month" | "date" | "payee" | "memo" | "category";

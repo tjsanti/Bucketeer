@@ -126,7 +126,7 @@ bucketeer group move <group-id> --position 1 --json
 bucketeer group delete <group-id> --json
 ```
 
-`--type` defaults to plain (no amount). A goal month must be this month or later when it is set or changed. Without `--colour`, a bucket gets the least used colour among active buckets. Bucket names stay unique within a budget, archived buckets included. A bucket can't be archived while overspent (`bucket_overspent`), or, until assigning exists, while it holds money from a reimbursement (`bucket_has_money`). A group can be deleted only when it has no active buckets.
+`--type` defaults to plain (no amount). A goal month must be this month or later when it is set or changed. Without `--colour`, a bucket gets the least used colour among active buckets. Bucket names stay unique within a budget, archived buckets included. A bucket can't be archived while overspent in the current month (`bucket_overspent`) or while a later month has money assigned to it (`bucket_has_future`). Archiving a bucket with money left returns it to Ready to assign as a take in the current month, and `returned` in the JSON is that amount; restoring the bucket doesn't put it back. A group can be deleted only when it has no active buckets.
 
 ### Remote servers
 
