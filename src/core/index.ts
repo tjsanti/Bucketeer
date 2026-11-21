@@ -9,7 +9,7 @@ import { bucketAvailable, nameKey, readBucketEdit, readBucketMove, readBucketRev
 import type { BucketFields, GroupChoice } from "./buckets.js";
 import { leastUsedColour } from "./colours.js";
 import { calendarIn, defaultTimeZone } from "./time.js";
-import { monthRangeOf, readMonth } from "./months.js";
+import { monthName, monthRangeOf, readMonth } from "./months.js";
 import { needOf, planRain } from "./rain.js";
 import type { Rain, RainPlan } from "./rain.js";
 import type { AccountMonth, MonthRange } from "./months.js";
@@ -220,6 +220,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   }
   const incomeOf = database.prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE budget_id = ? AND kind = 'income'");
   const ledgerOf = database.prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM assignments WHERE budget_id = ?");
+  const firstFutureEntry = database.prepare("SELECT month FROM assignments WHERE bucket_id = ? AND month > ? ORDER BY month LIMIT 1");
   const insertAssignment = database.prepare("INSERT INTO assignments (id, budget_id, bucket_id, month, amount, rain_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
   const rainEntries = database.prepare("SELECT * FROM assignments WHERE rain_id = ? ORDER BY rowid");
   const deleteRain = database.prepare("DELETE FROM assignments WHERE rain_id = ?");
@@ -794,18 +795,23 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
         return writeBucket({ ...openBucket(id), groupId: group.id });
       });
     },
-    // Owner rule (2026-11-17): refused while overspent. A positive Available (only a reimbursement can make one
-    // until the ledger exists) is refused too; the month slice returns it to Ready to assign instead.
-    // Idempotent: archiving an archived bucket returns it unchanged with nothing returned.
+    // Owner rule (2026-11-17, ADR-0003): refused while overspent or while a later month has ledger entries.
+    // A positive Available in the current month goes back to Ready to assign as a take in that month.
+    // Idempotent: archiving an archived bucket returns it unchanged with nothing returned. Restore doesn't
+    // re-assign what was returned.
     archiveBucket(id: string): ArchiveResult {
       return transaction(() => {
         const bucket = openBucket(id);
         if (bucket.archived) return { bucket, returned: 0 };
         if (bucket.available < 0) throw new BudgetError("bucket_overspent", "A bucket can't be archived while its Available is negative.");
-        if (bucket.available > 0) throw new BudgetError("bucket_has_money", `${bucket.name} still holds money. Spend it or move it before archiving.`);
-        const archived = writeBucket({ ...bucket, archivedAt: timestamp() });
+        const current = thisMonth();
+        const future = firstFutureEntry.get(bucket.id, current);
+        if (future) throw new BudgetError("bucket_has_future", `${bucket.name} has money assigned in ${monthName(String(future.month), current)}.`);
+        const returned = bucket.available;
+        if (returned > 0) insertAssignment.run(randomUUID(), bucket.budgetId, bucket.id, current, -returned, null, timestamp());
+        const archived = writeBucket({ ...openBucket(id), archivedAt: timestamp() });
         if (bucket.groupId) renumberBuckets(activeIds(bucket.groupId));
-        return { bucket: archived, returned: 0 };
+        return { bucket: archived, returned };
       });
     },
     // Restore appends to the end of the bucket's group, or of the first group if its group was deleted.

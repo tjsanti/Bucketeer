@@ -413,7 +413,12 @@ test("HTTP files transactions to buckets, refuses archived ones, and serves paye
     assert.deepEqual(await statuses(`/api/accounts/${visa.id}/transactions`, "POST", { amount: -100, category: { kind: "bucket", bucketId: old.id } }), [409, "bucket_archived"]);
     assert.deepEqual(await statuses(`/api/transactions/${dinner.id}`, "PATCH", { category: { kind: "bucket", bucketId: old.id } }), [409, "bucket_archived"]);
     await client.addTransaction(visa.id, { amount: 13_000, category: { kind: "bucket", bucketId: eatingOut.id } });
-    assert.deepEqual(await statuses(`/api/buckets/${eatingOut.id}/archive`, "POST"), [409, "bucket_has_money"]);
+    // The 10.00 left over goes back to Ready to assign.
+    assert.deepEqual((await client.archiveBucket(eatingOut.id)).returned, 1_000);
+    assert.equal((await client.readyToAssign(budget.id)).readyToAssign, 1_000);
+    const gifts = await client.createBucket(budget.id, { name: "Gifts", groupId: group.id, type: "plain" });
+    await client.assign(gifts.id, { month: "2026-12", amount: 500 });
+    assert.deepEqual(await statuses(`/api/buckets/${gifts.id}/archive`, "POST"), [409, "bucket_has_future"]);
     assert.deepEqual(await statuses("/api/budgets/missing/payees", "GET"), [404, "not_found"]);
     assert.deepEqual(await statuses(`/api/budgets/${budget.id}/payees`, "POST", {}), [404, "not_found"]);
   } finally {

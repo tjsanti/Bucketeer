@@ -41,3 +41,11 @@ export function lastDayOf(month: string): string {
 export function monthRangeOf(creationMonth: string, currentMonth: string): MonthRange {
   return { first: addMonths(creationMonth, -12), last: addMonths(currentMonth, 12) };
 }
+
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+/** "December" for a month in the current month's year, "January 2027" otherwise. */
+export function monthName(month: string, currentMonth: string): string {
+  const name = MONTH_NAMES[Number(month.slice(5, 7)) - 1]!;
+  return month.slice(0, 4) === currentMonth.slice(0, 4) ? name : `${name} ${month.slice(0, 4)}`;
+}

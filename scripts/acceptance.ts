@@ -177,13 +177,14 @@ try {
   assert.deepEqual([bucketOf(eatingOut.id).available, bucketOf(eatingOut.id).spent], [-9000, 12000]);
   assert.equal(ready(), readyBeforeSpending);
   cliFails("usage", "tx", "add", ...accountArgs, "--amount", "-5", "--income", "--bucket", eatingOut.id);
-  // Money left in a bucket blocks archiving until the ledger can return it; an archived bucket takes no new money,
+  // Archiving returns money left in a bucket to Ready to assign; an archived bucket takes no new money,
   // but what was filed to it stays and can still be edited.
   const coat = JSON.parse(cli("tx", "add", ...accountArgs, "--amount", "-40", "--bucket", clothing.id, "--payee", "Coat", "--json"));
-  const refund = JSON.parse(cli("tx", "add", ...accountArgs, "--amount", "50", "--bucket", clothing.id, "--json"));
-  cliFails("bucket_has_money", "bucket", "archive", clothing.id);
-  cli("tx", "edit", refund.id, "--amount", "40");
-  assert.equal(JSON.parse(cli("bucket", "archive", clothing.id, "--json")).bucket.archived, true);
+  cli("tx", "add", ...accountArgs, "--amount", "50", "--bucket", clothing.id);
+  const readyBeforeArchive = ready();
+  const archivedWithMoney = JSON.parse(cli("bucket", "archive", clothing.id, "--json"));
+  assert.deepEqual([archivedWithMoney.bucket.archived, archivedWithMoney.returned], [true, 1000]);
+  assert.equal(ready(), readyBeforeArchive + 1000);
   cliFails("bucket_archived", "tx", "add", ...accountArgs, "--amount", "-5", "--bucket", clothing.id);
   cliFails("bucket_archived", "tx", "edit", reimbursed.id, "--bucket", clothing.id);
   const kept = JSON.parse(cli("tx", "edit", coat.id, "--memo", "Winter", "--json"));
@@ -204,6 +205,7 @@ try {
   assert.equal(JSON.parse(cli("assign", rent.id, "--amount", "10", "--month", nextMonth, "--json")).assigned, 1000);
   assert.equal(JSON.parse(cli("month", ...budgetArgs, "--month", nextMonth, "--json")).summary.readyToAssign, ready());
   assert.equal(ready(), readyBeforeAssigning - 166000);
+  cliFails("bucket_has_future", "bucket", "archive", rent.id);
   // Overspending carries into the next month.
   assert.deepEqual([bucketOf(eatingOut.id, "--month", nextMonth).carriedIn, bucketOf(eatingOut.id, "--month", nextMonth).available], [-9000, -9000]);
   assert.match(cli("month", ...budgetArgs).split("\n")[0]!, new RegExp(`^${month}\tReady to assign\t`));

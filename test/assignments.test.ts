@@ -162,3 +162,46 @@ test("an archived bucket appears only in the months it has a transaction or a le
     core.close();
   }
 });
+
+test("archiving a bucket with money returns it to Ready to assign with a take in the current month", () => {
+  const { core, budget, groceries, spend, row } = household();
+  try {
+    const clothing = core.createBucket(budget.id, { name: "Clothing", groupId: groceries.groupId!, type: "plain" });
+    core.assign(clothing.id, { month: "2026-10", amount: 20_000 });
+    spend(clothing.id, "2026-11-03", -1_347);
+    assert.equal(core.readyToAssign(budget.id), 480_000);
+    const result = core.archiveBucket(clothing.id);
+    assert.deepEqual([result.returned, result.bucket.archived, result.bucket.available], [18_653, true, 0]);
+    assert.equal(core.readyToAssign(budget.id), 498_653);
+    // The take is booked in November, so October keeps its history.
+    assert.deepEqual([row("2026-11", clothing.id).assigned, row("2026-11", clothing.id).available], [-18_653, 0]);
+    assert.equal(row("2026-10", clothing.id).available, 20_000);
+    // Restoring doesn't put the money back.
+    assert.equal(core.restoreBucket(clothing.id).available, 0);
+    assert.equal(core.readyToAssign(budget.id), 498_653);
+    // A bucket at 0 archives with nothing returned.
+    assert.equal(core.archiveBucket(clothing.id).returned, 0);
+    assert.equal(core.readyToAssign(budget.id), 498_653);
+  } finally {
+    core.close();
+  }
+});
+
+test("archiving is refused while a bucket is overspent or has entries in a future month", () => {
+  const { core, budget, groceries, spend } = household();
+  try {
+    const gifts = core.createBucket(budget.id, { name: "Gifts", groupId: groceries.groupId!, type: "plain" });
+    core.assign(gifts.id, { month: "2026-12", amount: 5_000 });
+    assert.throws(() => core.archiveBucket(gifts.id), (error: unknown) => error instanceof BudgetError && error.code === "bucket_has_future" && error.message === "Gifts has money assigned in December.");
+    core.assign(gifts.id, { month: "2026-12", amount: -5_000 });
+    assert.throws(() => core.archiveBucket(gifts.id), code("bucket_has_future"));
+    const later = core.createBucket(budget.id, { name: "Later", groupId: groceries.groupId!, type: "plain" });
+    core.assign(later.id, { month: "2027-11", amount: 100 });
+    assert.throws(() => core.archiveBucket(later.id), (error: unknown) => error instanceof BudgetError && error.message === "Later has money assigned in November 2027.");
+    spend(groceries.id, "2026-11-04", -100);
+    assert.throws(() => core.archiveBucket(groceries.id), code("bucket_overspent"));
+    assert.equal(core.readyToAssign(budget.id), 499_900);
+  } finally {
+    core.close();
+  }
+});
