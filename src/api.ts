@@ -18,6 +18,8 @@ const assets = new Map<string, Asset>([
   // Shared with the browser: money.js imports types.js at runtime.
   ["/core/money.js", { file: "./core/money.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
   ["/core/types.js", { file: "./core/types.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
+  // Month arithmetic for the month header, shared like money.js.
+  ["/core/months.js", { file: "./core/months.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
   // Palette order and the least-used colour rule, shared with the browser like money.js.
   ["/core/colours.js", { file: "./core/colours.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
 ]);
@@ -125,6 +127,22 @@ export function createApi(core: Bucketeer) {
       const budgetReady = /^\/api\/budgets\/([^/]+)\/ready-to-assign$/.exec(pathname)?.[1];
       if (budgetReady && request.method === "GET") {
         json(response, 200, { readyToAssign: core.readyToAssign(decodeId(budgetReady, "Budget")) });
+        return;
+      }
+      const budgetRange = /^\/api\/budgets\/([^/]+)\/month-range$/.exec(pathname)?.[1];
+      if (budgetRange && request.method === "GET") {
+        json(response, 200, core.monthRange(decodeId(budgetRange, "Budget")));
+        return;
+      }
+      const budgetBalances = /^\/api\/budgets\/([^/]+)\/account-balances$/.exec(pathname)?.[1];
+      if (budgetBalances && request.method === "GET") {
+        const month = new URL(request.url ?? "/", "http://localhost").searchParams.get("month");
+        json(response, 200, core.accountBalances(decodeId(budgetBalances, "Budget"), month ?? ""));
+        return;
+      }
+      const accountMonth = /^\/api\/accounts\/([^/]+)\/months\/([^/]+)$/.exec(pathname);
+      if (accountMonth?.[1] && accountMonth[2] && request.method === "GET") {
+        json(response, 200, core.accountMonth(decodeId(accountMonth[1], "Account"), decodeId(accountMonth[2], "Month")));
         return;
       }
       const accountTransactions = /^\/api\/accounts\/([^/]+)\/transactions$/.exec(pathname)?.[1];

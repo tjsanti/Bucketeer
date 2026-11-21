@@ -487,6 +487,26 @@ main { padding: var(--s-8) var(--s-10) var(--s-16); min-width: 0; max-width: 110
 .page-row { align-self: stretch; display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap; min-height: var(--touch); }
 .page-row h1 { font-size: var(--fs-2xl); overflow-wrap: anywhere; }
 .accounts-content { align-self: stretch; min-width: 0; }
+
+/* The month header: ‹ November 2026 ›, with a month and year picker under the label. */
+.month-head { position: relative; display: flex; align-items: center; gap: var(--s-1); margin-right: auto; }
+.month-label {
+  min-height: var(--touch); padding: 0 var(--s-3); border: 0; border-radius: var(--r-md); background: transparent;
+  font-family: var(--font-display); font-size: var(--fs-lg); font-weight: var(--fw-bold); color: var(--text); white-space: nowrap; cursor: pointer;
+}
+.month-label:hover, .month-label[aria-expanded="true"] { background: var(--surface-sunken); }
+.month-pick {
+  position: absolute; z-index: 40; top: calc(100% + 6px); left: 0; width: 288px; padding: var(--s-3);
+  border-radius: var(--r-md); background: var(--surface-raised); box-shadow: var(--shadow-pop);
+}
+.pick-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--s-2); }
+.pick-year { font-weight: var(--fw-bold); }
+.pick-head .icon-btn { border-color: transparent; background: transparent; }
+.pick-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s-1); }
+.pick-month { min-height: var(--touch); border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); font-weight: var(--fw-medium); cursor: pointer; }
+.pick-month:hover:not(:disabled) { background: var(--surface-sunken); }
+.pick-month[aria-current="true"] { background: var(--accent-soft); color: var(--accent-ink); font-weight: var(--fw-bold); }
+.pick-month:disabled { color: var(--text-faint); cursor: not-allowed; }
 .page > .note { align-self: stretch; }
 .empty { color: var(--text-muted); padding: var(--s-4) 0; }
 
@@ -816,6 +836,12 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 
   main { padding: var(--s-4) var(--s-4) var(--s-8); }
   .page-row h1 { font-size: var(--fs-xl); }
+  /* On a phone the header takes its own line under the title, and the picker spans the page. */
+  .page-row { position: relative; }
+  .month-head { order: 3; flex: 1 0 100%; position: static; justify-content: space-between; gap: 0; }
+  .month-head > .icon-btn { background: transparent; border-color: transparent; }
+  .month-label { font-size: var(--fs-md); }
+  .month-pick { left: 0; right: 0; width: auto; }
   .start { padding: var(--s-5); }
 
   /* Account rows: name and a larger balance; the whole row opens Edit. */

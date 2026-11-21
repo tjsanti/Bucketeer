@@ -68,6 +68,7 @@ Types are `checking`, `savings`, `credit-card`, and `cash`; a type is fixed once
 bucketeer tx add --account <account-id> --amount 2000 --income --payee "Acme Payroll" --memo "November" --json
 bucketeer tx add --account <account-id> --amount 50 --income --date 2026-11-14 --json
 bucketeer tx list --account <account-id> --json
+bucketeer tx list --account <account-id> --month 2026-10
 bucketeer tx edit <transaction-id> --amount 1950 --json
 bucketeer tx delete <transaction-id> --json
 bucketeer ready --budget <id> --json
@@ -77,7 +78,7 @@ Every transaction needs exactly one category option; `--income` is the only one 
 
 `--date` defaults to today in the server's time zone. A transaction can't be dated after today or before the first day of the month twelve months before the budget began; a date before the account's starting date is fine and counts toward its balance. An account's balance is its starting balance plus all of its transactions. A closed account takes no new transactions. Payees hold up to 120 characters and memos up to 500, both trimmed.
 
-`tx list` prints the register newest first as `id`, `date`, `payee`, `category`, `amount` and the running `balance`, tab-separated; `tx add` and `tx edit` print the same line for their transaction. `--json` gives `{ "transactions": [...] }` with integer cents and a `runningBalance` on each.
+`tx list` prints the register newest first as `id`, `date`, `payee`, `category`, `amount` and the running `balance`, tab-separated; `tx add` and `tx edit` print the same line for their transaction. `--json` gives `{ "transactions": [...] }` with integer cents and a `runningBalance` on each. With `--month YYYY-MM`, it lists only that month's transactions (running balances still count every earlier one) and ends with `Balance at end of YYYY-MM` and the account's balance at the end of that month; `--json` gives `{ "balance": ..., "transactions": [...] }`. A month must lie between twelve months before the budget began and twelve months after the current month.
 
 ### Buckets and groups
 

@@ -2,8 +2,9 @@
 // desktop, the always-ready entry row. Income is the only category so far.
 import type { createClient } from "../client.js";
 import { ApiError } from "../client.js";
-import type { Account, RegisterTransaction } from "../core/index.js";
+import type { Account, AccountMonth, RegisterTransaction } from "../core/index.js";
 import { formatMoney, parseMoney } from "../core/money.js";
+import { lastDayOf } from "../core/months.js";
 import { BudgetError } from "../core/types.js";
 import { el, messageOf, setNote } from "./dom.js";
 
@@ -12,16 +13,22 @@ export interface RegisterContext {
   account: Account;
   /** Re-reads the account, its register and the sidebar, and redraws them. Never throws. */
   refresh(): Promise<void>;
+  /** The month header; the summary and the register show its month. */
+  monthHeader: HTMLElement;
+  /** The month shown, "YYYY-MM". */
+  month: string;
+  /** Whether the month is before the current one. */
+  past: boolean;
 }
-
-const columns = ["Date", "Payee", "Category", "Memo", "Amount", "Balance"] as const;
-const columnClass = ["date", "payee", "cat", "memo", "amt", "bal"] as const;
 
 /** Today as YYYY-MM-DD in the viewer's own time zone. */
 function today(): string {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
+
+const columns = ["Date", "Payee", "Category", "Memo", "Amount", "Balance"] as const;
+const columnClass = ["date", "payee", "cat", "memo", "amt", "bal"] as const;
 
 /** "2026-11-14" -> "Nov 14", read as a calendar date so no time zone can shift it. */
 function shortDate(date: string): string {
@@ -36,7 +43,10 @@ export function createRegisterPage(ctx: RegisterContext) {
   let account = ctx.account;
   const heading = el("h1", {}, account.name);
   const balance = el("p", { class: "figure num" });
-  const summary = el("div", { class: "acct-summary card" }, el("p", { class: "label" }, "Balance"), balance);
+  // New entries start today, or on a past month's last day; that day's balance is the summary's.
+  const defaultDate = () => ctx.past ? lastDayOf(ctx.month) : today();
+  const summaryLabel = ctx.past ? `Balance on ${shortDate(lastDayOf(ctx.month))}` : "Balance";
+  const summary = el("div", { class: "acct-summary card" }, el("p", { class: "label" }, summaryLabel), balance);
   const note = el("div", { class: "note", role: "alert" });
 
   const input = (name: string, attrs: Record<string, string | boolean> = {}) =>
@@ -47,7 +57,7 @@ export function createRegisterPage(ctx: RegisterContext) {
   const memo = input("memo", { type: "text", maxlength: "500" });
   const amount = input("amount", { type: "text", inputmode: "decimal", class: "cin num amt-in" });
   const fields = { date, payee, memo, amount } as const;
-  date.value = today();
+  date.value = defaultDate();
   const cell = (index: number, child: HTMLElement) => el("div", { class: `c ${columnClass[index]}` }, child);
   const entry = el("form", { class: "entry editor", novalidate: true, "aria-label": "New transaction" },
     el("div", { class: "erow" }, cell(0, date), cell(1, payee), cell(2, category), cell(3, memo), cell(4, amount), el("div", { class: "c bal" })));
@@ -60,7 +70,7 @@ export function createRegisterPage(ctx: RegisterContext) {
     entry,
     body,
     end);
-  const root = el("div", { class: "page register" }, el("div", { class: "page-row" }, heading), summary, note, table);
+  const root = el("div", { class: "page register" }, el("div", { class: "page-row" }, heading, ctx.monthHeader), summary, note, table);
 
   function clearInvalid(): void {
     for (const field of Object.values(fields)) field.removeAttribute("aria-invalid");
@@ -68,7 +78,7 @@ export function createRegisterPage(ctx: RegisterContext) {
 
   function reset(keepDate: boolean): void {
     payee.value = memo.value = amount.value = "";
-    if (!keepDate) date.value = today();
+    if (!keepDate) date.value = defaultDate();
     clearInvalid();
     setNote(note, null);
   }
@@ -137,15 +147,18 @@ export function createRegisterPage(ctx: RegisterContext) {
 
   return {
     root,
-    render(next: Account, transactions: RegisterTransaction[]): void {
+    render(next: Account, { balance: closing, transactions }: AccountMonth): void {
       account = next;
       heading.textContent = account.name;
       // A closed account takes no new transactions.
       entry.hidden = account.closed;
       table.setAttribute("aria-label", `${account.name} register`);
-      balance.textContent = formatMoney(account.balance, { symbol: true });
+      balance.textContent = formatMoney(closing, { symbol: true });
       body.replaceChildren(...transactions.map(renderRow));
-      end.replaceChildren(el("span", {}, "Starting balance"), el("span", {}, formatMoney(account.startingBalance)));
+      // The register ends with the balance the month began with.
+      const oldest = transactions.at(-1);
+      const opening = oldest ? oldest.runningBalance - oldest.amount : closing;
+      end.replaceChildren(el("span", {}, `Balance before ${shortDate(`${ctx.month}-01`)}`), el("span", {}, formatMoney(opening)));
     },
     note: (message: string | null) => setNote(note, message),
   };

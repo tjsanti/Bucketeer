@@ -1,5 +1,5 @@
 import type {
-  Account, AccountEditInput, ArchiveResult, Bucket, BucketEditInput, BucketGroup, BucketRevertInput, BucketMoveInput, BucketTable, Budget, BudgetNameInput,
+  Account, AccountMonth, MonthRange, AccountEditInput, ArchiveResult, Bucket, BucketEditInput, BucketGroup, BucketRevertInput, BucketMoveInput, BucketTable, Budget, BudgetNameInput,
   GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput, NewTransactionInput, RegisterTransaction, Transaction, TransactionEditInput,
 } from "./core/index.js";
 
@@ -81,5 +81,9 @@ export function createClient(baseUrl: string) {
     openTransaction: (id: string) => request<Transaction>(transaction(id)),
     editTransaction: (id: string, input: TransactionEditInput) => request<Transaction>(transaction(id), send("PATCH", input)),
     deleteTransaction: (id: string) => request<void>(transaction(id), send("DELETE")),
+    monthRange: (budgetId: string) => request<MonthRange>(`${budgetPath(budgetId)}/month-range`),
+    accountBalances: (budgetId: string, month: string) =>
+      request<Record<string, number>>(`${budgetPath(budgetId)}/account-balances?month=${encodeURIComponent(month)}`),
+    accountMonth: (accountId: string, month: string) => request<AccountMonth>(`${account(accountId)}/months/${encodeURIComponent(month)}`),
   };
 }
