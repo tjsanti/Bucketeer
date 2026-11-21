@@ -677,10 +677,12 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .reorder-btn { display: none; }
 .buckets-content { align-self: stretch; min-width: 0; }
 .btable { position: relative; overflow: hidden; }
-.btable [role="row"] { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr) 132px; }
+.btable [role="row"] { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr) 112px 132px; }
 .btable .c { display: flex; align-items: center; padding: 0 var(--s-4); min-width: 0; }
 .btable .c.num { justify-content: flex-end; }
 .btable .c.avail { background: var(--avail-col); font-weight: var(--fw-bold); }
+.btable .c.spent { color: var(--text-muted); }
+.bhead .c.spent, .bgroup .c.spent { color: var(--text-muted); }
 .btable .c.go, .btable .c.ctl { display: none; }
 /* Rows with a grip start a little further in; the grip lives in that gutter */
 .btable .bname, .btable .gcell { padding-left: 6px; }
@@ -716,9 +718,18 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .goal .pct { font-weight: var(--fw-bold); color: var(--text); min-width: 3ch; text-align: right; }
 .goal .gmeta { overflow: hidden; text-overflow: ellipsis; }
 .goal-date { display: none; }
-/* Vessel: nothing is assigned yet, so the outline is empty and neutral. */
-.vessel { display: inline-block; flex: none; width: 18px; height: 22px; overflow: visible; }
-.vessel .vl { fill: none; stroke: var(--border-control); stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+/* Vessel: this month's assigned over the monthly amount. Amber while filling (an empty one is a bare amber
+   outline), a soft green outline over a pale tint when the target is met, so full vessels read as quiet ticks. */
+.vessel { --vl: var(--vessel-full-line); --vf: var(--vessel-full-fill); display: inline-block; flex: none; width: 18px; height: 22px; overflow: visible; }
+.vessel.part { --vl: var(--vessel-part-line); --vf: var(--vessel-part-fill); }
+.vessel .vl { fill: none; stroke: var(--vl); stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+.vessel .vf { fill: var(--vf); }
+.det .fund { color: var(--text); font-weight: var(--fw-semibold); }
+/* An archived bucket shown for its activity this month: muted, and it opens nothing. */
+.btable .brow.is-archived { cursor: default; }
+.brow.is-archived .name { color: var(--text-muted); }
+.brow.is-archived .grip-space { flex: none; width: 22px; margin-right: -2px; }
+.brow .tag { flex: none; font-size: var(--fs-xs); color: var(--text-muted); border: 1px solid var(--border); border-radius: var(--r-pill); padding: 0 6px; }
 .brow.is-over .c.avail { background: var(--over-soft); color: var(--over); box-shadow: inset 3px 0 0 var(--over); font-weight: var(--fw-heavy); }
 .bempty { min-height: var(--row-h); border-top: 1px solid var(--border); }
 .bempty .c:first-child { color: var(--text-muted); font-size: 14px; }
@@ -942,6 +953,7 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
   .btable [role="row"] { grid-template-columns: minmax(0, 1fr) 96px 26px; grid-template-areas: "name avail go" "det avail go"; }
   .btable .bhead, .btable .bgroup, .btable .bempty { grid-template-areas: "name avail go"; }
   .btable .bhead .det, .btable .bgroup .det, .btable .bempty .det { display: none; }
+  .btable .c.spent { display: none; }
   .btable .bhead .c:first-child, .btable .bgroup .c:first-child, .btable .bempty .c:first-child { grid-area: name; }
   .btable .c { padding: 0 var(--s-3); }
   .btable .bname, .btable .gcell { padding-left: 6px; }
@@ -991,6 +1003,8 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
   .btable .bhead .c:first-child { padding-left: var(--s-3); }
   .btable .det { padding-left: calc(var(--s-3) + var(--dot) + 10px); }
   .btable:not(.reordering) .grip { display: none; }
+  .btable .grip-space { display: none; }
+  .btable.reordering .brow.is-archived { display: none; }
   .btable.reordering [role="row"], .btable.reordering .brow.is-plain { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name ctl"; }
   .btable.reordering .det, .btable.reordering .avail, .btable.reordering .go { display: none !important; }
   .btable.reordering .c.ctl { display: flex; justify-content: flex-end; gap: 4px; grid-area: ctl; padding: 4px var(--s-2) 4px 0; }

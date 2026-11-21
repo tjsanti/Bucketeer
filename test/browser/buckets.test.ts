@@ -132,7 +132,7 @@ test("the Buckets page is reached from the nav and its deep link; / still opens 
   assert.deepEqual((await grid.locator(".bgroup .gname").allTextContents()), ["Fixed", "Everyday", "Goals"]);
   assert.deepEqual(await grid.locator(".bgroup .gcount").allTextContents(), ["2", "3", "1"]);
   const rent = grid.getByRole("row", { name: /Rent/ });
-  assert.equal(compact(await rent.locator(".det").innerText()), "$1,650.00 a month");
+  assert.equal(compact(await rent.locator(".det").innerText()), "$0.00 of $1,650.00 a month");
   const vacation = grid.getByRole("row", { name: /Vacation/ });
   assert.equal(compact(await vacation.locator(".gmeta").innerText()), "of $3,000.00 · Aug 2027");
   assert.equal(await vacation.locator(".pct").textContent(), "0%");
@@ -226,7 +226,7 @@ test("buckets can be added, edited, archived and restored, with Undo for edit an
     rent = (await tableOf(app, budgetId)).buckets.find((b) => b.id === rent.id)!;
     assert.deepEqual([rent.type, rent.amount], ["recurring", 165000]);
   });
-  await eventually(async () => assert.equal(compact(await page.getByRole("row", { name: /Rent/ }).locator(".det").innerText()), "$1,650.00 a month"));
+  await eventually(async () => assert.equal(compact(await page.getByRole("row", { name: /Rent/ }).locator(".det").innerText()), "$0.00 of $1,650.00 a month"));
 
   // Archive from Edit (the zero case): the row moves to the fold; Undo restores it.
   await page.getByRole("button", { name: "Edit Clothing" }).click();
@@ -603,19 +603,13 @@ test("available figures: positive and overspent rendering, and the archive secti
   for (const scheme of ["light", "dark"] as const) {
     const app = await openApp(t, { colorScheme: scheme, height: 800 });
     const { page } = app;
-    const { budgetId } = await seed(app);
-    // Assigning does not exist yet, so Available comes from a fixture: Groceries 186.53, Dining out −18.25.
-    await page.route("**/api/budgets/*/buckets", async (route) => {
-      if (route.request().method() !== "GET") return route.continue();
-      const response = await route.fetch();
-      const table = (await response.json()) as Table & { buckets: (Bucket & { available: number })[] };
-      for (const bucket of table.buckets) {
-        if (bucket.name === "Groceries") bucket.available = 18653;
-        if (bucket.name === "Dining out") bucket.available = -1825;
-        if (bucket.name === "Vacation") bucket.available = 124000;
-      }
-      await route.fulfill({ response, json: table });
-    });
+    const { budgetId, buckets } = await seed(app);
+    // Groceries 186.53 and Vacation 1,240.00 assigned this month; Dining out overspent by 18.25.
+    const thisMonth = new Date().toLocaleDateString("en-CA").slice(0, 7);
+    const checking = await api<{ id: string }>(app, "POST", `/api/budgets/${budgetId}/accounts`, { name: "Checking", type: "checking", startingBalance: 200_000, startingDate: `${thisMonth}-01` });
+    await api(app, "POST", `/api/buckets/${buckets.Groceries}/assign`, { month: thisMonth, amount: 18_653 });
+    await api(app, "POST", `/api/buckets/${buckets.Vacation}/assign`, { month: thisMonth, amount: 124_000 });
+    await api(app, "POST", `/api/accounts/${checking.id}/transactions`, { amount: -1_825, category: { kind: "bucket", bucketId: buckets["Dining out"] } });
     await openBuckets(app, budgetId);
     const grid = page.getByRole("table", { name: "Buckets" });
     const dining = grid.getByRole("row", { name: /Dining out/ });

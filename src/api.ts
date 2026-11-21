@@ -56,7 +56,7 @@ class HttpError extends Error {
   }
 }
 
-const statuses = { invalid_input: 400, not_found: 404, name_taken: 409, balance_not_zero: 409, group_not_empty: 409, bucket_overspent: 409, bucket_changed: 409, account_closed: 409, bucket_archived: 409, bucket_has_money: 409 } as const;
+const statuses = { invalid_input: 400, not_found: 404, name_taken: 409, balance_not_zero: 409, group_not_empty: 409, bucket_overspent: 409, bucket_changed: 409, account_closed: 409, bucket_archived: 409, bucket_has_money: 409, not_enough_ready: 409, not_enough_available: 409 } as const;
 
 function decodeId(segment: string, what: string): string {
   try {
@@ -145,6 +145,11 @@ export function createApi(core: Bucketeer) {
         json(response, 200, core.accountBalances(decodeId(budgetBalances, "Budget"), month ?? ""));
         return;
       }
+      const budgetMonth = /^\/api\/budgets\/([^/]+)\/months\/([^/]+)$/.exec(pathname);
+      if (budgetMonth?.[1] && budgetMonth[2] && request.method === "GET") {
+        json(response, 200, core.bucketMonth(decodeId(budgetMonth[1], "Budget"), decodeId(budgetMonth[2], "Month")));
+        return;
+      }
       const accountMonth = /^\/api\/accounts\/([^/]+)\/months\/([^/]+)$/.exec(pathname);
       if (accountMonth?.[1] && accountMonth[2] && request.method === "GET") {
         json(response, 200, core.accountMonth(decodeId(accountMonth[1], "Account"), decodeId(accountMonth[2], "Month")));
@@ -228,6 +233,11 @@ export function createApi(core: Bucketeer) {
           json(response, 200, core.moveGroup(id, await readJson(request)));
           return;
         }
+      }
+      const bucketAssign = /^\/api\/buckets\/([^/]+)\/assign$/.exec(pathname)?.[1];
+      if (bucketAssign && request.method === "POST") {
+        json(response, 200, core.assign(decodeId(bucketAssign, "Bucket"), await readJson(request)));
+        return;
       }
       const bucketRoute = /^\/api\/buckets\/([^/]+)(?:\/(move|archive|restore|revert))?$/.exec(pathname);
       if (bucketRoute?.[1]) {

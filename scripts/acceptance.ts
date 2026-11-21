@@ -164,7 +164,8 @@ try {
   cliFails("not_found", "bucket", "add", ...budgetArgs, "--name", "Car", "--group", "missing");
   // Spending: a bucket takes either sign. Money out is Spent, money back in is assigned to the bucket, and
   // neither moves Ready to assign.
-  const bucketOf = (id: string) => JSON.parse(cli("bucket", "list", ...budgetArgs, "--archived", "--json")).buckets.find((bucket: { id: string }) => bucket.id === id);
+  // A bucket's figures in a month (default: the server's current month).
+  const bucketOf = (id: string, ...month: string[]) => JSON.parse(cli("month", ...budgetArgs, ...month, "--json")).buckets.find((bucket: { id: string }) => bucket.id === id);
   const eatingOut = JSON.parse(cli("bucket", "add", ...budgetArgs, "--name", "Eating out", "--group", fixed.id, "--json"));
   const readyBeforeSpending = ready();
   cli("tx", "add", "--account", visa.id, "--amount", "-120", "--bucket", eatingOut.id, "--payee", "Noodle Bar");
@@ -188,11 +189,30 @@ try {
   const kept = JSON.parse(cli("tx", "edit", coat.id, "--memo", "Winter", "--json"));
   assert.deepEqual([kept.memo, kept.category], ["Winter", { kind: "bucket", bucketId: clothing.id }]);
   cli("bucket", "restore", clothing.id);
+  // Assigning: every assign and take is a signed ledger entry in a month, drawn from one Ready to assign.
+  const month = JSON.parse(cli("month", ...budgetArgs, "--json")).summary.month as string;
+  const nextMonth = `${Number(month.slice(5)) === 12 ? Number(month.slice(0, 4)) + 1 : month.slice(0, 4)}-${String(Number(month.slice(5)) % 12 + 1).padStart(2, "0")}`;
+  const readyBeforeAssigning = ready();
+  assert.ok(readyBeforeAssigning >= 165000, "The acceptance budget has enough ready to assign Rent.");
+  const assigned = JSON.parse(cli("assign", rent.id, "--amount", "1650", "--json"));
+  assert.deepEqual([assigned.month, assigned.assigned, assigned.available], [month, 165000, 165000]);
+  assert.equal(ready(), readyBeforeAssigning - 165000);
+  cliFails("not_enough_ready", "assign", rent.id, "--amount", "99,999,999");
+  cliFails("not_enough_available", "assign", rent.id, "--amount", "-2000");
+  cliFails("invalid_input", "assign", rent.id, "--amount", "1", "--month", "1999-01");
+  // Assigning into next month draws from the same Ready to assign, shown alike in every month.
+  assert.equal(JSON.parse(cli("assign", rent.id, "--amount", "10", "--month", nextMonth, "--json")).assigned, 1000);
+  assert.equal(JSON.parse(cli("month", ...budgetArgs, "--month", nextMonth, "--json")).summary.readyToAssign, ready());
+  assert.equal(ready(), readyBeforeAssigning - 166000);
+  // Overspending carries into the next month.
+  assert.deepEqual([bucketOf(eatingOut.id, "--month", nextMonth).carriedIn, bucketOf(eatingOut.id, "--month", nextMonth).available], [-9000, -9000]);
+  assert.match(cli("month", ...budgetArgs).split("\n")[0]!, new RegExp(`^${month}\tReady to assign\t`));
+  const monthBefore = JSON.parse(cli("month", ...budgetArgs, "--month", nextMonth, "--json"));
   accounts = JSON.parse(cli("account", "list", ...budgetArgs, "--json"));
   register = JSON.parse(cli("tx", "list", ...accountArgs, "--json"));
   const bucketsBefore = JSON.parse(cli("bucket", "list", ...budgetArgs, "--archived", "--json"));
   assert.deepEqual(bucketsBefore.groups.map((group: { name: string }) => group.name), ["Goals", "Fixed"]);
-  console.log("Budget saved and updated, accounts added and edited, income recorded, spending and reimbursements filed to buckets, buckets and groups added, moved, archived and restored. Recreating with the same volume and a non-default port...");
+  console.log("Budget saved and updated, accounts added and edited, income recorded, spending and reimbursements filed to buckets, money assigned and taken by month, buckets and groups added, moved, archived and restored. Recreating with the same volume and a non-default port...");
   port = 4317;
   compose("up", "-d", "--force-recreate", "--wait", "--wait-timeout", "60");
   assert.deepEqual(JSON.parse(cli("budget", "open", saved.id, "--json")), updated);
@@ -200,6 +220,7 @@ try {
   assert.deepEqual(JSON.parse(cli("account", "list", ...budgetArgs, "--json")), accounts);
   assert.deepEqual(JSON.parse(cli("tx", "list", ...accountArgs, "--json")), register);
   assert.deepEqual(JSON.parse(cli("bucket", "list", ...budgetArgs, "--archived", "--json")), bucketsBefore);
+  assert.deepEqual(JSON.parse(cli("month", ...budgetArgs, "--month", nextMonth, "--json")), monthBefore);
   assert.throws(() => cli("budget", "open", "missing", "--json"), (error: unknown) => {
     assert.ok(error && typeof error === "object" && "status" in error && "stdout" in error);
     assert.equal(error.status, 1);
@@ -267,8 +288,6 @@ try {
     accounts: JSON.parse(oldCli("account", "list", ...oldBudgetArgs, "--json")),
     buckets: JSON.parse(oldCli("bucket", "list", ...oldBudgetArgs, "--archived", "--json")),
   };
-  // Buckets gained Spent after main; an upgraded bucket has spent nothing.
-  for (const bucket of oldState.buckets.buckets) bucket.spent ??= 0;
   docker(["stop", mainContainer]);
   docker(["rm", mainContainer]);
 
@@ -287,7 +306,7 @@ try {
   });
   compose("up", "-d", "--build", "--wait", "--wait-timeout", "60");
   assert.deepEqual(currentState(), oldState);
-  assert.equal(userVersion(), 2);
+  assert.equal(userVersion(), 3);
   // The migrated volume takes transactions.
   const oldAccount = oldState.accounts[0].id;
   cli("tx", "add", "--account", oldAccount, "--amount", "10", "--income");
@@ -297,9 +316,9 @@ try {
   timeZone = "America/Los_Angeles";
   compose("up", "-d", "--force-recreate", "--wait", "--wait-timeout", "60");
   assert.deepEqual(currentState(), oldState);
-  assert.equal(userVersion(), 2);
+  assert.equal(userVersion(), 3);
   assert.equal(compose("exec", "-T", "bucketeer", "node", "-e", "console.log(Intl.DateTimeFormat().resolvedOptions().timeZone)"), "America/Los_Angeles");
-  console.log("PASS: a volume from main upgrades in place to schema version 2 and keeps its data across a container recreate; TZ reaches the server.");
+  console.log("PASS: a volume from main upgrades in place to schema version 3 and keeps its data across a container recreate; TZ reaches the server.");
 } finally {
   for (const name of [mainProject, upgradeProject]) {
     project = name;

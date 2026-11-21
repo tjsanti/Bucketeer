@@ -79,11 +79,24 @@ bucketeer ready --budget <id> --json
 
 Every transaction needs exactly one category option: `--income` or `--bucket <id>`. Giving none, or both, is a usage error. Income always has a positive amount and adds to Ready to assign, which is every account's starting balance plus all Income (a card's starting debt reduces it). Ready to assign can be negative.
 
-A bucket takes either sign. Money out counts as the bucket's Spent; money back in (a reimbursement) counts as assigned to that bucket and never reduces Spent. Neither changes Ready to assign. A bucket's `available` is the sum of its transactions and `spent` is its gross money out, whatever their dates. An archived bucket takes no new transactions and can't be chosen in an edit (`bucket_archived`), but a transaction already filed to it keeps it and can still be edited.
+A bucket takes either sign. Money out counts as the bucket's Spent; money back in (a reimbursement) counts as assigned to that bucket in the month it is dated and never reduces Spent. Neither changes Ready to assign. An archived bucket takes no new transactions and can't be chosen in an edit (`bucket_archived`), but a transaction already filed to it keeps it and can still be edited.
 
 `--date` defaults to today in the server's time zone. A transaction can't be dated after today or before the first day of the month twelve months before the budget began; a date before the account's starting date is fine and counts toward its balance. An account's balance is its starting balance plus all of its transactions. A closed account takes no new transactions. Payees hold up to 120 characters and memos up to 500, both trimmed.
 
 `tx list` prints the register newest first as `id`, `date`, `payee`, `category` (`Income` or the bucket's name), `amount` and the running `balance`, tab-separated; `tx add` and `tx edit` print the same line for their transaction. `--json` gives `{ "transactions": [...] }` with integer cents and a `runningBalance` on each. With `--month YYYY-MM`, it lists only that month's transactions (running balances still count every earlier one) and ends with `Balance at end of YYYY-MM` and the account's balance at the end of that month; `--json` gives `{ "balance": ..., "transactions": [...] }`. A month must lie between twelve months before the budget began and twelve months after the current month.
+
+### Assigning and the month
+
+```sh
+bucketeer assign <bucket-id> --amount 1650 --json
+bucketeer assign <bucket-id> --amount -50 --month 2026-12 --json
+bucketeer month --budget <id> --json
+bucketeer month --budget <id> --month 2026-10
+```
+
+Money is assigned to a bucket in a month. Every assign (a positive `--amount`) and take (a negative one) is a signed entry in the assignment ledger, and Ready to assign is every starting balance plus all Income minus every ledger entry, in any month, so it is one figure shown alike in every month. Assigning more than Ready to assign is refused (`not_enough_ready`, "Only $412.50 is ready to assign."), as is taking more than the bucket's positive Available that month (`not_enough_available`) and assigning to an archived bucket (`bucket_archived`). `--month` defaults to the server's current month; any month in the budget's range is allowed.
+
+A bucket's month has `assigned` (ledger entries plus reimbursements dated that month), `spent` (gross money out that month), `carriedIn` (the previous month's Available, negative included, so overspending carries forward) and `available` (`carriedIn + assigned − spent`). A bucket's own `available` is its Available in the current month. `month` shows every active bucket plus any archived bucket with a ledger entry or a transaction that month; its groups carry their own `assigned`, `spent` and `available` totals. Its text output is a `month`, `Ready to assign`, amount line, then `group`, `name`, `target`, `assigned`, `spent`, `available` per bucket, tab-separated; `assign` prints its bucket's line.
 
 ### Buckets and groups
 
@@ -119,6 +132,7 @@ Everything the UI and CLI do goes through JSON routes under `/api`, plus `GET /h
 | Accounts | `GET`, `POST /api/budgets/:id/accounts`; `GET`, `PATCH /api/accounts/:id`; `POST /api/accounts/:id/close`, `/reopen` |
 | Transactions | `GET`, `POST /api/accounts/:id/transactions` (the register, newest first, with `runningBalance`); `GET`, `PATCH`, `DELETE /api/transactions/:id` |
 | Ready to assign | `GET /api/budgets/:id/ready-to-assign` → `{ "readyToAssign" }` |
+| Months | `GET /api/budgets/:id/months/:month` → `{ "summary", "groups", "buckets" }` (one month of buckets, with group totals); `POST /api/buckets/:id/assign` `{ "month", "amount" }` → the bucket's month |
 | Payees | `GET /api/budgets/:id/payees` → `[{ "payee", "category" }]`, each payee's latest category |
 | Groups | `POST /api/budgets/:id/groups`; `PATCH`, `DELETE /api/groups/:id`; `POST /api/groups/:id/move` |
 | Buckets | `GET /api/budgets/:id/buckets` (groups and buckets together); `POST /api/budgets/:id/buckets`; `GET`, `PATCH /api/buckets/:id`; `POST /api/buckets/:id/move`, `/archive`, `/restore`, `/revert` |

@@ -64,7 +64,7 @@ test("type shapes after create and edit, keeping the amount where it still appli
     const rent = core.createBucket(budget.id, { name: "Rent", groupId: group.id, type: "recurring", amount: 165_000 });
     assert.deepEqual(rent, {
       id: rent.id, budgetId: budget.id, groupId: group.id, name: "Rent", colour: "sky", type: "recurring", amount: 165_000, goalMonth: null,
-      available: 0, spent: 0, order: 1, archived: false, archivedAt: null, createdAt: "2026-11-20T12:00:00.000Z", updatedAt: "2026-11-20T12:00:00.000Z",
+      available: 0, order: 1, archived: false, archivedAt: null, createdAt: "2026-11-20T12:00:00.000Z", updatedAt: "2026-11-20T12:00:00.000Z",
     });
     const plain = core.createBucket(budget.id, { name: "Clothing", groupId: group.id, type: "plain" });
     assert.deepEqual([plain.type, plain.amount, plain.goalMonth], ["plain", null, null]);

@@ -3,7 +3,7 @@
 //   /budgets/<id>/accounts     -> the Accounts page
 //   /budgets/<id>/accounts/<accountId> -> that account's register
 //   /budgets/<id>/buckets      -> the Buckets page
-// The Accounts pages take ?month=YYYY-MM (absent for the current month); in-app links keep the chosen month.
+// The Accounts and Buckets pages take ?month=YYYY-MM (absent for the current month); in-app links keep the chosen month.
 import { createClient } from "../client.js";
 import type { Account, Budget, MonthRange } from "../core/index.js";
 import { addMonths } from "../core/months.js";
@@ -260,22 +260,33 @@ async function route(): Promise<void> {
     }
 
     if (section === "buckets") {
-      const [side, table] = await Promise.all([loadSide(budget.id), client.listBucketTable(budget.id)]);
+      const [side, range] = await Promise.all([loadSide(budget.id), client.monthRange(budget.id)]);
       if (stale()) return;
+      const month = monthFromUrl(range);
+      const load = async () => {
+        const [table, view] = await Promise.all([client.listBucketTable(budget.id), client.bucketMonth(budget.id, month)]);
+        return { table, month: view };
+      };
+      const first = await load();
+      if (stale()) return;
+      const header = monthHeader(range, month);
       const page = createBucketsPage({
         client,
         budget,
+        monthHeader: header.root,
         snack: shell.showSnack,
         announce: shell.announce,
         async reload() {
-          const next = await client.listBucketTable(budget.id);
+          const [next, data] = await Promise.all([loadSide(budget.id), load()]);
           if (stale()) throw new Error("This page has changed.");
-          return next;
+          showSide(next);
+          return data;
         },
       });
       showSide(side);
-      page.render(table);
+      page.render(first);
       main.replaceChildren(page.root);
+      restoreMonthFocus(header);
       document.title = `Buckets · ${budget.name} · Bucketeer`;
       return;
     }

@@ -41,10 +41,12 @@ for (const beforePreviousGoalMonth of [false, true]) {
         // Migration 2 gave the old accounts a register.
         core.addTransaction("a1", { date: "2026-11-20", amount: 5_000, category: { kind: "income" } });
         assert.equal(core.openAccount("a1").balance, 105_000);
+        // Migration 3 gave them the assignment ledger.
+        assert.equal(core.assign("k1", { month: "2026-11", amount: 5_000 }).assigned, 5_000);
       } finally {
         core.close();
       }
-      assert.equal(schemaVersion(filename), 2);
+      assert.equal(schemaVersion(filename), 3);
     });
   });
 }
@@ -55,8 +57,8 @@ test("an unversioned database from main is stamped, not rebuilt", () => {
     const database = new DatabaseSync(filename);
     try {
       // Stamping runs nothing; only migrations after 1 do.
-      assert.deepEqual(migrate(database), [2]);
-      assert.equal(Number(database.prepare("PRAGMA user_version").get()?.user_version), 2);
+      assert.deepEqual(migrate(database), [2, 3]);
+      assert.equal(Number(database.prepare("PRAGMA user_version").get()?.user_version), 3);
       assert.equal(Number(database.prepare("SELECT count(*) AS n FROM buckets").get()?.n), 3);
     } finally {
       database.close();
@@ -78,7 +80,7 @@ test("a fresh database is created at the latest version, and re-opening it runs 
   });
   const memory = new DatabaseSync(":memory:");
   try {
-    assert.deepEqual(migrate(memory), [1, 2]);
+    assert.deepEqual(migrate(memory), [1, 2, 3]);
     assert.deepEqual(migrate(memory), []);
   } finally {
     memory.close();

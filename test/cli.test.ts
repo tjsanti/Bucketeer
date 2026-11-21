@@ -407,7 +407,8 @@ test("CLI tx and ready commands record income with dollars, tab-separated text a
     assert.deepEqual(dinner, { code: 0, stdout: `${dinnerId}\t2026-11-20\tNoodle Bar\tEating out\t−120.00\t880.00`, stderr: "" });
     const back = await json("tx", "add", ...a, "--amount", "30", "--bucket", eatingOut.id);
     assert.deepEqual(back.category, { kind: "bucket", bucketId: eatingOut.id });
-    assert.deepEqual([core.openBucket(eatingOut.id).available, core.openBucket(eatingOut.id).spent], [-9_000, 12_000]);
+    const eatingOutNow = core.bucketMonth(budget.id, "2026-11").buckets.find((row) => row.id === eatingOut.id)!;
+    assert.deepEqual([eatingOutNow.available, eatingOutNow.spent], [-9_000, 12_000]);
     assert.deepEqual(await json("ready", "--budget", budget.id), { readyToAssign: 58_791 });
     assert.deepEqual((await json("tx", "edit", back.id, "--income")).category, { kind: "income" });
     core.archiveBucket(old.id);

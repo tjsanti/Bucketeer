@@ -106,6 +106,21 @@ const migrations: readonly string[] = [
     ) STRICT;
     CREATE INDEX transaction_lines_by_bucket ON transaction_lines(bucket_id);
   `,
+  // 3: the assignment ledger (ADR-0003). Every assign, take and rain is one signed entry for a bucket and month.
+  `
+    CREATE TABLE assignments (
+      id TEXT PRIMARY KEY,
+      budget_id TEXT NOT NULL REFERENCES budgets(id),
+      bucket_id TEXT NOT NULL REFERENCES buckets(id),
+      month TEXT NOT NULL ${monthCheck("month")},
+      amount INTEGER NOT NULL CHECK(amount <> 0 AND amount BETWEEN -${MAX_CENTS} AND ${MAX_CENTS}),
+      rain_id TEXT,
+      created_at TEXT NOT NULL
+    ) STRICT;
+    CREATE INDEX assignments_by_bucket ON assignments(bucket_id, month);
+    CREATE INDEX assignments_by_budget ON assignments(budget_id, month);
+    CREATE INDEX assignments_by_rain ON assignments(rain_id);
+  `,
 ];
 
 export const LATEST_VERSION = migrations.length;

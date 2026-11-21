@@ -2,8 +2,10 @@
 import { parseArgs } from "node:util";
 import { ApiError, createClient } from "./client.js";
 import type {
-  Account, AccountType, Bucket, BucketColour, BucketGroup, BucketTable, BucketType, Budget, Category, NewBucketInput, RegisterTransaction, Transaction,
+  Account, AccountType, Bucket, BucketColour, BucketGroup, BucketMonth, BucketTable, BucketType, Budget, Category, GroupMonth, NewBucketInput, RegisterTransaction,
+  Transaction,
 } from "./core/index.js";
+import { addMonths } from "./core/months.js";
 import { formatMoney, parseMoney } from "./core/money.js";
 import { BudgetError } from "./core/types.js";
 
@@ -37,6 +39,8 @@ const help = `Usage:
   bucketeer tx edit <id> [--amount <amount>] [--income | --bucket <id>] [--date <YYYY-MM-DD>] [--payee <payee>] [--memo <memo>] [--json]
   bucketeer tx delete <id> [--json]
   bucketeer ready --budget <id> [--json]
+  bucketeer month --budget <id> [--month <YYYY-MM>] [--json]
+  bucketeer assign <bucketId> --amount <amount> [--month <YYYY-MM>] [--json]
 
 Options:
   --url <url>    Server address (default: BUCKETEER_URL or http://localhost:3000)
@@ -50,10 +54,12 @@ Options:
   --bucket <id>  File the transaction to a bucket: money out is spent, money in is assigned to it
   --type <type>  For buckets: recurring (--amount per month), goal (--amount by --by), or plain (default)
   --amount <amount>
-                 Dollars: 160, 3,000.00 (signed for transactions; Income is positive)
+                 Dollars: 160, 3,000.00 (signed for transactions, where Income is positive;
+                 signed for assign, where -50 takes money back to Ready to assign)
   --by <month>   A goal's month, YYYY-MM
   --month <month>
-                 Only that month's transactions, then the balance at its end, YYYY-MM
+                 YYYY-MM: for tx list, only that month's transactions, then the balance at its end;
+                 for month and assign, the month (default: the server's current month)
   --colour <hue> sky, denim, blue, slate, teal, mint, green, forest,
                  lime, olive, sun, cocoa, peach, tangerine, rose, plum (default: least used)
   --position <n> 1 is first
@@ -242,6 +248,19 @@ try {
       const ready = await client.readyToAssign(budget());
       result = ready;
       if (!jsonOutput) console.log(formatMoney(ready.readyToAssign));
+    } else if (command === "month" && action === undefined) {
+      options(1, "budget", "month");
+      const view = await client.bucketMonth(budget(), values.month ?? await currentMonth(budget()));
+      result = view;
+      if (!jsonOutput) {
+        console.log([`${view.summary.month}\tReady to assign\t${formatMoney(view.summary.readyToAssign)}`, ...view.buckets.map((bucket) => formatBucketMonth(bucket, view.groups))].join("\n"));
+      }
+    } else if (command === "assign" && action !== undefined && values.amount !== undefined) {
+      options(2, "amount", "month");
+      const budgetId = (await client.openBucket(action)).budgetId;
+      const assigned = await client.assign(action, { month: values.month ?? await currentMonth(budgetId), amount: parseMoney(values.amount) });
+      result = assigned;
+      if (!jsonOutput) console.log(formatBucketMonth(assigned, (await client.bucketMonth(budgetId, assigned.month)).groups));
     } else if (command === "tx" && action === "list" && values.account !== undefined) {
       options(2, "account", "month");
       const names = await bucketNames((await client.openAccount(values.account)).budgetId);
@@ -286,6 +305,11 @@ try {
       const { transactions } = await client.listTransactions(transaction.accountId);
       const row = transactions.find((found) => found.id === transaction.id) ?? { ...transaction, runningBalance: 0 };
       return formatTransaction(row, await bucketNames(transaction.budgetId));
+    }
+
+    // The server's current month: its month range ends 12 months after it.
+    async function currentMonth(budgetId: string): Promise<string> {
+      return addMonths((await client.monthRange(budgetId)).last, -12);
     }
 
     async function bucketNames(budgetId: string): Promise<Map<string, string>> {
@@ -354,13 +378,23 @@ function formatGroup(group: BucketGroup): string {
   return `${group.id}\t${group.name}`;
 }
 
+function targetOf(bucket: Bucket): string {
+  return bucket.amount === null ? ""
+    : bucket.type === "goal" ? `${formatMoney(bucket.amount)} by ${bucket.goalMonth}`
+    : `${formatMoney(bucket.amount)}/month`;
+}
+
 // id, group, name, type, target, available, and "archived" when archived.
 function formatBucket(bucket: Bucket, table: BucketTable): string {
   const group = table.groups.find((candidate) => candidate.id === bucket.groupId)?.name ?? "";
-  const target = bucket.amount === null ? ""
-    : bucket.type === "goal" ? `${formatMoney(bucket.amount)} by ${bucket.goalMonth}`
-    : `${formatMoney(bucket.amount)}/month`;
-  const fields = [bucket.id, group, bucket.name, bucket.type, target, formatMoney(bucket.available)];
+  const fields = [bucket.id, group, bucket.name, bucket.type, targetOf(bucket), formatMoney(bucket.available)];
+  return (bucket.archived ? [...fields, "archived"] : fields).join("\t");
+}
+
+// group, name, target, assigned, spent, available in the month, and "archived" when archived.
+function formatBucketMonth(bucket: BucketMonth, groups: readonly GroupMonth[]): string {
+  const group = groups.find((candidate) => candidate.id === bucket.groupId)?.name ?? "";
+  const fields = [group, bucket.name, targetOf(bucket), formatMoney(bucket.assigned), formatMoney(bucket.spent), formatMoney(bucket.available)];
   return (bucket.archived ? [...fields, "archived"] : fields).join("\t");
 }
 

@@ -3,6 +3,8 @@ import type { SQLOutputValue } from "node:sqlite";
 import { openDatabase } from "./database.js";
 import { accountBalance, accountKey, readAccountEdit, readNewAccount, sumReadyToAssign } from "./accounts.js";
 import { readBudgetName } from "./budget.js";
+import { assertAssignable, monthFigures, readAssignment, shownIn, totalsOf } from "./assignments.js";
+import type { MonthActivity } from "./assignments.js";
 import { bucketAvailable, nameKey, readBucketEdit, readBucketMove, readBucketRevert, readGroupName, readMove, readNewBucket, resolveShape } from "./buckets.js";
 import type { BucketFields, GroupChoice } from "./buckets.js";
 import { leastUsedColour } from "./colours.js";
@@ -13,14 +15,15 @@ import { assertConsistent, readNewTransaction, readTransactionEdit, sameCategory
 import type { BucketColour } from "./colours.js";
 import { BudgetError } from "./types.js";
 import type {
-  Account, AccountType, ArchiveResult, Bucket, BucketGroup, BucketTable, BucketType, Budget, Category, Health, PayeeHistory, RegisterTransaction, Transaction,
+  Account, AccountType, ArchiveResult, Bucket, BucketGroup, BucketMonth, BucketMonthView, BucketTable, BucketType, Budget, Category, Health, PayeeHistory,
+  RegisterTransaction, Transaction,
 } from "./types.js";
 
 export { BudgetError } from "./types.js";
 export type { BucketColour } from "./colours.js";
 export type { AccountMonth, MonthRange } from "./months.js";
 export type {
-  Account, AccountEditInput, AccountType, ArchiveResult, Bucket, BucketEditInput, BucketGroup, BucketMoveInput, BucketRevertInput, BucketTable, BucketType,
+  Account, AccountEditInput, AccountType, ArchiveResult, AssignInput, Bucket, BucketEditInput, BucketMonth, BucketMonthView, GroupMonth, GroupTotals, BucketGroup, BucketMoveInput, BucketRevertInput, BucketTable, BucketType,
   Budget, BudgetErrorCode, BudgetErrorField, BudgetNameInput, Category, GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput,
   NewTransactionInput, PayeeHistory, RegisterTransaction, Transaction, TransactionEditInput,
 } from "./types.js";
@@ -109,8 +112,7 @@ function bucketFromRow(row: Record<string, SQLOutputValue>): Bucket {
     type: String(row.type) as BucketType,
     amount: row.amount === null ? null : Number(row.amount),
     goalMonth: row.goal_month === null ? null : String(row.goal_month),
-    available: bucketAvailable({ moneyIn: Number(row.money_in), moneyOut: Number(row.money_out) }),
-    spent: Number(row.money_out),
+    available: bucketAvailable({ ledger: Number(row.ledger), moneyIn: Number(row.money_in), moneyOut: Number(row.money_out) }),
     order: Number(row.sort_order),
     archived: row.archived_at !== null,
     archivedAt: row.archived_at === null ? null : String(row.archived_at),
@@ -149,15 +151,17 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   const orderGroup = database.prepare("UPDATE bucket_groups SET sort_order = ? WHERE id = ?");
   const touchGroup = database.prepare("UPDATE bucket_groups SET updated_at = ? WHERE id = ?");
   const deleteGroupRow = database.prepare("DELETE FROM bucket_groups WHERE id = ?");
-  // A bucket's money: its whole transactions plus its split lines, in and out kept apart so Spent stays gross.
+  // A bucket's money in the current month (the first parameter): its whole transactions plus its split lines,
+  // in and out kept apart, and its ledger entries up to that month. Transactions are never dated later.
   const bucketLines = "SELECT amount FROM transactions WHERE bucket_id = buckets.id UNION ALL SELECT amount FROM transaction_lines WHERE bucket_id = buckets.id";
   const withMoney = `buckets.*,
+    (SELECT COALESCE(SUM(amount), 0) FROM assignments WHERE bucket_id = buckets.id AND month <= ?) AS ledger,
     (SELECT COALESCE(SUM(amount), 0) FROM (${bucketLines}) WHERE amount > 0) AS money_in,
     (SELECT COALESCE(-SUM(amount), 0) FROM (${bucketLines}) WHERE amount < 0) AS money_out`;
-  const findBucket = database.prepare(`SELECT ${withMoney} FROM buckets WHERE id = ?`);
+  const findBucketRow = database.prepare(`SELECT ${withMoney} FROM buckets WHERE id = ?`);
   // Active buckets in group and position order, then archived buckets, also by group and position
   // (those whose group was deleted first), with the archive date breaking ties.
-  const bucketsOf = database.prepare(`
+  const bucketRows = database.prepare(`
     SELECT ${withMoney} FROM buckets LEFT JOIN bucket_groups ON bucket_groups.id = buckets.group_id
     WHERE buckets.budget_id = ?
     ORDER BY buckets.archived_at IS NOT NULL, bucket_groups.sort_order, buckets.sort_order, buckets.archived_at, buckets.created_at, buckets.id`);
@@ -182,6 +186,23 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   const payeeRows = database.prepare("SELECT payee, kind, bucket_id FROM transactions WHERE budget_id = ? AND payee <> '' ORDER BY date DESC, created_at DESC, rowid DESC");
   const deleteTransactionRow = database.prepare("DELETE FROM transactions WHERE id = ?");
   const incomeOf = database.prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE budget_id = ? AND kind = 'income'");
+  const ledgerOf = database.prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM assignments WHERE budget_id = ?");
+  const insertAssignment = database.prepare("INSERT INTO assignments (id, budget_id, bucket_id, month, amount, rain_id, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?)");
+  // Each bucket's activity per month up to a month: ledger entries, then money in and out of whole transactions
+  // and of split lines, by the month they are dated. Parameters: budget, month, three times.
+  const activityOf = database.prepare(`
+    SELECT bucket_id, month, SUM(ledger) AS ledger, SUM(money_in) AS money_in, SUM(money_out) AS money_out, COUNT(*) AS entries FROM (
+      SELECT bucket_id, month, amount AS ledger, 0 AS money_in, 0 AS money_out FROM assignments WHERE budget_id = ? AND month <= ?
+      UNION ALL
+      SELECT bucket_id, substr(date, 1, 7), 0, MAX(amount, 0), MAX(-amount, 0) FROM transactions
+      WHERE budget_id = ? AND bucket_id IS NOT NULL AND substr(date, 1, 7) <= ?
+      UNION ALL
+      SELECT lines.bucket_id, substr(parent.date, 1, 7), 0, MAX(lines.amount, 0), MAX(-lines.amount, 0)
+      FROM transaction_lines AS lines JOIN transactions AS parent ON parent.id = lines.transaction_id
+      WHERE parent.budget_id = ? AND substr(parent.date, 1, 7) <= ?
+    ) GROUP BY bucket_id, month ORDER BY bucket_id, month`);
+  const findBucket = { get: (id: string) => findBucketRow.get(thisMonth(), id) };
+  const bucketsOf = { all: (budgetId: string) => bucketRows.all(thisMonth(), budgetId) };
 
   // Reads and writes that depend on each other (name uniqueness, closing) run in one immediate transaction.
   function transaction<T>(work: () => T): T {
@@ -380,6 +401,40 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
     };
   }
 
+  function readyToAssign(budgetId: string): number {
+    return sumReadyToAssign(listAccounts(budgetId), Number(incomeOf.get(budgetId)?.total), Number(ledgerOf.get(budgetId)?.total));
+  }
+
+  /** Each bucket's activity per month, up to and including `month`, oldest first. */
+  function activityByBucket(budgetId: string, month: string): Map<string, MonthActivity[]> {
+    const byBucket = new Map<string, MonthActivity[]>();
+    for (const row of activityOf.all(budgetId, month, budgetId, month, budgetId, month)) {
+      const id = String(row.bucket_id);
+      const list = byBucket.get(id) ?? [];
+      list.push({ month: String(row.month), ledger: Number(row.ledger), moneyIn: Number(row.money_in), moneyOut: Number(row.money_out), entries: Number(row.entries) });
+      byBucket.set(id, list);
+    }
+    return byBucket;
+  }
+
+  function withFigures(bucket: Bucket, activity: readonly MonthActivity[], month: string): BucketMonth {
+    return { ...bucket, month, ...monthFigures(activity, month) };
+  }
+
+  function bucketInMonth(bucket: Bucket, month: string): BucketMonth {
+    return withFigures(bucket, activityByBucket(bucket.budgetId, month).get(bucket.id) ?? [], month);
+  }
+
+  function bucketMonthOf(budgetId: string, month: string): BucketMonthView {
+    const activity = activityByBucket(budgetId, month);
+    const buckets = bucketsOf.all(budgetId).map(bucketFromRow)
+      .filter((bucket) => shownIn(bucket, activity.get(bucket.id) ?? [], month))
+      .map((bucket) => withFigures(bucket, activity.get(bucket.id) ?? [], month));
+    const groups = groupsOf.all(budgetId).map(groupFromRow)
+      .map((group) => ({ ...group, ...totalsOf(buckets.filter((bucket) => bucket.groupId === group.id)) }));
+    return { summary: { month, readyToAssign: readyToAssign(budgetId) }, groups, buckets };
+  }
+
   function openBudget(id: string): Budget {
     const row = find.get(id);
     if (!row) throw new BudgetError("not_found", "Budget not found.");
@@ -450,7 +505,22 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
     // Owner rule: an account's starting balance counts as money to assign, and a card's negative
     // opening balance reduces it. Closed accounts are included.
     readyToAssign(budgetId: string): number {
-      return sumReadyToAssign(listAccounts(budgetId), Number(incomeOf.get(budgetId)?.total));
+      return readyToAssign(budgetId);
+    },
+    bucketMonth(budgetId: string, month: string): BucketMonthView {
+      const chosen = readMonth(month, monthRange(budgetId));
+      return bucketMonthOf(budgetId, chosen);
+    },
+    /** Adds a signed ledger entry: positive assigns from Ready to assign, negative takes back to it. */
+    assign(bucketId: string, input: unknown): BucketMonth {
+      return transaction(() => {
+        const bucket = openBucket(bucketId);
+        const entry = readAssignment(input, monthRange(bucket.budgetId));
+        const before = bucketInMonth(bucket, entry.month);
+        assertAssignable(bucket, entry, readyToAssign(bucket.budgetId), before.available);
+        insertAssignment.run(randomUUID(), bucket.budgetId, bucket.id, entry.month, entry.amount, timestamp());
+        return bucketInMonth(openBucket(bucketId), entry.month);
+      });
     },
     addTransaction(accountId: string, input: unknown): Transaction {
       const fields = readNewTransaction(input);

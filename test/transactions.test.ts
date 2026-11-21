@@ -157,13 +157,14 @@ test("money out of a bucket is Spent; money back in is assigned to it and never 
     const dinner = core.addTransaction(visa.id, { payee: "Noodle Bar", amount: -12_000, category: { kind: "bucket", bucketId: eatingOut.id } });
     assert.deepEqual(dinner.category, { kind: "bucket", bucketId: eatingOut.id });
     assert.deepEqual(core.openTransaction(dinner.id).category, dinner.category);
-    let bucket = core.openBucket(eatingOut.id);
+    const thisMonth = () => core.bucketMonth(budget.id, core.today().slice(0, 7)).buckets.find((row) => row.id === eatingOut.id)!;
+    let bucket = thisMonth();
     assert.deepEqual([bucket.available, bucket.spent], [-12_000, 12_000]);
     assert.equal(core.readyToAssign(budget.id), 58_791);
     assert.equal(core.openAccount(visa.id).balance, -53_209);
 
     core.addTransaction(checking.id, { payee: "Friend", amount: 3_000, category: { kind: "bucket", bucketId: eatingOut.id } });
-    bucket = core.openBucket(eatingOut.id);
+    bucket = thisMonth();
     assert.deepEqual([bucket.available, bucket.spent], [-9_000, 12_000]);
     assert.equal(core.readyToAssign(budget.id), 58_791);
     assert.deepEqual(core.listBucketTable(budget.id).buckets.map((row) => [row.name, row.available]), [["Eating out", -9_000], ["Groceries", 0]]);

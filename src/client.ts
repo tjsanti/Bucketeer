@@ -1,5 +1,5 @@
 import type {
-  Account, AccountMonth, MonthRange, AccountEditInput, ArchiveResult, Bucket, BucketEditInput, BucketGroup, BucketRevertInput, BucketMoveInput, BucketTable, Budget, BudgetNameInput,
+  Account, AccountMonth, MonthRange, AccountEditInput, ArchiveResult, AssignInput, Bucket, BucketMonth, BucketMonthView, BucketEditInput, BucketGroup, BucketRevertInput, BucketMoveInput, BucketTable, Budget, BudgetNameInput,
   GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput, NewTransactionInput, PayeeHistory, RegisterTransaction, Transaction, TransactionEditInput,
 } from "./core/index.js";
 
@@ -85,6 +85,8 @@ export function createClient(baseUrl: string) {
     monthRange: (budgetId: string) => request<MonthRange>(`${budgetPath(budgetId)}/month-range`),
     accountBalances: (budgetId: string, month: string) =>
       request<Record<string, number>>(`${budgetPath(budgetId)}/account-balances?month=${encodeURIComponent(month)}`),
+    bucketMonth: (budgetId: string, month: string) => request<BucketMonthView>(`${budgetPath(budgetId)}/months/${encodeURIComponent(month)}`),
+    assign: (bucketId: string, input: AssignInput) => request<BucketMonth>(`${bucket(bucketId)}/assign`, send("POST", input)),
     accountMonth: (accountId: string, month: string) => request<AccountMonth>(`${account(accountId)}/months/${encodeURIComponent(month)}`),
   };
 }

@@ -36,3 +36,35 @@ test("HTTP exposes the month range, account months and month-end balances", asyn
     core.close();
   }
 });
+
+test("HTTP serves a month of buckets and assigns into a month", async () => {
+  const core = openBucketeer(":memory:", { now: () => new Date("2026-11-20T12:00:00.000Z"), timeZone: "UTC" });
+  const server = createApi(core);
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const client = createClient(`http://127.0.0.1:${address.port}`);
+  try {
+    const budget = core.createBudget({ name: "Household" });
+    core.createAccount(budget.id, { name: "Checking", type: "checking", startingBalance: 200_000, startingDate: "2026-11-01" });
+    const rent = core.createBucket(budget.id, { name: "Rent", newGroupName: "Fixed", type: "recurring", amount: 165_000 });
+
+    const assigned = await client.assign(rent.id, { month: "2026-12", amount: 165_000 });
+    assert.deepEqual(assigned, core.bucketMonth(budget.id, "2026-12").buckets[0]);
+    assert.deepEqual([assigned.month, assigned.assigned, assigned.available], ["2026-12", 165_000, 165_000]);
+    assert.deepEqual(await client.bucketMonth(budget.id, "2026-12"), core.bucketMonth(budget.id, "2026-12"));
+    assert.equal((await client.bucketMonth(budget.id, "2026-11")).summary.readyToAssign, 35_000);
+
+    await assert.rejects(client.assign(rent.id, { month: "2026-12", amount: 35_001 }), { code: "not_enough_ready", message: "Only $350.00 is ready to assign.", field: "amount" });
+    await assert.rejects(client.assign(rent.id, { month: "2026-11", amount: -1 }), { code: "not_enough_available" });
+    await assert.rejects(client.assign(rent.id, { month: "2030-01", amount: 1 }), { code: "invalid_input", field: "month" });
+    await assert.rejects(client.assign("missing", { month: "2026-11", amount: 1 }), { code: "not_found" });
+    await assert.rejects(client.bucketMonth(budget.id, "2030-01"), { code: "invalid_input" });
+    const status = await fetch(`http://127.0.0.1:${address.port}/api/buckets/${rent.id}/assign`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ month: "2026-11", amount: 999_999_999 }) });
+    assert.equal(status.status, 409);
+  } finally {
+    server.close();
+    core.close();
+  }
+});

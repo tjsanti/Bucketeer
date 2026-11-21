@@ -73,16 +73,54 @@ export interface Bucket {
   amount: number | null;
   /** "YYYY-MM", goal only. */
   goalMonth: string | null;
-  /** Integer cents: the sum of every transaction filed to the bucket, whatever its date. The ledger adds to it later. */
+  /** Integer cents: the bucket's Available in the current month (every transaction plus ledger entries up to this month). */
   available: number;
-  /** Integer cents ≥ 0: the gross money out of the bucket, whatever its date. Money back in never reduces it (ADR-0003). */
-  spent: number;
   /** Position within its group. */
   order: number;
   archived: boolean;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** A bucket's figures in one month (ADR-0003, ADR-0004). All integer cents. */
+export interface BucketMonth extends Bucket {
+  /** "YYYY-MM". */
+  month: string;
+  /** Ledger entries this month plus money paid directly into the bucket this month. */
+  assigned: number;
+  /** ≥ 0: the gross money out this month. Money back in never reduces it. */
+  spent: number;
+  /** The previous month's Available, negative included. */
+  carriedIn: number;
+  /** carriedIn + assigned − spent, in this month (this replaces the current-month figure on Bucket). */
+  available: number;
+}
+
+export interface GroupTotals {
+  assigned: number;
+  spent: number;
+  available: number;
+}
+
+/** A group with the totals of the buckets it shows that month. */
+export type GroupMonth = BucketGroup & GroupTotals;
+
+/** The Buckets page for one month. */
+export interface BucketMonthView {
+  /** The month's summary. Ready to assign is the pool, the same figure in every month. */
+  summary: { month: string; readyToAssign: number };
+  /** Every group, in order, with its month totals. */
+  groups: GroupMonth[];
+  /** Active buckets, then archived ones with a ledger entry or a transaction that month, in bucket order. */
+  buckets: BucketMonth[];
+}
+
+export interface AssignInput {
+  /** "YYYY-MM", inside the month range. */
+  month: string;
+  /** Signed integer cents, never 0: positive assigns, negative takes. */
+  amount: number;
 }
 
 export interface BucketTable {
@@ -166,7 +204,7 @@ export interface PayeeHistory {
   category: Category;
 }
 
-export type BudgetErrorCode = "invalid_input" | "not_found" | "name_taken" | "balance_not_zero" | "group_not_empty" | "bucket_overspent" | "bucket_changed" | "account_closed" | "bucket_archived" | "bucket_has_money";
+export type BudgetErrorCode = "invalid_input" | "not_found" | "name_taken" | "balance_not_zero" | "group_not_empty" | "bucket_overspent" | "bucket_changed" | "account_closed" | "bucket_archived" | "bucket_has_money" | "not_enough_ready" | "not_enough_available";
 
 /** The input a validation error belongs to, so clients can mark the right field without reading the message. */
 export type BudgetErrorField = "name" | "group" | "colour" | "type" | "amount" | "month" | "date" | "payee" | "memo" | "category";

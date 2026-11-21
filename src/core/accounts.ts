@@ -12,9 +12,10 @@ export function accountBalance(account: { startingBalance: number; activity: num
 }
 
 // Owner rule: an account's starting balance counts as money to assign, and a card's negative
-// opening balance reduces it. Closed accounts are included. Income adds to it (ADR-0002).
-export function sumReadyToAssign(accounts: readonly { startingBalance: number }[], income: number): number {
-  return accounts.reduce((total, account) => total + account.startingBalance, income);
+// opening balance reduces it. Closed accounts are included. Income adds to it (ADR-0002), and every entry
+// in the assignment ledger, in any month, takes from it (ADR-0001, ADR-0003). It may be negative.
+export function sumReadyToAssign(accounts: readonly { startingBalance: number }[], income: number, assigned: number): number {
+  return accounts.reduce((total, account) => total + account.startingBalance, income) - assigned;
 }
 
 export function accountKey(name: string): string {
