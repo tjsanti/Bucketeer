@@ -11,6 +11,8 @@ import { categoryDot, categoryLabel, categoryPicker, sameCategory, transferLabel
 import type { CategoryPicker } from "./category-picker.js";
 import { el, icon, messageOf, setNote } from "./dom.js";
 import { segmented, uid } from "./sheet.js";
+import { SplitError, splitLines } from "./split-lines.js";
+import type { SplitLines } from "./split-lines.js";
 
 export interface RegisterContext {
   client: ReturnType<typeof createClient>;
@@ -76,6 +78,8 @@ interface Draft {
   picker: CategoryPicker;
   memo: HTMLInputElement;
   amount: HTMLInputElement;
+  /** A split's lines; shown while the category is Split. */
+  splits: SplitLines;
   sign(): Sign;
   setSign(sign: Sign): void;
   load(transaction: RegisterTransaction | null, keepDate?: boolean): void;
@@ -117,6 +121,14 @@ function createDraft(config: {
   inline: boolean;
   onSign: (sign: Sign) => void;
 }): Draft {
+  const total = (): number | null => {
+    try {
+      return Math.abs(parseMoney(amount.value));
+    } catch {
+      return null;
+    }
+  };
+  const splits = splitLines({ table: config.table, total, phone: config.inline });
   let sign: Sign = -1;
   let categoryChosen = false;
   let loaded: RegisterTransaction | null = null;
@@ -145,6 +157,13 @@ function createDraft(config: {
       categoryChosen = true;
       if (category.kind === "income") setSign(1);
       paintPreview();
+      if (category.kind !== "split") {
+        splits.close();
+        return;
+      }
+      if (!splits.isOpen()) splits.open();
+      // The total comes first; then the lines.
+      queueMicrotask(() => (total() ? splits.first() ?? amount : amount).focus());
     },
   });
 
@@ -174,9 +193,11 @@ function createDraft(config: {
   // A pasted or autofilled leading sign sets the sign too.
   amount.addEventListener("input", () => {
     const match = /^\s*([-+−])/.exec(amount.value);
-    if (!match) return;
-    setSign(match[1] === "+" ? 1 : -1);
-    amount.value = amount.value.replace(/^\s*[-+−]\s*/, "");
+    if (match) {
+      setSign(match[1] === "+" ? 1 : -1);
+      amount.value = amount.value.replace(/^\s*[-+−]\s*/, "");
+    }
+    splits.update();
   });
   payee.addEventListener("input", () => {
     if (categoryChosen) return;
@@ -185,16 +206,21 @@ function createDraft(config: {
     if (!known) return;
     const category = known.category;
     // History never offers an archived bucket, or a transfer to an account that isn't offered.
-    if (category.kind === "bucket" && !config.table().buckets.some((bucket) => bucket.id === category.bucketId && !bucket.archived)) return;
+    const active = (bucketId: string) => config.table().buckets.some((bucket) => bucket.id === bucketId && !bucket.archived);
+    if (category.kind === "bucket" && !active(category.bucketId)) return;
+    if (category.kind === "split" && !category.lines.every((line) => active(line.bucketId))) return;
     if (category.kind === "transfer" && !config.transferAccounts().some((account) => account.id === category.accountId)) return;
     picker.set(category);
     if (category.kind === "income") setSign(1);
     paintPreview();
+    // A remembered split brings back its buckets, without amounts.
+    if (category.kind === "split") splits.open(category.lines.map((line) => ({ bucketId: line.bucketId, amount: null })));
+    else splits.close();
   });
 
   const fields: Record<string, HTMLInputElement> = { date, payee, memo, amount, category: picker.input };
   const draft: Draft = {
-    date, payee, picker, memo, amount, preview,
+    date, payee, picker, memo, amount, splits, preview,
     sign: () => sign,
     setSign,
     load(transaction, keepDate = false) {
@@ -206,6 +232,9 @@ function createDraft(config: {
       if (transaction) date.value = transaction.date;
       else if (!keepDate || !date.value) date.value = config.defaultDate();
       picker.set(transaction?.category ?? null);
+      const category = transaction?.category;
+      if (category?.kind === "split") splits.open(category.lines.map((line) => ({ bucketId: line.bucketId, amount: Math.abs(line.amount), memo: line.memo })));
+      else splits.close();
       setSign(transaction && transaction.amount > 0 ? 1 : -1);
       paintPreview();
       draft.clearMarks();
@@ -217,8 +246,9 @@ function createDraft(config: {
       } catch (error) {
         throw new DraftError(messageOf(error), "amount");
       }
-      const category = picker.value();
-      if (!category) throw new DraftError("Choose a category.", "category");
+      const chosen = picker.value();
+      if (!chosen) throw new DraftError("Choose a category.", "category");
+      const category: CategoryInput = chosen.kind === "split" ? { kind: "split", lines: splits.read(sign) } : chosen;
       return { date: date.value, payee: payee.value, memo: memo.value, amount: cents * sign, category };
     },
     mark(field) {
@@ -295,6 +325,7 @@ export function createRegisterPage(ctx: RegisterContext) {
     const node = el("form", { class: `editor ${kind === "new" ? "entry" : "edit"}`, novalidate: true, "aria-label": kind === "new" ? "New transaction" : "Edit transaction" },
       el("div", { class: "erow" }, cell(0, draft.date), cell(1, draft.payee), cell(2, draft.picker.root), cell(3, draft.memo),
         cell(4, el("div", { class: "amt-wrap" }, sign, draft.amount)), el("div", { class: "c bal" })),
+      draft.splits.root,
       footer);
     node.addEventListener("submit", (event) => event.preventDefault());
     return { node, draft, footer };
@@ -329,6 +360,11 @@ export function createRegisterPage(ctx: RegisterContext) {
   }
 
   function showError(draft: Draft, error: unknown): void {
+    if (error instanceof SplitError) {
+      draft.splits.showNote(error);
+      (error.target ?? draft.amount).focus();
+      return;
+    }
     const field = error instanceof DraftError ? error.field : fieldOf(error);
     draft.mark(field);
     setNote(note, messageOf(error));
@@ -530,6 +566,7 @@ export function createRegisterPage(ctx: RegisterContext) {
         labelled("Payee", draft.payee, draft.payee),
         labelled("Category", draft.picker.root, draft.picker.input),
         draft.preview,
+        draft.splits.root,
         el("div", { class: "two" }, labelled("Date", draft.date, draft.date), labelled("Memo", draft.memo, draft.memo))),
       el("div", { class: "sheet-footer" }, primary, el("div", { class: "frow2" }, secondary)));
     const dialog = el("dialog", { class: "sheet tx-sheet", "aria-labelledby": titleId }, form);
@@ -544,6 +581,11 @@ export function createRegisterPage(ctx: RegisterContext) {
       try {
         await work();
       } catch (error) {
+        if (error instanceof SplitError) {
+          draft.splits.showNote(error);
+          (error.target ?? draft.amount).focus();
+          return;
+        }
         draft.mark(error instanceof DraftError ? error.field : fieldOf(error));
         setStatus("err", messageOf(error));
       } finally {

@@ -123,16 +123,26 @@ export interface ArchiveResult {
 
 /**
  * What a transaction is filed under. Income is always positive; a bucket takes either sign, where money in counts
- * as assigned to it, never as negative spending (ADR-0003). A transfer names the other account of the pair, and both
- * sides share its transferId; it touches no bucket and never Ready to assign.
+ * as assigned to it, never as negative spending (ADR-0003). A split spreads one transaction over two or more
+ * buckets. A transfer names the other account of the pair, and both sides share its transferId; it touches no
+ * bucket and never Ready to assign.
  */
 export type Category =
   | { kind: "income" }
   | { kind: "bucket"; bucketId: string }
+  | { kind: "split"; lines: SplitLine[] }
   | { kind: "transfer"; accountId: string; transferId: string };
 
 /** A category as a client sends it: the server assigns a new transfer's transferId, so it may be left out. */
 export type CategoryInput = Exclude<Category, { kind: "transfer" }> | { kind: "transfer"; accountId: string; transferId?: string };
+
+/** One bucket's share of a split: the same sign as the transaction, never 0; a split's lines sum to its amount. */
+export interface SplitLine {
+  bucketId: string;
+  amount: number;
+  /** 0 to 500 code points, trimmed. */
+  memo: string;
+}
 
 export interface Transaction {
   id: string;

@@ -158,3 +158,18 @@ test("recent activity is the budget's newest transactions, each transfer once by
     core.close();
   }
 });
+
+test("a split refiled as a transfer gives its buckets their money back", () => {
+  const { core, budget, checking, visa } = household();
+  try {
+    const group = core.createGroup(budget.id, { name: "Everyday" });
+    const food = core.createBucket(budget.id, { name: "Food", groupId: group.id, type: "plain" });
+    const fuel = core.createBucket(budget.id, { name: "Fuel", groupId: group.id, type: "plain" });
+    const split = core.addTransaction(checking.id, { amount: -8_000, category: { kind: "split", lines: [
+      { bucketId: food.id, amount: -5_000, memo: "" }, { bucketId: fuel.id, amount: -3_000, memo: "" }] } });
+    core.editTransaction(split.id, { category: transfer(visa.id) });
+    assert.deepEqual([core.openBucket(food.id).available, core.openBucket(fuel.id).available, core.openAccount(visa.id).balance], [0, 0, -33_209]);
+  } finally {
+    core.close();
+  }
+});

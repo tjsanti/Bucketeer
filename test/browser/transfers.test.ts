@@ -41,7 +41,7 @@ test("desktop: a transfer from the picker previews the other balance, and Recent
   await list.waitFor();
   // Transfer accounts come last; from Checking, the card is first. This account is never offered.
   assert.deepEqual((await list.locator(".og, .opt").evaluateAll((nodes) => nodes.map((node) => node.classList.contains("og") ? node.textContent : (node as HTMLElement).innerText))).map(compact),
-    ["Income", "Everyday", `Groceries ${MINUS}25.00`, "Transfer", `Visa ${MINUS}412.09`, "Savings 0.00"]);
+    ["Income", "Split", "Everyday", `Groceries ${MINUS}25.00`, "Transfer", `Visa ${MINUS}412.09`, "Savings 0.00"]);
   await category.fill("vis");
   await category.press("Enter");
   assert.equal(await category.inputValue(), "Transfer · Visa");

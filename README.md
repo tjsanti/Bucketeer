@@ -14,7 +14,7 @@ Early and in active development. Today you can:
 - **spend** from buckets and get money back into them, on desktop (an inline entry row, editing rows in place) and on a phone (a bottom sheet), with Undo for every add, edit and delete;
 - organise **buckets** into **groups**: recurring (a monthly amount), goal (an amount by a month), or plain; reorder them by drag, keyboard, or the phone Reorder mode; archive and restore them.
 
-Splits, assigning money to buckets, and the month view are still to come, so a bucket's Available moves only with the transactions filed to it. Expect the data model to change between releases.
+Assigning money to buckets and the month view are still to come, so a bucket's Available moves only with the transactions filed to it. Expect the data model to change between releases.
 
 ## Run with Docker
 
@@ -72,6 +72,7 @@ bucketeer tx add --account <account-id> --amount 2000 --income --payee "Acme Pay
 bucketeer tx add --account <account-id> --amount 50 --income --date 2026-11-14 --json
 bucketeer tx add --account <account-id> --amount -120 --bucket <bucket-id> --payee "Noodle Bar" --json
 bucketeer tx add --account <account-id> --amount 30 --bucket <bucket-id> --payee "Friend" --json
+bucketeer tx add --account <account-id> --amount -80 --line <bucket-id>:-50 --line <bucket-id>:-30 --payee "Superstore" --json
 bucketeer tx add --account <checking-id> --amount -412.09 --transfer <card-id> --memo "November statement" --json
 bucketeer tx list --account <account-id> --json
 bucketeer tx list --account <account-id> --month 2026-10
@@ -80,15 +81,19 @@ bucketeer tx delete <transaction-id> --json
 bucketeer ready --budget <id> --json
 ```
 
-Every transaction needs exactly one category option: `--income`, `--bucket <id>` or `--transfer <account-id>`. Giving none, or both, is a usage error. Income always has a positive amount and adds to Ready to assign, which is every account's starting balance plus all Income (a card's starting debt reduces it). Ready to assign can be negative.
+Every transaction needs exactly one category option: `--income`, `--bucket <id>`, a split given as repeated `--line <bucket-id>:<amount>`, or `--transfer <account-id>`. Giving none, or two kinds, is a usage error. Income always has a positive amount and adds to Ready to assign, which is every account's starting balance plus all Income (a card's starting debt reduces it). Ready to assign can be negative.
 
-A bucket takes either sign. Money out counts as the bucket's Spent; money back in (a reimbursement) counts as assigned to that bucket and never reduces Spent. Neither changes Ready to assign. A bucket's `available` is the sum of its transactions and `spent` is its gross money out, whatever their dates. An archived bucket takes no new transactions and can't be chosen in an edit (`bucket_archived`), but a transaction already filed to it keeps it and can still be edited.
+A bucket takes either sign. Money out counts as the bucket's Spent; money back in (a reimbursement) counts as assigned to that bucket and never reduces Spent. Neither changes Ready to assign. A bucket's `available` is the sum of its transactions and `spent` is its gross money out, whatever their dates.
+
+A split files one transaction to two or more buckets. Its lines share the transaction's sign and add up to its amount exactly (`invalid_input` otherwise); each line counts toward its own bucket's Spent (or as assigned, if positive) and Available. Income is never a split line. `tx edit --line …` replaces all of a split's lines, so changing a split's amount means giving its lines again. In `--json` a split's category is `{ "kind": "split", "lines": [{ "bucketId", "amount", "memo" }] }`.
+
+An archived bucket takes no new transactions and can't be chosen in an edit (`bucket_archived`), but a transaction already filed to it keeps it and can still be edited.
 
 A transfer moves money to another account in the same budget (a negative amount) or from it (a positive one), as a linked pair: the other account gets the opposite amount on the same date, with the memo copied. It touches no bucket and doesn't change Ready to assign. Both accounts must be open and different (`invalid_input`, `account_closed`). Editing the amount or date of either side changes both; the payee and memo are each side's own. Deleting either side deletes both. Refiling a transaction to or from a transfer creates or removes the other side.
 
 `--date` defaults to today in the server's time zone. A transaction can't be dated after today or before the first day of the month twelve months before the budget began; a date before the account's starting date is fine and counts toward its balance. An account's balance is its starting balance plus all of its transactions. A closed account takes no new transactions. Payees hold up to 120 characters and memos up to 500, both trimmed.
 
-`tx list` prints the register newest first as `id`, `date`, `payee`, `category` (`Income`, the bucket's name, or `Transfer → Visa` naming the other account), `amount` and the running `balance`, tab-separated; `tx add` and `tx edit` print the same line for their transaction. `--json` gives `{ "transactions": [...] }` with integer cents and a `runningBalance` on each. With `--month YYYY-MM`, it lists only that month's transactions (running balances still count every earlier one) and ends with `Balance at end of YYYY-MM` and the account's balance at the end of that month; `--json` gives `{ "balance": ..., "transactions": [...] }`. A month must lie between twelve months before the budget began and twelve months after the current month.
+`tx list` prints the register newest first as `id`, `date`, `payee`, `category` (`Income`, the bucket's name, `Split (n)`, or `Transfer → Visa` naming the other account), `amount` and the running `balance`, tab-separated; `tx add` and `tx edit` print the same line for their transaction. `--json` gives `{ "transactions": [...] }` with integer cents and a `runningBalance` on each. With `--month YYYY-MM`, it lists only that month's transactions (running balances still count every earlier one) and ends with `Balance at end of YYYY-MM` and the account's balance at the end of that month; `--json` gives `{ "balance": ..., "transactions": [...] }`. A month must lie between twelve months before the budget began and twelve months after the current month.
 
 ### Buckets and groups
 

@@ -9,7 +9,7 @@ import { leastUsedColour } from "./colours.js";
 import { calendarIn, defaultTimeZone } from "./time.js";
 import { monthRangeOf, readMonth } from "./months.js";
 import type { AccountMonth, MonthRange } from "./months.js";
-import { assertConsistent, readNewTransaction, readTransactionEdit, sameCategory } from "./transactions.js";
+import { assertConsistent, bucketIdsOf, readNewTransaction, readTransactionEdit } from "./transactions.js";
 import type { BucketColour } from "./colours.js";
 import { BudgetError } from "./types.js";
 import type {
@@ -22,7 +22,7 @@ export type { AccountMonth, MonthRange } from "./months.js";
 export type {
   Account, AccountEditInput, AccountType, ArchiveResult, Bucket, BucketEditInput, BucketGroup, BucketMoveInput, BucketRevertInput, BucketTable, BucketType,
   Budget, BudgetErrorCode, BudgetErrorField, BudgetNameInput, Category, CategoryInput, GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput,
-  NewTransactionInput, PayeeHistory, RegisterTransaction, Transaction, TransactionEditInput,
+  NewTransactionInput, PayeeHistory, RegisterTransaction, SplitLine, Transaction, TransactionEditInput,
 } from "./types.js";
 
 export interface BucketeerOptions {
@@ -59,8 +59,14 @@ function accountFromRow(row: Record<string, SQLOutputValue>): Account {
   };
 }
 
-function categoryFromRow(row: Record<string, SQLOutputValue>): Category {
+type Row = Record<string, SQLOutputValue>;
+
+/** A row's category; a split's lines come from transaction_lines, in order. */
+function categoryFromRow(row: Row, lines: () => Row[]): Category {
   if (row.kind === "bucket") return { kind: "bucket", bucketId: String(row.bucket_id) };
+  if (row.kind === "split") {
+    return { kind: "split", lines: lines().map((line) => ({ bucketId: String(line.bucket_id), amount: Number(line.amount), memo: String(line.memo) })) };
+  }
   if (row.kind === "transfer") return { kind: "transfer", accountId: String(row.transfer_account_id), transferId: String(row.transfer_id) };
   return { kind: "income" };
 }
@@ -73,7 +79,7 @@ function transferAccountOf(category: CategoryInput): string | null {
   return category.kind === "transfer" ? category.accountId : null;
 }
 
-function transactionFromRow(row: Record<string, SQLOutputValue>): Transaction {
+function transactionFromRow(row: Row, lines: () => Row[]): Transaction {
   return {
     id: String(row.id),
     budgetId: String(row.budget_id),
@@ -82,7 +88,7 @@ function transactionFromRow(row: Record<string, SQLOutputValue>): Transaction {
     payee: String(row.payee),
     memo: String(row.memo),
     amount: Number(row.amount),
-    category: categoryFromRow(row),
+    category: categoryFromRow(row, lines),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
@@ -189,12 +195,22 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   const updatePartner = database.prepare("UPDATE transactions SET account_id = ?, date = ?, amount = ?, updated_at = ? WHERE id = ?");
   const findPartner = database.prepare("SELECT * FROM transactions WHERE transfer_id = ? AND id <> ?");
   // Every payee's transactions, latest first, so the first row per payee (ignoring case) is its latest.
-  const payeeRows = database.prepare("SELECT payee, kind, bucket_id, transfer_account_id, transfer_id FROM transactions WHERE budget_id = ? AND payee <> '' ORDER BY date DESC, created_at DESC, rowid DESC");
+  const payeeRows = database.prepare("SELECT id, payee, kind, bucket_id, transfer_account_id, transfer_id FROM transactions WHERE budget_id = ? AND payee <> '' ORDER BY date DESC, created_at DESC, rowid DESC");
   const deleteTransactionRow = database.prepare("DELETE FROM transactions WHERE id = ?");
   // Recent activity shows a transfer once, by its money-out side, so it reads "from → to".
   const recentOf = database.prepare(`
     SELECT * FROM transactions WHERE budget_id = ? AND NOT (kind = 'transfer' AND amount > 0)
     ORDER BY date DESC, created_at DESC, rowid DESC LIMIT ?`);
+  const linesOf = database.prepare("SELECT * FROM transaction_lines WHERE transaction_id = ? ORDER BY idx");
+  const insertLine = database.prepare("INSERT INTO transaction_lines (transaction_id, idx, bucket_id, amount, memo) VALUES (?, ?, ?, ?, ?)");
+  const deleteLines = database.prepare("DELETE FROM transaction_lines WHERE transaction_id = ?");
+  const fromRow = (row: Row) => transactionFromRow(row, () => linesOf.all(String(row.id)));
+
+  // A split's lines are rewritten whole whenever its category is saved.
+  function writeLines(id: string, category: CategoryInput): void {
+    deleteLines.run(id);
+    if (category.kind === "split") category.lines.forEach((line, idx) => insertLine.run(id, idx, line.bucketId, line.amount, line.memo));
+  }
   const incomeOf = database.prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE budget_id = ? AND kind = 'income'");
 
   // Reads and writes that depend on each other (name uniqueness, closing) run in one immediate transaction.
@@ -348,7 +364,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   function openTransaction(id: string): Transaction {
     const row = findTransaction.get(id);
     if (!row) throw new BudgetError("not_found", "Transaction not found.");
-    return transactionFromRow(row);
+    return fromRow(row);
   }
 
   // A date must be today or earlier, and no earlier than the first day of the budget's creation month − 12.
@@ -358,13 +374,16 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
     if (date < earliest) throw new BudgetError("invalid_input", `Transactions can't be dated before ${earliest}.`, "date");
   }
 
-  // A bucket category must name a bucket in the transaction's budget; a new filing to an archived one is refused.
-  function assertCategoryAllowed(budgetId: string, category: CategoryInput): void {
-    if (category.kind !== "bucket") return;
-    const row = findBucket.get(category.bucketId);
-    if (!row || String(row.budget_id) !== budgetId) throw new BudgetError("not_found", "Bucket not found.", "category");
-    const bucket = bucketFromRow(row);
-    if (bucket.archived) throw new BudgetError("bucket_archived", `${bucket.name} is archived. Restore it to file money to it.`, "category");
+  // Each bucket a category newly files to must be in the transaction's budget and not archived. Buckets the
+  // transaction already held are skipped, so it keeps a bucket that's since been archived.
+  function assertCategoryAllowed(budgetId: string, category: CategoryInput, held: CategoryInput | null = null): void {
+    const kept = new Set(held === null ? [] : bucketIdsOf(held));
+    for (const bucketId of bucketIdsOf(category).filter((id) => !kept.has(id))) {
+      const row = findBucket.get(bucketId);
+      if (!row || String(row.budget_id) !== budgetId) throw new BudgetError("not_found", "Bucket not found.", "category");
+      const bucket = bucketFromRow(row);
+      if (bucket.archived) throw new BudgetError("bucket_archived", `${bucket.name} is archived. Restore it to file money to it.`, "category");
+    }
   }
 
   function assertOpen(account: Account): void {
@@ -384,7 +403,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   function partnerOf(transaction: Transaction): Transaction | null {
     if (transaction.category.kind !== "transfer") return null;
     const row = findPartner.get(transaction.category.transferId, transaction.id);
-    return row ? transactionFromRow(row) : null;
+    return row ? fromRow(row) : null;
   }
 
   function insertRow(id: string, account: Account, row: { date: string; payee: string; memo: string; amount: number; category: CategoryInput }, transferId: string | null, now: string): void {
@@ -406,7 +425,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   function registerOf(account: Account): RegisterTransaction[] {
     let balance = account.startingBalance;
     return transactionsOf.all(account.id).map((row) => {
-      const found = transactionFromRow(row);
+      const found = fromRow(row);
       balance += found.amount;
       return { ...found, runningBalance: balance };
     });
@@ -506,6 +525,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
         const id = randomUUID();
         const transferId = next.category.kind === "transfer" ? randomUUID() : null;
         insertRow(id, account, next, transferId, now);
+        writeLines(id, next.category);
         if (transferId) insertPartner(account, next, transferId, now);
         return openTransaction(id);
       });
@@ -523,18 +543,18 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
         if (next.amount !== existing.amount) assertOpen(account);
         assertConsistent(next);
         if (edit.date !== undefined) assertDateAllowed(openBudget(existing.budgetId), next.date);
-        const refiled = !sameCategory(next.category, existing.category);
-        // Only a change of category is checked, so a transaction keeps a bucket that's since been archived.
-        if (refiled) assertCategoryAllowed(existing.budgetId, next.category);
-        if (refiled && next.category.kind === "transfer") assertTransferTarget(account, next.category.accountId);
+        assertCategoryAllowed(existing.budgetId, next.category, existing.category);
+        const otherId = transferAccountOf(next.category);
+        const sameTransfer = otherId !== null && transferAccountOf(existing.category) === otherId;
+        if (otherId && !sameTransfer) assertTransferTarget(account, otherId);
         const partner = partnerOf(existing);
         // Money leaves the old other account when the pair's amount changes, it moves away, or it's removed.
-        if (partner && (next.amount !== existing.amount || refiled)) assertOpen(openAccount(partner.accountId));
+        if (partner && (next.amount !== existing.amount || !sameTransfer)) assertOpen(openAccount(partner.accountId));
         const now = timestamp();
-        const otherId = transferAccountOf(next.category);
         const transferId = !otherId ? null : partner && existing.category.kind === "transfer" ? existing.category.transferId : randomUUID();
         if (partner && !otherId) deleteTransactionRow.run(partner.id);
         updateTransaction.run(next.date, next.payee, next.memo, next.amount, next.category.kind, bucketIdOf(next.category), otherId, transferId, now, id);
+        writeLines(id, next.category);
         if (partner && otherId) updatePartner.run(otherId, next.date, -next.amount, now, partner.id);
         if (!partner && transferId) insertPartner(account, next, transferId, now);
         return openTransaction(id);
@@ -560,7 +580,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
         throw new BudgetError("invalid_input", "Limit must be a whole number from 1 to 100.");
       }
       openBudget(budgetId);
-      return recentOf.all(budgetId, limit as number).map(transactionFromRow);
+      return recentOf.all(budgetId, limit as number).map(fromRow);
     },
     /** The account's register, newest first, each with the balance just after it. */
     listTransactions(accountId: string): { transactions: RegisterTransaction[] } {
@@ -585,7 +605,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
       const latest = new Map<string, PayeeHistory>();
       for (const row of payeeRows.all(budgetId)) {
         const key = String(row.payee).toLowerCase();
-        if (!latest.has(key)) latest.set(key, { payee: String(row.payee), category: categoryFromRow(row) });
+        if (!latest.has(key)) latest.set(key, { payee: String(row.payee), category: categoryFromRow(row, () => linesOf.all(String(row.id))) });
       }
       return [...latest.values()].sort((a, b) => a.payee.localeCompare(b.payee));
     },

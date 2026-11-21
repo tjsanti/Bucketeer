@@ -581,6 +581,49 @@ main { padding: var(--s-8) var(--s-10) var(--s-16); min-width: 0; max-width: 110
 .amt-wrap .sign { flex: none; width: 30px; height: 32px; padding: 0; border: 1px solid var(--border-control); border-right: 0; border-radius: var(--r-sm) 0 0 var(--r-sm); background: var(--surface); color: var(--text); font: inherit; font-weight: var(--fw-bold); font-size: 16px; cursor: pointer; }
 .amt-wrap .sign.in { color: var(--ok); }
 .amt-wrap .cin { border-radius: 0 var(--r-sm) var(--r-sm) 0; }
+/* A split's lines under the draft: bucket and pill amount in the register's Category and Amount columns. */
+.splits[hidden] { display: none; }
+.splits .sline, .splits .sfoot { display: grid; grid-template-columns: 88px minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.2fr) 128px 128px; align-items: center; min-height: 40px; }
+.splits .sline .c, .splits .sfoot > * { padding: 0 4px; min-width: 0; }
+.splits .lbl { grid-column: 2; display: flex; justify-content: flex-end; color: var(--text-muted); font-size: var(--fs-sm); }
+.splits .sbucket { grid-column: 3; }
+.splits .samt { grid-column: 5; }
+.splits .srm { grid-column: 6; }
+.splits .sfoot .btn { grid-column: 3; justify-self: start; }
+.splits .sleft { grid-column: 5 / 7; display: flex; justify-content: flex-end; align-items: center; gap: 6px; padding-right: 10px; font-size: var(--fs-sm); color: var(--text-muted); white-space: nowrap; }
+.splits .sleft strong { color: var(--text); font-weight: var(--fw-bold); }
+.splits .sleft.zero strong { color: var(--ok); }
+.splits > .snote { margin: 2px 10px 6px calc(88px + 4px); width: fit-content; max-width: calc(100% - 108px); }
+.splits > .snote:empty { margin: 0; }
+.dots { display: inline-flex; flex: none; }
+.dots .dot + .dot { margin-left: -3px; }
+.pill { position: relative; display: inline-flex; width: 100%; flex: none; }
+.pill-in { width: 100%; height: 32px; min-width: 0; padding: 0 12px; border-radius: var(--r-pill); border: 1px solid var(--pill-line); background: var(--pill-bg); text-align: right; font: inherit; font-size: 14px; font-weight: var(--fw-semibold); color: var(--text); transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease); appearance: none; -webkit-appearance: none; }
+.pill-in:hover { border-color: var(--border-control); background: var(--surface); }
+.pill-in:focus { outline: none; border-color: var(--focus); background: var(--surface); box-shadow: 0 0 0 3px var(--focus-halo); }
+.pill-in[aria-invalid="true"] { border-color: var(--text-muted); box-shadow: 0 0 0 3px var(--focus-halo); }
+.splits .rm { width: 32px; height: 32px; border: 0; padding: 0; background: transparent; border-radius: 50%; color: var(--text-muted); cursor: pointer; display: grid; place-items: center; }
+.splits .rm:hover { background: var(--surface); color: var(--text); }
+.splits .rm[hidden] { display: none; }
+/* On the phone sheet the lines stack as bucket, pill and remove, with 44px targets. */
+.splits.phone { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: var(--r-md); background: var(--surface-sunken); }
+.splits.phone[hidden] { display: none; }
+.splits.phone .slines { display: flex; flex-direction: column; gap: 8px; }
+.splits.phone .sline { grid-template-columns: minmax(0, 1fr) 112px 44px; gap: 8px; align-items: start; }
+.splits.phone .sline .c { padding: 0; }
+.splits.phone .lbl { display: none; }
+/* While a line's bucket list is open it takes the full width; the pill drops below until it closes. */
+.splits.phone .sline:has(.picker:not([hidden])) .sbucket { grid-column: 1 / -1; }
+.splits.phone .sbucket, .splits.phone .samt, .splits.phone .srm { grid-column: auto; }
+.splits.phone .input { height: var(--touch); }
+.splits.phone .cat-in .lead { height: var(--touch); }
+.splits.phone .pill-in { height: var(--touch); font-size: 16px; padding: 0 14px; }
+.splits.phone .rm { width: var(--touch); height: var(--touch); }
+.splits.phone .sfoot { display: flex; justify-content: space-between; align-items: center; min-height: var(--touch); border-top: 1px solid var(--border); }
+.splits.phone .sfoot > * { padding: 0; }
+.splits.phone .sfoot .btn { height: var(--touch); }
+.splits.phone .sleft { padding-right: 4px; }
+.splits.phone > .snote { margin: 0; max-width: none; width: auto; }
 /* The category combobox and its list (floating on desktop, in the flow of the phone sheet). */
 .cat-in { position: relative; display: flex; flex-direction: column; width: 100%; }
 .cat-in .lead { position: absolute; left: 10px; top: 0; height: 32px; display: inline-flex; align-items: center; pointer-events: none; }
