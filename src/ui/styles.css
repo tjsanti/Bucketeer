@@ -859,6 +859,7 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .rp-rows dd { margin: 0; white-space: nowrap; }
 .rp-rows .arrow, .rp-rows .of { color: var(--text-muted); }
 .rp-rows .new { font-weight: var(--fw-bold); color: var(--accent-ink); }
+.rp-rows .neg { color: var(--over); font-weight: var(--fw-bold); }
 .avail .fig.is-preview { color: var(--accent-ink); text-decoration: underline dashed 1.5px; text-underline-offset: 4px; }
 .ready-figure.is-preview { text-decoration: underline dashed 2px; text-underline-offset: 6px; }
 @keyframes avail-flash { from { background: var(--accent-soft); } }

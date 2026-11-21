@@ -238,8 +238,10 @@ export function createBucketsPage(ctx: BucketsContext) {
     previewReady(cents) {
       const figure = strip.querySelector<HTMLElement>(".ready-figure");
       if (!figure) return;
-      figure.replaceChildren(...readyParts(cents ?? month.summary.readyToAssign));
+      const shown = cents ?? month.summary.readyToAssign;
+      figure.replaceChildren(...readyParts(shown));
       figure.classList.toggle("is-preview", cents !== null);
+      figure.closest(".ready")?.classList.toggle("neg", shown < 0);
     },
   });
 

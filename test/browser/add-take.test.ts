@@ -212,6 +212,43 @@ test("a take is limited by what a later month still needs, as the server says", 
   assert.deepEqual(app.pageErrors, []);
 });
 
+test("a negative Ready to assign is overspent red wherever it shows, and the strip follows a preview across zero", { timeout: 60_000 }, async (t) => {
+  const over = "rgb(179, 36, 59)"; // --over, light
+  const colourOf = (locator: ReturnType<Page["locator"]>) => locator.evaluate((node) => getComputedStyle(node).color);
+  const app = await openApp(t);
+  const { page } = app;
+  const { budgetId } = await household(app.url);
+  // A card owing 500.00 puts Ready to assign at −100.00.
+  await send(app.url, `/api/budgets/${budgetId}/accounts`, { name: "Visa", type: "credit-card", startingBalance: -50_000, startingDate: `${current}-01` });
+  await openBuckets(page, app.url, budgetId);
+  const strip = page.getByRole("region", { name: "Month summary" }).locator(".ready");
+  assert.equal(await readyText(page), `${MINUS}$100.00`);
+  assert.equal(await colourOf(readyFigure(page)), over);
+
+  // Taking 100.00 back previews $0.00: no longer red. Clearing the draft brings the red back.
+  const gifts = pill(page, "Gifts");
+  await gifts.focus();
+  await gifts.pressSequentially("-100");
+  assert.equal(await readyText(page), "$0.00");
+  assert.equal(await strip.evaluate((node) => node.classList.contains("neg")), false);
+  // The panel's before figure is negative, so it is red too.
+  const before = rowOf(page, "Gifts").locator(".rpanel dd").filter({ hasText: `${MINUS}$100.00` }).locator(".neg");
+  assert.equal(await colourOf(before), over);
+  await gifts.press("Escape");
+  assert.equal(await readyText(page), `${MINUS}$100.00`);
+  assert.equal(await strip.evaluate((node) => node.classList.contains("neg")), true);
+
+  // On a phone, the sheet's Ready to assign is red too.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await rowOf(page, "Fuel").click();
+  const sheet = page.getByRole("dialog", { name: "Fuel" });
+  await sheet.waitFor();
+  const figure = sheet.locator(".preview strong");
+  assert.equal(compact(await figure.innerText()), `${MINUS}$100.00`);
+  assert.equal(await colourOf(figure), over);
+  assert.deepEqual(app.pageErrors, []);
+});
+
 test("a refused amount is only refused until the draft changes", { timeout: 60_000 }, async (t) => {
   const app = await openApp(t);
   const { page } = app;

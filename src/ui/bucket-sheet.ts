@@ -57,11 +57,11 @@ export function openBucketSheet(options: BucketSheetOptions): void {
       const after = bucket.available + state.delta;
       preview.replaceChildren(
         el("div", {}, el("span", {}, "Available after"), el("strong", { class: after < 0 ? "neg" : "" }, formatMoney(after))),
-        el("div", {}, el("span", {}, "Ready to assign after"), el("strong", {}, money(readyToAssign - state.delta))));
+        el("div", {}, el("span", {}, "Ready to assign after"), el("strong", { class: readyToAssign - state.delta < 0 ? "neg" : "" }, money(readyToAssign - state.delta))));
     } else if (state.kind === "error") {
       preview.replaceChildren(el("div", { class: "err" }, icon("alert", "sm"), el("span", {}, state.message)));
     } else {
-      preview.replaceChildren(el("div", {}, el("span", {}, "Ready to assign"), el("strong", {}, money(readyToAssign))));
+      preview.replaceChildren(el("div", {}, el("span", {}, "Ready to assign"), el("strong", { class: readyToAssign < 0 ? "neg" : "" }, money(readyToAssign))));
     }
     if (submitButton) {
       submitButton.textContent = state.kind === "ok" ? describeChange(bucket.name, state.delta, "instruction")

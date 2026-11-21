@@ -36,14 +36,19 @@ export function createPills(ctx: PillContext) {
 
   const money = (cents: number) => formatMoney(cents, { symbol: true });
 
-  function line(label: string, from: string, to: string | null, extra = ""): HTMLElement {
+  /** A figure in the panel; a negative one is overspent red. */
+  const figure = (cents: number, text: string, extra = "") => el("span", { class: `${extra}${cents < 0 ? " neg" : ""}`.trim() }, text);
+
+  function line(label: string, from: HTMLElement, to: HTMLElement | null, extra = ""): HTMLElement {
+    to?.classList.add("new");
     return el("div", {}, el("dt", {}, label),
-      el("dd", {}, from, to === null ? null : el("span", { class: "arrow" }, " → "), to === null ? null : el("span", { class: "new" }, to), extra ? el("span", { class: "of" }, ` ${extra}`) : null));
+      el("dd", {}, from, to === null ? null : el("span", { class: "arrow" }, " → "), to, extra ? el("span", { class: "of" }, ` ${extra}`) : null));
   }
 
   function assignedLine(bucket: BucketMonth, delta: number): HTMLElement {
     const of = bucket.type === "recurring" && bucket.amount !== null ? `of ${formatMoney(bucket.amount)}` : "";
-    return line("Assigned this month", formatMoney(bucket.assigned), delta ? formatMoney(bucket.assigned + delta) : null, of);
+    const after = bucket.assigned + delta;
+    return line("Assigned this month", figure(bucket.assigned, formatMoney(bucket.assigned)), delta ? figure(after, formatMoney(after)) : null, of);
   }
 
   function paintPanel(bucket: BucketMonth, draft: Draft): void {
@@ -53,13 +58,13 @@ export function createPills(ctx: PillContext) {
       panel.replaceChildren(
         el("div", { class: "rp-title" }, describeChange(bucket.name, draft.delta, "instruction")),
         el("dl", { class: "rp-rows num" },
-          line("Available", formatMoney(bucket.available), formatMoney(bucket.available + draft.delta)),
-          line("Ready to assign", money(ready), money(ready - draft.delta)),
+          line("Available", figure(bucket.available, formatMoney(bucket.available)), figure(bucket.available + draft.delta, formatMoney(bucket.available + draft.delta))),
+          line("Ready to assign", figure(ready, money(ready)), figure(ready - draft.delta, money(ready - draft.delta))),
           assignedLine(bucket, draft.delta)));
     } else {
       panel.replaceChildren(
         done ? el("div", { class: "rp-title ok" }, icon("check", "sm"), describeChange(bucket.name, done.delta)) : el("div", { class: "rp-title" }, bucket.name),
-        el("dl", { class: "rp-rows num" }, assignedLine(bucket, 0), line("Spent", formatMoney(bucket.spent), null)));
+        el("dl", { class: "rp-rows num" }, assignedLine(bucket, 0), line("Spent", figure(bucket.spent, formatMoney(bucket.spent)), null)));
     }
   }
 
