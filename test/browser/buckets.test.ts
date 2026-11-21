@@ -641,6 +641,28 @@ test("available figures: positive and overspent rendering, and the archive secti
     assert.equal(compact(await dialog.locator(".arch-prev").innerText()), "Groceries 186.53 → 0.00 Ready to assign +186.53");
     assert.equal(await dialog.getByRole("button", { name: "Archive and return $186.53" }).isEnabled(), true);
     assert.equal(await dialog.locator(".sheet-body").evaluate((node) => node.scrollHeight <= node.clientHeight), true);
+    // The positive path: the money goes back to Ready to assign (2,000.00 − 186.53 − 1,240.00 + 186.53), and
+    // Undo restores the bucket without re-assigning it.
+    assert.equal(compact(await page.getByRole("region", { name: "Month summary" }).locator(".ready-figure").innerText()), "$573.47");
+    await dialog.getByRole("button", { name: "Archive and return $186.53" }).click();
+    await dialog.waitFor({ state: "detached" });
+    await waitForSnack(page, "Archived Groceries and returned $186.53.");
+    await eventually(async () => assert.equal(compact(await page.getByRole("region", { name: "Month summary" }).locator(".ready-figure").innerText()), "$760.00"));
+    assert.equal(await page.getByRole("button", { name: "Edit Groceries" }).count(), 0);
+    await page.locator("#snack-undo").click();
+    await eventually(async () => assert.equal(await grid.getByRole("row", { name: /Groceries/ }).locator(".avail").textContent(), "0.00"));
+    assert.equal(compact(await page.getByRole("region", { name: "Month summary" }).locator(".ready-figure").innerText()), "$760.00");
+
+    // Money assigned in a later month blocks archiving; the dialog says which month.
+    const [year, monthNumber] = thisMonth.split("-").map(Number) as [number, number];
+    const next = new Date(Date.UTC(year, monthNumber, 1));
+    const nextMonth = next.toISOString().slice(0, 7);
+    const nextName = next.toLocaleString("en-US", { month: "long", timeZone: "UTC" }) + (next.getUTCFullYear() === year ? "" : ` ${next.getUTCFullYear()}`);
+    await api(app, "POST", `/api/buckets/${buckets.Vacation}/assign`, { month: nextMonth, amount: 1_000 });
+    await page.getByRole("button", { name: "Edit Vacation" }).click();
+    await dialog.getByRole("button", { name: "Archive and return $1,240.00" }).click();
+    await eventually(async () => assert.equal(compact(await dialog.locator(".snote").innerText()), `Vacation has money assigned in ${nextName}.`));
+    assert.equal(await page.getByRole("button", { name: "Edit Vacation" }).count(), 1);
     await page.keyboard.press("Escape");
     assert.deepEqual(app.pageErrors, []);
   }

@@ -3,7 +3,7 @@ import { parseArgs } from "node:util";
 import { ApiError, createClient } from "./client.js";
 import type {
   Account, AccountType, Bucket, BucketColour, BucketGroup, BucketMonth, BucketTable, BucketType, Budget, CategoryInput, GroupMonth, NewBucketInput, RegisterTransaction,
-  SplitLine, Transaction,
+  Rain, SplitLine, Transaction,
 } from "./core/index.js";
 import { addMonths } from "./core/months.js";
 import { formatMoney, parseMoney } from "./core/money.js";
@@ -42,6 +42,8 @@ const help = `Usage:
   bucketeer ready --budget <id> [--json]
   bucketeer month --budget <id> [--month <YYYY-MM>] [--json]
   bucketeer assign <bucketId> --amount <amount> [--month <YYYY-MM>] [--json]
+  bucketeer rain --budget <id> [--month <YYYY-MM>] [--dry-run] [--json]
+  bucketeer rain undo <rainId> [--json]
 
 Options:
   --url <url>    Server address (default: BUCKETEER_URL or http://localhost:3000)
@@ -66,7 +68,8 @@ Options:
   --by <month>   A goal's month, YYYY-MM
   --month <month>
                  YYYY-MM: for tx list, only that month's transactions, then the balance at its end;
-                 for month and assign, the month (default: the server's current month)
+                 for month, assign and rain, the month (default: the server's current month)
+  --dry-run      For rain: show what each bucket would get, without moving any money
   --colour <hue> sky, denim, blue, slate, teal, mint, green, forest,
                  lime, olive, sun, cocoa, peach, tangerine, rose, plum (default: least used)
   --position <n> 1 is first
@@ -115,6 +118,7 @@ try {
       payee: { type: "string" },
       memo: { type: "string" },
       month: { type: "string" },
+      "dry-run": { type: "boolean" },
     },
   });
   jsonOutput = values.json;
@@ -272,6 +276,22 @@ try {
       const assigned = await client.assign(action, { month: values.month ?? await currentMonth(budgetId), amount: parseMoney(values.amount) });
       result = assigned;
       if (!jsonOutput) console.log(formatBucketMonth(assigned, (await client.bucketMonth(budgetId, assigned.month)).groups));
+    } else if (command === "rain" && action === undefined) {
+      options(1, "budget", "month", "dry-run");
+      const budgetId = budget();
+      const month = values.month ?? await currentMonth(budgetId);
+      const rain: Rain = values["dry-run"] ? await client.planRain(budgetId, month) : await client.rain(budgetId, month);
+      result = rain;
+      if (!jsonOutput) {
+        const names = await categoryNames(budgetId);
+        const lines = rain.fills.length ? rain.fills.map((fill) => `${names.get(fill.bucketId) ?? fill.bucketId}\t${formatMoney(fill.amount)}`) : ["Nothing to fill."];
+        console.log([...lines, `Total\t${formatMoney(rain.total)}`, ...(rain.rainId ? [`Rain ${rain.rainId}`] : [])].join("\n"));
+      }
+    } else if (command === "rain" && action === "undo" && id) {
+      options(3);
+      await client.undoRain(id);
+      result = { rainId: id, undone: true };
+      if (!jsonOutput) console.log(`Undid rain ${id}.`);
     } else if (command === "tx" && action === "list" && values.account !== undefined) {
       options(2, "account", "month");
       const names = await categoryNames((await client.openAccount(values.account)).budgetId);

@@ -108,6 +108,16 @@ Money is assigned to a bucket in a month. Every assign (a positive `--amount`) a
 
 A bucket's month has `assigned` (ledger entries plus reimbursements dated that month), `spent` (gross money out that month), `carriedIn` (the previous month's Available, negative included, so overspending carries forward) and `available` (`carriedIn + assigned − spent`). A bucket's own `available` is its Available in the current month. `month` shows every active bucket plus any archived bucket with a ledger entry or a transaction that month; its groups carry their own `assigned`, `spent` and `available` totals. Its `summary` is the month's strip: `readyToAssign` (the one pool), `income` (Income transactions dated that month plus money paid directly into buckets), `assigned` (ledger entries for the month plus that same direct money) and `spent` (gross money out of buckets), so the month's change in Ready to assign is always `income − assigned`. Its text output is a summary line (`month`, then `Ready to assign`, `Income`, `Assigned` and `Spent`, each followed by its amount), then `group`, `name`, `target`, `assigned`, `spent`, `available` per bucket, tab-separated; `assign` prints its bucket's line.
 
+### Make it rain
+
+```sh
+bucketeer rain --budget <id> --dry-run
+bucketeer rain --budget <id> --month 2026-12 --json
+bucketeer rain undo <rain-id>
+```
+
+Rain fills each active bucket's `need` for the month from Ready to assign, strictly in bucket order (group order, then bucket order): each bucket gets its whole need before the next gets anything, the bucket where the money runs out gets a partial fill, and the rest stay in Ready to assign. Overspent buckets get no special treatment. A recurring bucket needs its monthly amount less what's assigned that month; a goal needs its monthly share (what's still to save at the end of the previous month ÷ months left including this one, an overdue goal counting as one, rounded up to the cent) less what's assigned that month; a plain bucket needs nothing. Each bucket's `need` is in `month --json`. Rain goes only into the current month or a later one in the range (`invalid_input` otherwise). `--dry-run` writes nothing and shows exactly what rain would do. The text output is `bucket`, `amount` per fill, then `Total`, then `Rain <rain-id>` when money moved; `--json` gives `{ "rainId", "fills": [{ "bucketId", "amount" }], "total" }`, with no `rainId` when there was nothing to fill. `rain undo` reverses the whole rain, or refuses with `money_moved` if any filled bucket's Available in that month is now below what the rain gave it.
+
 ### Buckets and groups
 
 Buckets live in groups. `--position` is 1-based.
@@ -126,7 +136,7 @@ bucketeer group move <group-id> --position 1 --json
 bucketeer group delete <group-id> --json
 ```
 
-`--type` defaults to plain (no amount). A goal month must be this month or later when it is set or changed. Without `--colour`, a bucket gets the least used colour among active buckets. Bucket names stay unique within a budget, archived buckets included. A bucket can't be archived while overspent (`bucket_overspent`), or, until assigning exists, while it holds money from a reimbursement (`bucket_has_money`). A group can be deleted only when it has no active buckets.
+`--type` defaults to plain (no amount). A goal month must be this month or later when it is set or changed. Without `--colour`, a bucket gets the least used colour among active buckets. Bucket names stay unique within a budget, archived buckets included. A bucket can't be archived while overspent in the current month (`bucket_overspent`) or while a later month has money assigned to it (`bucket_has_future`). Archiving a bucket with money left returns it to Ready to assign as a take in the current month, and `returned` in the JSON is that amount; restoring the bucket doesn't put it back. A group can be deleted only when it has no active buckets.
 
 ### Remote servers
 

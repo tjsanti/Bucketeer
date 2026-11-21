@@ -56,7 +56,7 @@ class HttpError extends Error {
   }
 }
 
-const statuses = { invalid_input: 400, not_found: 404, name_taken: 409, balance_not_zero: 409, group_not_empty: 409, bucket_overspent: 409, bucket_changed: 409, account_closed: 409, bucket_archived: 409, bucket_has_money: 409, not_enough_ready: 409, not_enough_available: 409 } as const;
+const statuses = { invalid_input: 400, not_found: 404, name_taken: 409, balance_not_zero: 409, group_not_empty: 409, bucket_overspent: 409, bucket_changed: 409, account_closed: 409, bucket_archived: 409, bucket_has_future: 409, not_enough_ready: 409, not_enough_available: 409, money_moved: 409 } as const;
 
 function decodeId(segment: string, what: string): string {
   try {
@@ -151,6 +151,24 @@ export function createApi(core: Bucketeer) {
       if (budgetBalances && request.method === "GET") {
         const month = new URL(request.url ?? "/", "http://localhost").searchParams.get("month");
         json(response, 200, core.accountBalances(decodeId(budgetBalances, "Budget"), month ?? ""));
+        return;
+      }
+      const budgetRain = /^\/api\/budgets\/([^/]+)\/months\/([^/]+)\/rain$/.exec(pathname);
+      if (budgetRain?.[1] && budgetRain[2]) {
+        const [budgetId, month] = [decodeId(budgetRain[1], "Budget"), decodeId(budgetRain[2], "Month")];
+        if (request.method === "GET") {
+          json(response, 200, core.planRain(budgetId, month));
+          return;
+        }
+        if (request.method === "POST") {
+          json(response, 201, core.rain(budgetId, month));
+          return;
+        }
+      }
+      const rainUndo = /^\/api\/rains\/([^/]+)\/undo$/.exec(pathname)?.[1];
+      if (rainUndo && request.method === "POST") {
+        core.undoRain(decodeId(rainUndo, "Rain"));
+        response.writeHead(204, { "cache-control": "no-store" }).end();
         return;
       }
       const budgetMonth = /^\/api\/budgets\/([^/]+)\/months\/([^/]+)$/.exec(pathname);

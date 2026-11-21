@@ -177,13 +177,14 @@ try {
   assert.deepEqual([bucketOf(eatingOut.id).available, bucketOf(eatingOut.id).spent], [-9000, 12000]);
   assert.equal(ready(), readyBeforeSpending);
   cliFails("usage", "tx", "add", ...accountArgs, "--amount", "-5", "--income", "--bucket", eatingOut.id);
-  // Money left in a bucket blocks archiving until the ledger can return it; an archived bucket takes no new money,
+  // Archiving returns money left in a bucket to Ready to assign; an archived bucket takes no new money,
   // but what was filed to it stays and can still be edited.
   const coat = JSON.parse(cli("tx", "add", ...accountArgs, "--amount", "-40", "--bucket", clothing.id, "--payee", "Coat", "--json"));
-  const refund = JSON.parse(cli("tx", "add", ...accountArgs, "--amount", "50", "--bucket", clothing.id, "--json"));
-  cliFails("bucket_has_money", "bucket", "archive", clothing.id);
-  cli("tx", "edit", refund.id, "--amount", "40");
-  assert.equal(JSON.parse(cli("bucket", "archive", clothing.id, "--json")).bucket.archived, true);
+  cli("tx", "add", ...accountArgs, "--amount", "50", "--bucket", clothing.id);
+  const readyBeforeArchive = ready();
+  const archivedWithMoney = JSON.parse(cli("bucket", "archive", clothing.id, "--json"));
+  assert.deepEqual([archivedWithMoney.bucket.archived, archivedWithMoney.returned], [true, 1000]);
+  assert.equal(ready(), readyBeforeArchive + 1000);
   cliFails("bucket_archived", "tx", "add", ...accountArgs, "--amount", "-5", "--bucket", clothing.id);
   cliFails("bucket_archived", "tx", "edit", reimbursed.id, "--bucket", clothing.id);
   const kept = JSON.parse(cli("tx", "edit", coat.id, "--memo", "Winter", "--json"));
@@ -204,6 +205,7 @@ try {
   assert.equal(JSON.parse(cli("assign", rent.id, "--amount", "10", "--month", nextMonth, "--json")).assigned, 1000);
   assert.equal(JSON.parse(cli("month", ...budgetArgs, "--month", nextMonth, "--json")).summary.readyToAssign, ready());
   assert.equal(ready(), readyBeforeAssigning - 166000);
+  cliFails("bucket_has_future", "bucket", "archive", rent.id);
   // Overspending carries into the next month.
   assert.deepEqual([bucketOf(eatingOut.id, "--month", nextMonth).carriedIn, bucketOf(eatingOut.id, "--month", nextMonth).available], [-9000, -9000]);
   assert.match(cli("month", ...budgetArgs).split("\n")[0]!, new RegExp(`^${month}\tReady to assign\t`));
@@ -247,6 +249,46 @@ try {
   assert.deepEqual(JSON.parse(cli("tx", "list", ...accountArgs, "--json")), register);
   assert.deepEqual(JSON.parse(cli("bucket", "list", ...budgetArgs, "--archived", "--json")), bucketsBefore);
   assert.deepEqual(JSON.parse(cli("month", ...budgetArgs, "--month", nextMonth, "--json")), monthBefore);
+
+  // Rain, in its own budget so every figure is exact (ADR-0005): Rent (recurring 1,650, already met) above Fuel
+  // (recurring 160) above Vacation (goal 3,000, 10 months left including this one) above Clothing (plain).
+  const monthsAfter = (from: string, count: number) => {
+    const index = Number(from.slice(0, 4)) * 12 + Number(from.slice(5)) - 1 + count;
+    return `${Math.floor(index / 12)}-${String(index % 12 + 1).padStart(2, "0")}`;
+  };
+  const rainBudget = ["--budget", JSON.parse(cli("budget", "save", "--name", "Rain", "--json")).id];
+  const rainAccount = JSON.parse(cli("account", "add", ...rainBudget, "--name", "Checking", "--type", "checking", "--starting-balance", "3350", "--json"));
+  const rainGroup = JSON.parse(cli("group", "add", ...rainBudget, "--name", "All", "--json")).id;
+  const rainBucket = (...args: string[]) => JSON.parse(cli("bucket", "add", ...rainBudget, "--group", rainGroup, ...args, "--json")).id as string;
+  const rainRent = rainBucket("--name", "Rent", "--type", "recurring", "--amount", "1650");
+  const fuel = rainBucket("--name", "Fuel", "--type", "recurring", "--amount", "160");
+  const saving = rainBucket("--name", "Vacation", "--type", "goal", "--amount", "3000", "--by", monthsAfter(month, 9));
+  const plain = rainBucket("--name", "Clothing");
+  cli("assign", rainRent, "--amount", "1650");
+  const rainReady = () => JSON.parse(cli("ready", ...rainBudget, "--json")).readyToAssign as number;
+  const rainJson = (...args: string[]) => JSON.parse(cli("rain", ...rainBudget, ...args, "--json"));
+  assert.equal(rainReady(), 170000);
+  const preview = rainJson("--dry-run");
+  assert.deepEqual(preview, { fills: [{ bucketId: fuel, amount: 16000 }, { bucketId: saving, amount: 30000 }], total: 46000 });
+  assert.equal(rainReady(), 170000);
+  const rained = rainJson();
+  assert.deepEqual({ fills: rained.fills, total: rained.total }, preview);
+  assert.equal(rainReady(), 124000);
+  assert.deepEqual(rainJson(), { fills: [], total: 0 });
+  cli("rain", "undo", rained.rainId);
+  assert.equal(rainReady(), 170000);
+  // Rain only into this month or later; a later month draws from the same pool.
+  cliFails("invalid_input", "rain", ...rainBudget, "--month", monthsAfter(month, -1));
+  const ahead = rainJson("--month", monthsAfter(month, 3));
+  assert.deepEqual(ahead.fills, [{ bucketId: rainRent, amount: 165000 }, { bucketId: fuel, amount: 5000 }]);
+  assert.equal(rainReady(), 0);
+  cli("rain", "undo", ahead.rainId);
+  // With 400 ready, Vacation gets a partial fill; spending from Fuel below its fill blocks the undo.
+  cli("assign", plain, "--amount", "1300");
+  const partial = rainJson();
+  assert.deepEqual(partial.fills, [{ bucketId: fuel, amount: 16000 }, { bucketId: saving, amount: 24000 }]);
+  cli("tx", "add", "--account", rainAccount.id, "--amount", "-1", "--bucket", fuel);
+  cliFails("money_moved", "rain", "undo", partial.rainId);
   assert.throws(() => cli("budget", "open", "missing", "--json"), (error: unknown) => {
     assert.ok(error && typeof error === "object" && "status" in error && "stdout" in error);
     assert.equal(error.status, 1);
@@ -284,7 +326,7 @@ try {
       assert.ok((await response.arrayBuffer()).byteLength > 0, path);
     }
   `);
-  console.log("PASS: Docker health on default and custom ports, CLI budget, account, income, spending, group and bucket flows, container recreation, persistence, errors, and UI assets.");
+  console.log("PASS: Docker health on default and custom ports, CLI budget, account, income, spending, group and bucket flows, rain, container recreation, persistence, errors, and UI assets.");
 
   // Upgrade: a volume written by the image from main, before versioned migrations, opens in place with the current build.
   console.log("Building the image from main and filling an old volume with it...");

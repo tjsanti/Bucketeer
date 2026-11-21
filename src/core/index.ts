@@ -9,7 +9,9 @@ import { bucketAvailable, nameKey, readBucketEdit, readBucketMove, readBucketRev
 import type { BucketFields, GroupChoice } from "./buckets.js";
 import { leastUsedColour } from "./colours.js";
 import { calendarIn, defaultTimeZone } from "./time.js";
-import { monthRangeOf, readMonth } from "./months.js";
+import { monthName, monthRangeOf, readMonth } from "./months.js";
+import { needOf, planRain } from "./rain.js";
+import type { Rain, RainPlan } from "./rain.js";
 import type { AccountMonth, MonthRange } from "./months.js";
 import { assertConsistent, bucketIdsOf, readNewTransaction, readTransactionEdit } from "./transactions.js";
 import type { BucketColour } from "./colours.js";
@@ -22,6 +24,7 @@ import type {
 export { BudgetError } from "./types.js";
 export type { BucketColour } from "./colours.js";
 export type { AccountMonth, MonthRange } from "./months.js";
+export type { Rain, RainFill, RainPlan } from "./rain.js";
 export type {
   Account, AccountEditInput, AccountType, ArchiveResult, AssignInput, Bucket, BucketEditInput, BucketMonth, BucketMonthView, GroupMonth, GroupTotals, MonthSummary, BucketGroup, BucketMoveInput, BucketRevertInput, BucketTable, BucketType,
   Budget, BudgetErrorCode, BudgetErrorField, BudgetNameInput, Category, CategoryInput, GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput,
@@ -218,7 +221,10 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   const incomeOf = database.prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE budget_id = ? AND kind = 'income'");
   const ledgerOf = database.prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM assignments WHERE budget_id = ?");
   const incomeIn = database.prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE budget_id = ? AND kind = 'income' AND substr(date, 1, 7) = ?");
-  const insertAssignment = database.prepare("INSERT INTO assignments (id, budget_id, bucket_id, month, amount, rain_id, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?)");
+  const firstFutureEntry = database.prepare("SELECT month FROM assignments WHERE bucket_id = ? AND month > ? ORDER BY month LIMIT 1");
+  const insertAssignment = database.prepare("INSERT INTO assignments (id, budget_id, bucket_id, month, amount, rain_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
+  const rainEntries = database.prepare("SELECT * FROM assignments WHERE rain_id = ? ORDER BY rowid");
+  const deleteRain = database.prepare("DELETE FROM assignments WHERE rain_id = ?");
   // Each bucket's activity per month up to a month: ledger entries, then money in and out of whole transactions
   // and of split lines, by the month they are dated. Parameters: budget, month, three times.
   const activityOf = database.prepare(`
@@ -478,7 +484,8 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   }
 
   function withFigures(bucket: Bucket, activity: readonly MonthActivity[], month: string): BucketMonth {
-    return { ...bucket, month, ...monthFigures(activity, month) };
+    const figures = monthFigures(activity, month);
+    return { ...bucket, month, ...figures, need: needOf(bucket, figures, month) };
   }
 
   function bucketInMonth(bucket: Bucket, month: string): BucketMonth {
@@ -507,6 +514,14 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
     const groups = groupsOf.all(budgetId).map(groupFromRow)
       .map((group) => ({ ...group, ...totalsOf(buckets.filter((bucket) => bucket.groupId === group.id)) }));
     return { summary: summaryOf(budgetId, month, activity), groups, buckets };
+  }
+
+  /** The rain for a month, planned from the month view: active buckets in bucket order (ADR-0005). */
+  function rainPlanOf(budgetId: string, month: unknown): { month: string; plan: RainPlan } {
+    const chosen = readMonth(month, monthRange(budgetId));
+    if (chosen < thisMonth()) throw new BudgetError("invalid_input", "Rain only into this month or a later one.", "month");
+    const active = bucketMonthOf(budgetId, chosen).buckets.filter((bucket) => !bucket.archived);
+    return { month: chosen, plan: planRain(active, readyToAssign(budgetId)) };
   }
 
   function openBudget(id: string): Budget {
@@ -592,8 +607,37 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
         const entry = readAssignment(input, monthRange(bucket.budgetId));
         const before = bucketInMonth(bucket, entry.month);
         assertAssignable(bucket, entry, readyToAssign(bucket.budgetId), before.available);
-        insertAssignment.run(randomUUID(), bucket.budgetId, bucket.id, entry.month, entry.amount, timestamp());
+        insertAssignment.run(randomUUID(), bucket.budgetId, bucket.id, entry.month, entry.amount, null, timestamp());
         return bucketInMonth(openBucket(bucketId), entry.month);
+      });
+    },
+    /** What rain would give each bucket in the month, without writing anything. */
+    planRain(budgetId: string, month: string): RainPlan {
+      return rainPlanOf(budgetId, month).plan;
+    },
+    /** Fills the month's needs from Ready to assign, every fill in one transaction under one rain id. */
+    rain(budgetId: string, month: string): Rain {
+      return transaction(() => {
+        const { month: chosen, plan } = rainPlanOf(budgetId, month);
+        if (plan.fills.length === 0) return plan;
+        const rainId = randomUUID();
+        const now = timestamp();
+        for (const fill of plan.fills) insertAssignment.run(randomUUID(), budgetId, fill.bucketId, chosen, fill.amount, rainId, now);
+        return { rainId, ...plan };
+      });
+    },
+    /** Reverses a whole rain, or refuses with money_moved if any bucket now holds less than the rain gave it. */
+    undoRain(rainId: string): void {
+      transaction(() => {
+        const entries = rainEntries.all(rainId);
+        if (entries.length === 0) throw new BudgetError("not_found", "Rain not found.");
+        for (const entry of entries) {
+          const bucket = bucketInMonth(openBucket(String(entry.bucket_id)), String(entry.month));
+          if (bucket.available < Number(entry.amount)) {
+            throw new BudgetError("money_moved", `Money has moved out of ${bucket.name} since it rained, so this rain can't be undone.`);
+          }
+        }
+        deleteRain.run(rainId);
       });
     },
     addTransaction(accountId: string, input: unknown): Transaction {
@@ -766,18 +810,23 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
         return writeBucket({ ...openBucket(id), groupId: group.id });
       });
     },
-    // Owner rule (2026-11-17): refused while overspent. A positive Available (only a reimbursement can make one
-    // until the ledger exists) is refused too; the month slice returns it to Ready to assign instead.
-    // Idempotent: archiving an archived bucket returns it unchanged with nothing returned.
+    // Owner rule (2026-11-17, ADR-0003): refused while overspent or while a later month has ledger entries.
+    // A positive Available in the current month goes back to Ready to assign as a take in that month.
+    // Idempotent: archiving an archived bucket returns it unchanged with nothing returned. Restore doesn't
+    // re-assign what was returned.
     archiveBucket(id: string): ArchiveResult {
       return transaction(() => {
         const bucket = openBucket(id);
         if (bucket.archived) return { bucket, returned: 0 };
         if (bucket.available < 0) throw new BudgetError("bucket_overspent", "A bucket can't be archived while its Available is negative.");
-        if (bucket.available > 0) throw new BudgetError("bucket_has_money", `${bucket.name} still holds money. Spend it or move it before archiving.`);
-        const archived = writeBucket({ ...bucket, archivedAt: timestamp() });
+        const current = thisMonth();
+        const future = firstFutureEntry.get(bucket.id, current);
+        if (future) throw new BudgetError("bucket_has_future", `${bucket.name} has money assigned in ${monthName(String(future.month), current)}.`);
+        const returned = bucket.available;
+        if (returned > 0) insertAssignment.run(randomUUID(), bucket.budgetId, bucket.id, current, -returned, null, timestamp());
+        const archived = writeBucket({ ...openBucket(id), archivedAt: timestamp() });
         if (bucket.groupId) renumberBuckets(activeIds(bucket.groupId));
-        return { bucket: archived, returned: 0 };
+        return { bucket: archived, returned };
       });
     },
     // Restore appends to the end of the bucket's group, or of the first group if its group was deleted.

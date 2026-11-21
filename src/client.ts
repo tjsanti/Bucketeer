@@ -1,5 +1,5 @@
 import type {
-  Account, AccountMonth, MonthRange, AccountEditInput, ArchiveResult, AssignInput, Bucket, BucketMonth, BucketMonthView, BucketEditInput, BucketGroup, BucketRevertInput, BucketMoveInput, BucketTable, Budget, BudgetNameInput,
+  Account, AccountMonth, MonthRange, Rain, RainPlan, AccountEditInput, ArchiveResult, AssignInput, Bucket, BucketMonth, BucketMonthView, BucketEditInput, BucketGroup, BucketRevertInput, BucketMoveInput, BucketTable, Budget, BudgetNameInput,
   GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput, NewTransactionInput, PayeeHistory, RegisterTransaction, Transaction, TransactionEditInput,
 } from "./core/index.js";
 
@@ -88,6 +88,9 @@ export function createClient(baseUrl: string) {
       request<Record<string, number>>(`${budgetPath(budgetId)}/account-balances?month=${encodeURIComponent(month)}`),
     bucketMonth: (budgetId: string, month: string) => request<BucketMonthView>(`${budgetPath(budgetId)}/months/${encodeURIComponent(month)}`),
     assign: (bucketId: string, input: AssignInput) => request<BucketMonth>(`${bucket(bucketId)}/assign`, send("POST", input)),
+    planRain: (budgetId: string, month: string) => request<RainPlan>(`${budgetPath(budgetId)}/months/${encodeURIComponent(month)}/rain`),
+    rain: (budgetId: string, month: string) => request<Rain>(`${budgetPath(budgetId)}/months/${encodeURIComponent(month)}/rain`, send("POST")),
+    undoRain: (rainId: string) => request<void>(`/api/rains/${encodeURIComponent(rainId)}/undo`, send("POST")),
     accountMonth: (accountId: string, month: string) => request<AccountMonth>(`${account(accountId)}/months/${encodeURIComponent(month)}`),
   };
 }
