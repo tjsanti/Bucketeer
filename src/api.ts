@@ -28,7 +28,7 @@ function findAsset(pathname: string): Asset | undefined {
   const known = assets.get(pathname);
   if (known) return known;
   // Path-routed pages: the UI reads the budget ID from the URL.
-  if (/^\/budgets\/[^/]+\/(?:accounts|buckets)\/?$/.test(pathname)) return assets.get("/");
+  if (/^\/budgets\/[^/]+\/(?:accounts|buckets|accounts\/[^/]+)\/?$/.test(pathname)) return assets.get("/");
   // Compiled UI modules (app.js, theme.js, accounts.js, ...) live flat in dist/ui.
   const script = /^\/ui\/([a-z][a-z0-9-]*\.js)$/.exec(pathname)?.[1];
   if (script) return { file: `./ui/${script}`, type: "text/javascript; charset=utf-8", cache: revalidate };
@@ -54,7 +54,7 @@ class HttpError extends Error {
   }
 }
 
-const statuses = { invalid_input: 400, not_found: 404, name_taken: 409, balance_not_zero: 409, group_not_empty: 409, bucket_overspent: 409, bucket_changed: 409 } as const;
+const statuses = { invalid_input: 400, not_found: 404, name_taken: 409, balance_not_zero: 409, group_not_empty: 409, bucket_overspent: 409, bucket_changed: 409, account_closed: 409 } as const;
 
 function decodeId(segment: string, what: string): string {
   try {
@@ -120,6 +120,35 @@ export function createApi(core: Bucketeer) {
         const account = core.createAccount(decodeId(budgetAccounts, "Budget"), await readJson(request));
         response.setHeader("location", `/api/accounts/${encodeURIComponent(account.id)}`);
         json(response, 201, account);
+        return;
+      }
+      const budgetReady = /^\/api\/budgets\/([^/]+)\/ready-to-assign$/.exec(pathname)?.[1];
+      if (budgetReady && request.method === "GET") {
+        json(response, 200, { readyToAssign: core.readyToAssign(decodeId(budgetReady, "Budget")) });
+        return;
+      }
+      const accountTransactions = /^\/api\/accounts\/([^/]+)\/transactions$/.exec(pathname)?.[1];
+      if (accountTransactions && request.method === "GET") {
+        json(response, 200, core.listTransactions(decodeId(accountTransactions, "Account")));
+        return;
+      }
+      if (accountTransactions && request.method === "POST") {
+        const id = decodeId(accountTransactions, "Account");
+        const created = core.addTransaction(id, await readJson(request));
+        response.setHeader("location", `/api/transactions/${encodeURIComponent(created.id)}`);
+        json(response, 201, created);
+        return;
+      }
+      const transactionRoute = /^\/api\/transactions\/([^/]+)$/.exec(pathname)?.[1];
+      if (transactionRoute && ["GET", "PATCH", "DELETE"].includes(request.method ?? "")) {
+        const id = decodeId(transactionRoute, "Transaction");
+        if (request.method === "GET") json(response, 200, core.openTransaction(id));
+        else if (request.method === "PATCH") json(response, 200, core.editTransaction(id, await readJson(request)));
+        else {
+          core.deleteTransaction(id);
+          response.writeHead(204, { "cache-control": "no-store" });
+          response.end();
+        }
         return;
       }
       const accountRoute = /^\/api\/accounts\/([^/]+)(?:\/(close|reopen))?$/.exec(pathname);

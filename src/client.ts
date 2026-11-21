@@ -1,6 +1,6 @@
 import type {
   Account, AccountEditInput, ArchiveResult, Bucket, BucketEditInput, BucketGroup, BucketRevertInput, BucketMoveInput, BucketTable, Budget, BudgetNameInput,
-  GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput,
+  GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput, NewTransactionInput, RegisterTransaction, Transaction, TransactionEditInput,
 } from "./core/index.js";
 
 export class ApiError extends Error {
@@ -41,6 +41,7 @@ export function createClient(baseUrl: string) {
   const budgetPath = (id: string) => `/api/budgets/${encodeURIComponent(id)}`;
   const group = (id: string) => `/api/groups/${encodeURIComponent(id)}`;
   const bucket = (id: string) => `/api/buckets/${encodeURIComponent(id)}`;
+  const transaction = (id: string) => `/api/transactions/${encodeURIComponent(id)}`;
 
   return {
     status: () => request<Health>("/health"),
@@ -74,5 +75,11 @@ export function createClient(baseUrl: string) {
     moveBucket: (id: string, input: BucketMoveInput) => request<Bucket>(`${bucket(id)}/move`, send("POST", input)),
     archiveBucket: (id: string) => request<ArchiveResult>(`${bucket(id)}/archive`, send("POST")),
     restoreBucket: (id: string) => request<Bucket>(`${bucket(id)}/restore`, send("POST")),
+    readyToAssign: (budgetId: string) => request<{ readyToAssign: number }>(`${budgetPath(budgetId)}/ready-to-assign`),
+    listTransactions: (accountId: string) => request<{ transactions: RegisterTransaction[] }>(`${account(accountId)}/transactions`),
+    addTransaction: (accountId: string, input: NewTransactionInput) => request<Transaction>(`${account(accountId)}/transactions`, send("POST", input)),
+    openTransaction: (id: string) => request<Transaction>(transaction(id)),
+    editTransaction: (id: string, input: TransactionEditInput) => request<Transaction>(transaction(id), send("PATCH", input)),
+    deleteTransaction: (id: string) => request<void>(transaction(id), send("DELETE")),
   };
 }

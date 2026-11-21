@@ -1,12 +1,14 @@
 // Entry point: routing and loading. The History API drives two kinds of page:
 //   /                          -> the last-used (or first) budget's Accounts page, or the first-run card
 //   /budgets/<id>/accounts     -> the Accounts page
+//   /budgets/<id>/accounts/<accountId> -> that account's register
 //   /budgets/<id>/buckets      -> the Buckets page
 import { createClient } from "../client.js";
-import type { Budget } from "../core/index.js";
+import type { Account, Budget } from "../core/index.js";
 import { createAccountsPage } from "./accounts.js";
 import { createBucketsPage } from "./buckets.js";
 import { byId, el, messageOf, setNote } from "./dom.js";
+import { createRegisterPage } from "./register.js";
 import { field, openSheet, textInput } from "./sheet.js";
 import { accountsPath, createShell } from "./shell.js";
 import type { Section } from "./shell.js";
@@ -42,6 +44,22 @@ const shell = createShell({
     if (note) setNote(note, message);
   },
 });
+
+interface Side {
+  accounts: Account[];
+  ready: number;
+}
+
+/** The sidebar's figures: every account and Ready to assign. */
+async function loadSide(budgetId: string): Promise<Side> {
+  const [accounts, { readyToAssign }] = await Promise.all([client.listAccounts(budgetId), client.readyToAssign(budgetId)]);
+  return { accounts, ready: readyToAssign };
+}
+
+function showSide(side: Side | null): void {
+  shell.setAccounts(side?.accounts ?? null);
+  shell.setReady(side?.ready ?? null);
+}
 
 async function navigate(path: string): Promise<void> {
   if (path !== window.location.pathname) window.history.pushState(null, "", path);
@@ -119,7 +137,7 @@ async function route(): Promise<void> {
     if (budgets.length === 0) {
       current = undefined;
       shell.setBudgets(budgets, undefined);
-      shell.setAccounts(null);
+      showSide(null);
       if (path !== "/") window.history.replaceState(null, "", "/");
       showFirstRun();
       return;
@@ -127,11 +145,13 @@ async function route(): Promise<void> {
 
     let id: string | undefined;
     let section: Section = "accounts";
-    const match = /^\/budgets\/([^/]+)\/(accounts|buckets)$/.exec(path);
+    let accountId: string | undefined;
+    const match = /^\/budgets\/([^/]+)\/(?:(buckets)|accounts(?:\/([^/]+))?)$/.exec(path);
     if (match) {
-      section = match[2] as Section;
+      section = match[2] ? "buckets" : "accounts";
       try {
         id = decodeURIComponent(match[1]!);
+        if (match[3] !== undefined) accountId = decodeURIComponent(match[3]);
       } catch {
         id = "";
       }
@@ -145,15 +165,47 @@ async function route(): Promise<void> {
     shell.setBudgets(budgets, current);
     shell.setSection(section);
     if (!current) {
-      shell.setAccounts(null);
+      showSide(null);
       showMessage("Budget not found", "That budget does not exist.", false);
       return;
     }
     const budget = current;
     rememberBudget(budget.id);
 
+    if (accountId !== undefined) {
+      const side = await loadSide(budget.id);
+      if (stale()) return;
+      showSide(side);
+      const account = side.accounts.find((candidate) => candidate.id === accountId);
+      if (!account) {
+        showMessage("Account not found", "That account does not exist in this budget.", false);
+        return;
+      }
+      const register = await client.listTransactions(account.id);
+      if (stale()) return;
+      const page = createRegisterPage({
+        client,
+        account,
+        async refresh() {
+          try {
+            const [next, nextRegister] = await Promise.all([loadSide(budget.id), client.listTransactions(account.id)]);
+            if (stale()) return;
+            showSide(next);
+            const current = next.accounts.find((candidate) => candidate.id === account.id);
+            if (current) page.render(current, nextRegister.transactions);
+          } catch {
+            if (!stale()) page.note("Your change was saved, but the register could not refresh. Reload to try again.");
+          }
+        },
+      });
+      page.render(account, register.transactions);
+      main.replaceChildren(page.root);
+      document.title = `${account.name} · ${budget.name} · Bucketeer`;
+      return;
+    }
+
     if (section === "buckets") {
-      const [accounts, table] = await Promise.all([client.listAccounts(budget.id), client.listBucketTable(budget.id)]);
+      const [side, table] = await Promise.all([loadSide(budget.id), client.listBucketTable(budget.id)]);
       if (stale()) return;
       const page = createBucketsPage({
         client,
@@ -166,38 +218,40 @@ async function route(): Promise<void> {
           return next;
         },
       });
-      shell.setAccounts(accounts);
+      showSide(side);
       page.render(table);
       main.replaceChildren(page.root);
       document.title = `Buckets · ${budget.name} · Bucketeer`;
       return;
     }
 
-    const accounts = await client.listAccounts(budget.id);
+    const side = await loadSide(budget.id);
     if (stale()) return;
+    const accounts = side.accounts;
     const page = createAccountsPage({
       client,
       budget,
       snack: shell.showSnack,
+      navigate: (target) => void navigate(target),
       async refresh() {
         try {
-          const next = await client.listAccounts(budget.id);
+          const next = await loadSide(budget.id);
           if (stale()) return;
-          shell.setAccounts(next);
-          page.render(next);
+          showSide(next);
+          page.render(next.accounts);
           page.note(null);
         } catch {
           if (!stale()) page.note("Your change was saved, but the accounts could not refresh. Reload to try again.");
         }
       },
     });
-    shell.setAccounts(accounts);
+    showSide(side);
     page.render(accounts);
     main.replaceChildren(page.root);
     document.title = `Accounts · ${budget.name} · Bucketeer`;
   } catch (error) {
     if (stale()) return;
-    shell.setAccounts(null);
+    showSide(null);
     showMessage("Could not load", messageOf(error));
   } finally {
     if (!stale()) main.removeAttribute("aria-busy");

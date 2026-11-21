@@ -76,8 +76,39 @@ try {
   cliFails("invalid_input", "account", "add", ...budgetArgs, "--name", "Bad", "--type", "cash", "--date", "2026-02-30");
   cliFails("invalid_input", "account", "add", ...budgetArgs, "--name", "Bad", "--type", "cash", "--starting-balance", "1.234");
   cliFails("not_found", "account", "close", "missing");
-  const accounts = JSON.parse(cli("account", "list", ...budgetArgs, "--json"));
+  let accounts = JSON.parse(cli("account", "list", ...budgetArgs, "--json"));
   assert.deepEqual(accounts, [renamed, visa, JSON.parse(cli("account", "reopen", wallet.id, "--json"))]);
+  // Income: it fills Ready to assign and the account's balance; a card's starting debt still reduces Ready to assign.
+  const ready = () => JSON.parse(cli("ready", ...budgetArgs, "--json")).readyToAssign;
+  assert.equal(ready(), 58791);
+  assert.equal(cli("ready", ...budgetArgs), "587.91");
+  const accountArgs = ["--account", checking.id];
+  const paycheck = JSON.parse(cli("tx", "add", ...accountArgs, "--amount", "2000", "--income", "--payee", "Acme Payroll", "--json"));
+  assert.deepEqual([paycheck.amount, paycheck.category, paycheck.payee], [200000, { kind: "income" }, "Acme Payroll"]);
+  assert.equal(ready(), 258791);
+  assert.equal(JSON.parse(cli("account", "list", ...budgetArgs, "--json"))[0].balance, 300000);
+  assert.deepEqual(cli("tx", "list", ...accountArgs).split("\n"), [`${paycheck.id}\t${paycheck.date}\tAcme Payroll\tIncome\t2,000.00\t3,000.00`]);
+  cliFails("invalid_input", "tx", "add", ...accountArgs, "--amount", "-5", "--income");
+  cliFails("invalid_input", "tx", "add", ...accountArgs, "--amount", "5", "--income", "--date", "2999-01-01");
+  cliFails("invalid_input", "tx", "add", ...accountArgs, "--amount", "5", "--income", "--date", "2000-01-01");
+  cliFails("usage", "tx", "add", ...accountArgs, "--amount", "5");
+  // A date before an account's starting date is accepted and counts. (Dates are a few days back, so the clock never matters.)
+  const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+  const savings = JSON.parse(cli("account", "add", ...budgetArgs, "--name", "Savings", "--type", "savings", "--date", daysAgo(2), "--json"));
+  const early = JSON.parse(cli("tx", "add", "--account", savings.id, "--amount", "25", "--income", "--date", daysAgo(3), "--json"));
+  assert.equal(early.date, daysAgo(3));
+  assert.equal(JSON.parse(cli("account", "list", ...budgetArgs, "--json"))[3].balance, 2500);
+  assert.equal(ready(), 261291);
+  // A closed account takes no new transactions.
+  cli("account", "close", wallet.id);
+  cliFails("account_closed", "tx", "add", "--account", wallet.id, "--amount", "5", "--income");
+  cli("account", "reopen", wallet.id);
+  // Editing income down is allowed; deleting removes it.
+  assert.equal(JSON.parse(cli("tx", "edit", early.id, "--amount", "10", "--json")).amount, 1000);
+  assert.deepEqual(JSON.parse(cli("tx", "delete", early.id, "--json")), { id: early.id, deleted: true });
+  assert.equal(ready(), 258791);
+  accounts = JSON.parse(cli("account", "list", ...budgetArgs, "--json"));
+  const register = JSON.parse(cli("tx", "list", ...accountArgs, "--json"));
   // Buckets and groups: dollars in, cents out; positions are 1-based.
   assert.deepEqual(JSON.parse(cli("bucket", "list", ...budgetArgs, "--json")), { groups: [], buckets: [] });
   const fixed = JSON.parse(cli("group", "add", ...budgetArgs, "--name", "Fixed", "--json"));
@@ -121,12 +152,13 @@ try {
   cliFails("not_found", "bucket", "add", ...budgetArgs, "--name", "Car", "--group", "missing");
   const bucketsBefore = JSON.parse(cli("bucket", "list", ...budgetArgs, "--archived", "--json"));
   assert.deepEqual(bucketsBefore.groups.map((group: { name: string }) => group.name), ["Goals", "Fixed"]);
-  console.log("Budget saved and updated, accounts added and edited, buckets and groups added, moved, archived and restored. Recreating with the same volume and a non-default port...");
+  console.log("Budget saved and updated, accounts added and edited, income recorded, buckets and groups added, moved, archived and restored. Recreating with the same volume and a non-default port...");
   port = 4317;
   compose("up", "-d", "--force-recreate", "--wait", "--wait-timeout", "60");
   assert.deepEqual(JSON.parse(cli("budget", "open", saved.id, "--json")), updated);
   assert.deepEqual(JSON.parse(cli("budget", "list", "--json")), [updated]);
   assert.deepEqual(JSON.parse(cli("account", "list", ...budgetArgs, "--json")), accounts);
+  assert.deepEqual(JSON.parse(cli("tx", "list", ...accountArgs, "--json")), register);
   assert.deepEqual(JSON.parse(cli("bucket", "list", ...budgetArgs, "--archived", "--json")), bucketsBefore);
   assert.throws(() => cli("budget", "open", "missing", "--json"), (error: unknown) => {
     assert.ok(error && typeof error === "object" && "status" in error && "stdout" in error);
@@ -136,7 +168,7 @@ try {
   }, "Missing budgets must produce a nonzero exit code.");
   compose("exec", "-T", "bucketeer", "node", "--input-type=module", "-e", `
     import assert from 'node:assert/strict';
-    for (const path of ['/', '/ui/app.js', '/ui/theme.js', '/ui/dom.js', '/ui/sheet.js', '/ui/shell.js', '/ui/accounts.js', '/ui/buckets.js', '/ui/bucket-dialog.js', '/ui/reorder.js', '/ui/styles.css', '/client.js', '/core/money.js', '/core/types.js', '/core/colours.js']) {
+    for (const path of ['/', '/ui/app.js', '/ui/theme.js', '/ui/dom.js', '/ui/sheet.js', '/ui/shell.js', '/ui/accounts.js', '/ui/buckets.js', '/ui/bucket-dialog.js', '/ui/reorder.js', '/ui/register.js', '/ui/styles.css', '/client.js', '/core/money.js', '/core/types.js', '/core/colours.js']) {
       const response = await fetch('http://localhost:${port}' + path);
       assert.equal(response.status, 200, path);
       assert.ok((await response.text()).length > 0, path);
@@ -149,6 +181,9 @@ try {
     const accountsPage = await fetch('http://localhost:${port}/budgets/${saved.id}/accounts');
     assert.equal(accountsPage.status, 200);
     assert.equal(await accountsPage.text(), await (await fetch('http://localhost:${port}/')).text());
+    const accountPage = await fetch('http://localhost:${port}/budgets/${saved.id}/accounts/${checking.id}');
+    assert.equal(accountPage.status, 200);
+    assert.equal(await accountPage.text(), await (await fetch('http://localhost:${port}/')).text());
     const bucketsPage = await fetch('http://localhost:${port}/budgets/${saved.id}/buckets');
     assert.equal(bucketsPage.status, 200);
     assert.equal(await bucketsPage.text(), await (await fetch('http://localhost:${port}/')).text());
@@ -162,7 +197,7 @@ try {
       assert.ok((await response.arrayBuffer()).byteLength > 0, path);
     }
   `);
-  console.log("PASS: Docker health on default and custom ports, CLI budget, account, group and bucket flows, container recreation, persistence, errors, and UI assets.");
+  console.log("PASS: Docker health on default and custom ports, CLI budget, account, income, group and bucket flows, container recreation, persistence, errors, and UI assets.");
 
   // Upgrade: a volume written by the image from main, before versioned migrations, opens in place with the current build.
   console.log("Building the image from main and filling an old volume with it...");
@@ -210,14 +245,19 @@ try {
   });
   compose("up", "-d", "--build", "--wait", "--wait-timeout", "60");
   assert.deepEqual(currentState(), oldState);
-  assert.equal(userVersion(), 1);
+  assert.equal(userVersion(), 2);
+  // The migrated volume takes transactions.
+  const oldAccount = oldState.accounts[0].id;
+  cli("tx", "add", "--account", oldAccount, "--amount", "10", "--income");
+  oldState.accounts[0] = JSON.parse(cli("account", "list", ...oldBudgetArgs, "--json"))[0];
+  assert.equal(oldState.accounts[0].balance, 26000);
   port = 4317;
   timeZone = "America/Los_Angeles";
   compose("up", "-d", "--force-recreate", "--wait", "--wait-timeout", "60");
   assert.deepEqual(currentState(), oldState);
-  assert.equal(userVersion(), 1);
+  assert.equal(userVersion(), 2);
   assert.equal(compose("exec", "-T", "bucketeer", "node", "-e", "console.log(Intl.DateTimeFormat().resolvedOptions().timeZone)"), "America/Los_Angeles");
-  console.log("PASS: a volume from main upgrades in place to schema version 1 and keeps its data across a container recreate; TZ reaches the server.");
+  console.log("PASS: a volume from main upgrades in place to schema version 2 and keeps its data across a container recreate; TZ reaches the server.");
 } finally {
   for (const name of [mainProject, upgradeProject]) {
     project = name;

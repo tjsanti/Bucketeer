@@ -7,15 +7,19 @@ import { bucketAvailable, nameKey, readBucketEdit, readBucketMove, readBucketRev
 import type { BucketFields, GroupChoice } from "./buckets.js";
 import { leastUsedColour } from "./colours.js";
 import { calendarIn, defaultTimeZone } from "./time.js";
+import { assertConsistent, readNewTransaction, readTransactionEdit } from "./transactions.js";
 import type { BucketColour } from "./colours.js";
 import { BudgetError } from "./types.js";
-import type { Account, AccountType, ArchiveResult, Bucket, BucketGroup, BucketTable, BucketType, Budget, Health } from "./types.js";
+import type {
+  Account, AccountType, ArchiveResult, Bucket, BucketGroup, BucketTable, BucketType, Budget, Category, Health, RegisterTransaction, Transaction,
+} from "./types.js";
 
 export { BudgetError } from "./types.js";
 export type { BucketColour } from "./colours.js";
 export type {
   Account, AccountEditInput, AccountType, ArchiveResult, Bucket, BucketEditInput, BucketGroup, BucketMoveInput, BucketRevertInput, BucketTable, BucketType,
-  Budget, BudgetErrorCode, BudgetErrorField, BudgetNameInput, GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput,
+  Budget, BudgetErrorCode, BudgetErrorField, BudgetNameInput, Category, GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput,
+  NewTransactionInput, RegisterTransaction, Transaction, TransactionEditInput,
 } from "./types.js";
 
 export interface BucketeerOptions {
@@ -43,13 +47,33 @@ function accountFromRow(row: Record<string, SQLOutputValue>): Account {
     type: String(row.type) as AccountType,
     startingBalance,
     startingDate: String(row.starting_date),
-    balance: accountBalance({ startingBalance }),
+    balance: accountBalance({ startingBalance, activity: Number(row.activity) }),
     order: Number(row.sort_order),
     closed: row.closed_at !== null,
     closedAt: row.closed_at === null ? null : String(row.closed_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
+}
+
+function transactionFromRow(row: Record<string, SQLOutputValue>): Transaction {
+  return {
+    id: String(row.id),
+    budgetId: String(row.budget_id),
+    accountId: String(row.account_id),
+    date: String(row.date),
+    payee: String(row.payee),
+    memo: String(row.memo),
+    amount: Number(row.amount),
+    category: { kind: String(row.kind) } as Category,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+/** The first day of the month twelve months before the given "YYYY-MM" (ADR-0006). */
+function earliestDate(creationMonth: string): string {
+  return `${String(Number(creationMonth.slice(0, 4)) - 1).padStart(4, "0")}-${creationMonth.slice(5, 7)}-01`;
 }
 
 function groupFromRow(row: Record<string, SQLOutputValue>): BucketGroup {
@@ -97,8 +121,9 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   const insert = database.prepare("INSERT INTO budgets (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)");
   const update = database.prepare("UPDATE budgets SET name = ?, updated_at = ? WHERE id = ?");
   const health = database.prepare("SELECT id FROM budgets LIMIT 1");
-  const findAccount = database.prepare("SELECT * FROM accounts WHERE id = ?");
-  const accountsOf = database.prepare("SELECT * FROM accounts WHERE budget_id = ? ORDER BY sort_order, created_at, id");
+  const withActivity = "SELECT accounts.*, (SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE account_id = accounts.id) AS activity FROM accounts";
+  const findAccount = database.prepare(`${withActivity} WHERE id = ?`);
+  const accountsOf = database.prepare(`${withActivity} WHERE budget_id = ? ORDER BY sort_order, created_at, id`);
   const insertAccount = database.prepare(`
     INSERT INTO accounts (id, budget_id, name, type, starting_balance, starting_date, sort_order, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM accounts WHERE budget_id = ?), ?, ?)`);
@@ -129,6 +154,15 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   const previousMonthOf = database.prepare("SELECT previous_goal_month FROM buckets WHERE id = ?");
   const orderBucket = database.prepare("UPDATE buckets SET sort_order = ? WHERE id = ?");
   const orphanArchived = database.prepare("UPDATE buckets SET group_id = NULL WHERE group_id = ? AND archived_at IS NOT NULL");
+  const findTransaction = database.prepare("SELECT * FROM transactions WHERE id = ?");
+  // Oldest first, so running balances can be summed forward; ties keep entry order.
+  const transactionsOf = database.prepare("SELECT * FROM transactions WHERE account_id = ? ORDER BY date, created_at, rowid");
+  const insertTransaction = database.prepare(`
+    INSERT INTO transactions (id, budget_id, account_id, date, payee, memo, amount, kind, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const updateTransaction = database.prepare("UPDATE transactions SET date = ?, payee = ?, memo = ?, amount = ?, kind = ?, updated_at = ? WHERE id = ?");
+  const deleteTransactionRow = database.prepare("DELETE FROM transactions WHERE id = ?");
+  const incomeOf = database.prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE budget_id = ? AND kind = 'income'");
 
   // Reads and writes that depend on each other (name uniqueness, closing) run in one immediate transaction.
   function transaction<T>(work: () => T): T {
@@ -165,7 +199,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   function saveAccount(account: Account, changes: { name?: string; startingBalance?: number; startingDate?: string; closed?: boolean }): Account {
     const next = { ...account, ...changes };
     const closed = changes.closed ?? account.closed;
-    if (closed && accountBalance(next) !== 0) throw new BudgetError("balance_not_zero", "Balance must be 0.00.");
+    if (closed && accountBalance({ startingBalance: next.startingBalance, activity: account.balance - account.startingBalance }) !== 0) throw new BudgetError("balance_not_zero", "Balance must be 0.00.");
     const now = timestamp();
     const closedAt = !closed ? null : account.closedAt ?? now;
     updateAccount.run(next.name, next.startingBalance, next.startingDate, closedAt, now, account.id);
@@ -278,6 +312,23 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
     });
   }
 
+  function openTransaction(id: string): Transaction {
+    const row = findTransaction.get(id);
+    if (!row) throw new BudgetError("not_found", "Transaction not found.");
+    return transactionFromRow(row);
+  }
+
+  // A date must be today or earlier, and no earlier than the first day of the budget's creation month − 12.
+  function assertDateAllowed(budget: Budget, date: string): void {
+    if (date > calendar.dateOf(clock())) throw new BudgetError("invalid_input", "Transactions can't be dated in the future.", "date");
+    const earliest = earliestDate(calendar.monthOf(new Date(budget.createdAt)));
+    if (date < earliest) throw new BudgetError("invalid_input", `Transactions can't be dated before ${earliest}.`, "date");
+  }
+
+  function assertOpen(account: Account): void {
+    if (account.closed) throw new BudgetError("account_closed", `${account.name} is closed. Reopen it first.`);
+  }
+
   function openBudget(id: string): Budget {
     const row = find.get(id);
     if (!row) throw new BudgetError("not_found", "Budget not found.");
@@ -347,7 +398,54 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
     // Owner rule: an account's starting balance counts as money to assign, and a card's negative
     // opening balance reduces it. Closed accounts are included.
     readyToAssign(budgetId: string): number {
-      return sumReadyToAssign(listAccounts(budgetId));
+      return sumReadyToAssign(listAccounts(budgetId), Number(incomeOf.get(budgetId)?.total));
+    },
+    addTransaction(accountId: string, input: unknown): Transaction {
+      const fields = readNewTransaction(input);
+      return transaction(() => {
+        const account = openAccount(accountId);
+        assertOpen(account);
+        const next = { date: fields.date ?? calendar.dateOf(clock()), payee: fields.payee ?? "", memo: fields.memo ?? "", amount: fields.amount, category: fields.category };
+        assertConsistent(next);
+        assertDateAllowed(openBudget(account.budgetId), next.date);
+        const now = timestamp();
+        const id = randomUUID();
+        insertTransaction.run(id, account.budgetId, account.id, next.date, next.payee, next.memo, next.amount, next.category.kind, now, now);
+        return openTransaction(id);
+      });
+    },
+    openTransaction,
+    // A closed account's balance stays 0, so its transactions' amounts can't change and none can be deleted.
+    editTransaction(id: string, input: unknown): Transaction {
+      const edit = readTransactionEdit(input);
+      return transaction(() => {
+        const existing = openTransaction(id);
+        const account = openAccount(existing.accountId);
+        const next = { ...existing, ...edit };
+        if (next.amount !== existing.amount) assertOpen(account);
+        assertConsistent(next);
+        if (edit.date !== undefined) assertDateAllowed(openBudget(existing.budgetId), next.date);
+        updateTransaction.run(next.date, next.payee, next.memo, next.amount, next.category.kind, timestamp(), id);
+        return openTransaction(id);
+      });
+    },
+    deleteTransaction(id: string): void {
+      transaction(() => {
+        const existing = openTransaction(id);
+        assertOpen(openAccount(existing.accountId));
+        deleteTransactionRow.run(id);
+      });
+    },
+    /** The account's register, newest first, each with the balance just after it. */
+    listTransactions(accountId: string): { transactions: RegisterTransaction[] } {
+      const account = openAccount(accountId);
+      let balance = account.startingBalance;
+      const register = transactionsOf.all(accountId).map((row) => {
+        const found = transactionFromRow(row);
+        balance += found.amount;
+        return { ...found, runningBalance: balance };
+      });
+      return { transactions: register.reverse() };
     },
     listBucketTable,
     createGroup(budgetId: string, input: unknown): BucketGroup {

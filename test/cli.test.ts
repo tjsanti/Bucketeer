@@ -328,3 +328,77 @@ test("CLI group and bucket commands handle dollars, positions, text output, and 
     core.close();
   }
 });
+
+test("CLI tx and ready commands record income with dollars, tab-separated text and cents in JSON", async () => {
+  const core = openBucketeer(":memory:", { now: () => new Date("2026-11-20T12:00:00.000Z"), timeZone: "UTC" });
+  const server = createApi(core);
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const url = `http://127.0.0.1:${address.port}`;
+  function cli(...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+    return new Promise((resolveResult) => {
+      execFile(process.execPath, [resolve("dist/cli.js"), ...args], { env: { ...process.env, BUCKETEER_URL: url, BUCKETEER_BUDGET: "" } }, (error, stdout, stderr) => {
+        resolveResult({ code: error ? Number(error.code) || 1 : 0, stdout: stdout.trim(), stderr: stderr.trim() });
+      });
+    });
+  }
+  const json = async (...args: string[]) => {
+    const result = await cli(...args, "--json");
+    assert.equal(result.code, 0, result.stdout || result.stderr);
+    return JSON.parse(result.stdout);
+  };
+  const failure = async (expected: string, ...args: string[]) => {
+    const result = await cli(...args, "--json");
+    assert.notEqual(result.code, 0, args.join(" "));
+    assert.equal(JSON.parse(result.stdout).error.code, expected, args.join(" "));
+  };
+  try {
+    const budget = core.createBudget({ name: "Household" });
+    const checking = core.createAccount(budget.id, { name: "Checking", type: "checking", startingBalance: 100_000, startingDate: "2026-11-01" });
+    core.createAccount(budget.id, { name: "Visa", type: "credit-card", startingBalance: -41_209, startingDate: "2026-11-01" });
+    const a = ["--account", checking.id];
+    assert.deepEqual(await json("ready", "--budget", budget.id), { readyToAssign: 58_791 });
+    assert.deepEqual(await cli("ready", "--budget", budget.id), { code: 0, stdout: "587.91", stderr: "" });
+    assert.deepEqual(await cli("tx", "list", ...a), { code: 0, stdout: "No transactions.", stderr: "" });
+
+    const paycheck = await json("tx", "add", ...a, "--amount", "2,000", "--income", "--payee", "Acme Payroll", "--memo", "November", "--date", "2026-11-14");
+    assert.deepEqual([paycheck.amount, paycheck.category, paycheck.date, paycheck.payee, paycheck.memo], [200_000, { kind: "income" }, "2026-11-14", "Acme Payroll", "November"]);
+    // Text: id, date, payee, category, amount, running balance. The date defaults to today in the server's zone.
+    const added = await cli("tx", "add", ...a, "--amount", "50", "--income", "--payee", "Refund");
+    const bonusId = added.stdout.split("\t")[0]!;
+    assert.deepEqual(added, { code: 0, stdout: `${bonusId}\t2026-11-20\tRefund\tIncome\t50.00\t3,050.00`, stderr: "" });
+    assert.deepEqual(await cli("tx", "list", ...a), {
+      code: 0, stderr: "",
+      stdout: `${bonusId}\t2026-11-20\tRefund\tIncome\t50.00\t3,050.00\n${paycheck.id}\t2026-11-14\tAcme Payroll\tIncome\t2,000.00\t3,000.00`,
+    });
+    const listed = await json("tx", "list", ...a);
+    assert.deepEqual(listed.transactions.map((row: { amount: number; runningBalance: number }) => [row.amount, row.runningBalance]), [[5_000, 305_000], [200_000, 300_000]]);
+    assert.deepEqual(await json("ready", "--budget", budget.id), { readyToAssign: 263_791 });
+
+    const edited = await cli("tx", "edit", bonusId, "--amount", "75.5", "--memo", "Store credit");
+    assert.deepEqual(edited, { code: 0, stdout: `${bonusId}\t2026-11-20\tRefund\tIncome\t75.50\t3,075.50`, stderr: "" });
+    assert.equal((await json("tx", "edit", bonusId, "--income", "--payee", "")).payee, "");
+    assert.deepEqual(await json("tx", "delete", bonusId), { id: bonusId, deleted: true });
+    assert.deepEqual(await cli("tx", "delete", paycheck.id), { code: 0, stdout: `Deleted transaction ${paycheck.id}.`, stderr: "" });
+    assert.deepEqual(await json("ready", "--budget", budget.id), { readyToAssign: 58_791 });
+
+    await failure("invalid_input", "tx", "add", ...a, "--amount", "-5", "--income");
+    await failure("invalid_input", "tx", "add", ...a, "--amount", "5", "--income", "--date", "2026-11-21");
+    await failure("not_found", "tx", "add", "--account", "missing", "--amount", "5", "--income");
+    await failure("not_found", "tx", "edit", "missing", "--memo", "x");
+    await failure("not_found", "ready", "--budget", "missing");
+    // Exactly one category option on add; no account, no amount, or a stray option is a usage error.
+    await failure("usage", "tx", "add", ...a, "--amount", "5");
+    await failure("usage", "tx", "add", "--amount", "5", "--income");
+    await failure("usage", "tx", "add", ...a, "--income");
+    await failure("usage", "tx", "add", ...a, "--amount", "5", "--income", "--name", "x");
+    await failure("usage", "tx", "list");
+    await failure("usage", "tx", "edit", paycheck.id);
+    await failure("usage", "ready");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    core.close();
+  }
+});

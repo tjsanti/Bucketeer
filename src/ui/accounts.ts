@@ -5,6 +5,7 @@ import type { Account, AccountType, Budget } from "../core/index.js";
 import { formatMoney, parseMoney } from "../core/money.js";
 import { el, icon, messageOf, setNote } from "./dom.js";
 import { field, moneyInput, openSheet, segmented, textInput, uid } from "./sheet.js";
+import { accountPath, routeLink } from "./shell.js";
 
 export interface AccountsContext {
   client: ReturnType<typeof createClient>;
@@ -13,6 +14,8 @@ export interface AccountsContext {
   refresh(): Promise<void>;
   /** Shows a snackbar with an Undo button. */
   snack(message: string, undo: () => Promise<void>): void;
+  /** Routes to another page of the app. */
+  navigate(path: string): void;
 }
 
 const typeOptions = [["checking", "Checking"], ["savings", "Savings"], ["credit-card", "Credit card"], ["cash", "Cash"]] as const;
@@ -158,10 +161,12 @@ export function createAccountsPage(ctx: AccountsContext) {
     const rows = open.map((account) => {
       const edit = el("button", { class: "row-edit", type: "button", "aria-label": `Edit ${account.name}`, "data-edit-id": account.id }, icon("pencil"));
       const row = el("tr", { class: "orow" },
-        el("th", { scope: "row", class: "aname" }, account.name),
+        el("th", { scope: "row", class: "aname" }, routeLink(el("a", { href: accountPath(budget.id, account.id) }, account.name), ctx.navigate)),
         el("td", { class: "bal num" }, formatMoney(account.balance)),
         el("td", { class: "go" }, edit));
-      row.addEventListener("click", () => openEdit(account));
+      row.addEventListener("click", (event) => {
+        if (!(event.target instanceof Element && event.target.closest("a"))) openEdit(account);
+      });
       return row;
     });
     return el("div", { class: "otable card" }, el("table", { "aria-label": "Accounts" },

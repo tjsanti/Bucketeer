@@ -15,6 +15,17 @@ export interface ShellHandlers {
 export type Section = "accounts" | "buckets";
 export const sectionPath = (budgetId: string, section: Section) => `/budgets/${encodeURIComponent(budgetId)}/${section}`;
 export const accountsPath = (budgetId: string) => sectionPath(budgetId, "accounts");
+export const accountPath = (budgetId: string, accountId: string) => `${accountsPath(budgetId)}/${encodeURIComponent(accountId)}`;
+
+/** Plain left clicks on an in-app link route in the page; modified clicks keep the browser's behaviour. */
+export function routeLink(link: HTMLAnchorElement, navigate: (path: string) => void): HTMLAnchorElement {
+  link.addEventListener("click", (event) => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    navigate(new URL(link.href).pathname);
+  });
+  return link;
+}
 
 export function createShell(handlers: ShellHandlers) {
   const wrap = byId("budget-wrap");
@@ -29,6 +40,9 @@ export function createShell(handlers: ShellHandlers) {
   let section: Section = "accounts";
   const sideAccounts = byId("side-accounts");
   const sideList = byId<HTMLUListElement>("side-list");
+  const sideReady = byId("side-ready");
+  const sideReadyFigure = byId("side-ready-figure");
+  let budgetId: string | undefined;
   const snack = byId("snack");
   const snackMessage = byId("snack-msg");
   const snackUndo = byId<HTMLButtonElement>("snack-undo");
@@ -74,11 +88,7 @@ export function createShell(handlers: ShellHandlers) {
 
   // Brand and nav are real links; plain clicks route in the page.
   for (const link of [navBuckets, navAccounts, document.querySelector<HTMLAnchorElement>(".wordmark")]) {
-    link?.addEventListener("click", (event) => {
-      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-      event.preventDefault();
-      handlers.navigate(new URL(link.href).pathname);
-    });
+    if (link) routeLink(link, handlers.navigate);
   }
 
   let snackTimer: number | undefined;
@@ -128,6 +138,7 @@ export function createShell(handlers: ShellHandlers) {
         return el("li", {}, item);
       }));
       nav.hidden = !current;
+      budgetId = current?.id;
       if (current) {
         navAccounts.href = sectionPath(current.id, "accounts");
         navBuckets.href = sectionPath(current.id, "buckets");
@@ -147,8 +158,16 @@ export function createShell(handlers: ShellHandlers) {
       sideAccounts.hidden = open.length === 0;
       const total = open.reduce((sum, account) => sum + account.balance, 0);
       sideList.replaceChildren(
-        ...open.map((account) => el("li", { class: "row" }, el("span", { class: "an" }, account.name), el("span", {}, formatMoney(account.balance)))),
+        ...open.map((account) => el("li", { class: "row" },
+          budgetId ? routeLink(el("a", { class: "an", href: accountPath(budgetId, account.id) }, account.name), handlers.navigate) : el("span", { class: "an" }, account.name),
+          el("span", {}, formatMoney(account.balance)))),
         el("li", { class: "total" }, el("span", {}, "Total"), el("span", {}, formatMoney(total, { symbol: true }))));
+    },
+    /** Violet, or the overspent red with a true minus when negative; null hides it. */
+    setReady(cents: number | null): void {
+      sideReady.hidden = cents === null;
+      sideReadyFigure.textContent = cents === null ? "" : formatMoney(cents, { symbol: true });
+      sideReady.classList.toggle("neg", cents !== null && cents < 0);
     },
     showSnack(message: string, undo: () => Promise<void>): void {
       pendingUndo = undo;

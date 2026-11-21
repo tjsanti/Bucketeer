@@ -26,7 +26,7 @@ export interface Account {
   startingBalance: number;
   /** YYYY-MM-DD, a real calendar date. */
   startingDate: string;
-  /** Integer cents. Equals startingBalance until spending exists. */
+  /** Integer cents: the starting balance plus every one of the account's transactions, whatever their date (ADR-0006). */
   balance: number;
   order: number;
   closed: boolean;
@@ -119,10 +119,46 @@ export interface ArchiveResult {
   returned: number;
 }
 
-export type BudgetErrorCode = "invalid_input" | "not_found" | "name_taken" | "balance_not_zero" | "group_not_empty" | "bucket_overspent" | "bucket_changed";
+/** What a transaction is filed under. Only Income exists so far; buckets, splits and transfers come next. */
+export type Category = { kind: "income" };
+
+export interface Transaction {
+  id: string;
+  budgetId: string;
+  accountId: string;
+  /** YYYY-MM-DD: today or earlier (server time zone), and no earlier than the first day of the budget's creation month − 12. */
+  date: string;
+  /** 0 to 120 code points, trimmed. */
+  payee: string;
+  /** 0 to 500 code points, trimmed. */
+  memo: string;
+  /** Signed integer cents, never 0. Income is always positive. */
+  amount: number;
+  category: Category;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A transaction in its account's register, with the account's balance just after it. */
+export interface RegisterTransaction extends Transaction {
+  runningBalance: number;
+}
+
+export interface NewTransactionInput {
+  /** Defaults to today in the server's time zone. */
+  date?: string;
+  payee?: string;
+  memo?: string;
+  amount: number;
+  category: Category;
+}
+
+export type TransactionEditInput = Partial<NewTransactionInput>;
+
+export type BudgetErrorCode = "invalid_input" | "not_found" | "name_taken" | "balance_not_zero" | "group_not_empty" | "bucket_overspent" | "bucket_changed" | "account_closed";
 
 /** The input a validation error belongs to, so clients can mark the right field without reading the message. */
-export type BudgetErrorField = "name" | "group" | "colour" | "type" | "amount" | "month";
+export type BudgetErrorField = "name" | "group" | "colour" | "type" | "amount" | "month" | "date" | "payee" | "memo" | "category";
 
 /** An edit that undoes an earlier edit: bucket fields plus the `updatedAt` the earlier edit left behind. */
 export type BucketRevertInput = BucketEditInput & { revertOf: string };

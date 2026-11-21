@@ -5,15 +5,16 @@ export const MAX_ACCOUNT_NAME_LENGTH = 120;
 export const MAX_CENTS = 99_999_999_999;
 export const ACCOUNT_TYPES: readonly AccountType[] = ["checking", "savings", "credit-card", "cash"];
 
-// The one place an account's balance is computed. The spending slice adds transactions here.
-export function accountBalance(account: { startingBalance: number }): number {
-  return account.startingBalance;
+// The one place an account's balance is computed: the starting balance plus the sum of all its
+// transactions, including any dated before the starting date (ADR-0006).
+export function accountBalance(account: { startingBalance: number; activity: number }): number {
+  return account.startingBalance + account.activity;
 }
 
 // Owner rule: an account's starting balance counts as money to assign, and a card's negative
-// opening balance reduces it. Closed accounts are included.
-export function sumReadyToAssign(accounts: readonly { startingBalance: number }[]): number {
-  return accounts.reduce((total, account) => total + account.startingBalance, 0);
+// opening balance reduces it. Closed accounts are included. Income adds to it (ADR-0002).
+export function sumReadyToAssign(accounts: readonly { startingBalance: number }[], income: number): number {
+  return accounts.reduce((total, account) => total + account.startingBalance, income);
 }
 
 export function accountKey(name: string): string {

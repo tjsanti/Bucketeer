@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { ApiError, createClient } from "./client.js";
-import type { Account, AccountType, Bucket, BucketColour, BucketGroup, BucketTable, BucketType, Budget, NewBucketInput } from "./core/index.js";
+import type {
+  Account, AccountType, Bucket, BucketColour, BucketGroup, BucketTable, BucketType, Budget, Category, NewBucketInput, RegisterTransaction, Transaction,
+} from "./core/index.js";
 import { formatMoney, parseMoney } from "./core/money.js";
 import { BudgetError } from "./core/types.js";
 
@@ -29,16 +31,25 @@ const help = `Usage:
   bucketeer bucket move <id> [--group <id>] --position <n> [--json]
   bucketeer bucket archive <id> [--json]
   bucketeer bucket restore <id> [--json]
+  bucketeer tx list --account <id> [--json]
+  bucketeer tx add --account <id> --amount <amount> --income
+                   [--date <YYYY-MM-DD>] [--payee <payee>] [--memo <memo>] [--json]
+  bucketeer tx edit <id> [--amount <amount>] [--income] [--date <YYYY-MM-DD>] [--payee <payee>] [--memo <memo>] [--json]
+  bucketeer tx delete <id> [--json]
+  bucketeer ready --budget <id> [--json]
 
 Options:
   --url <url>    Server address (default: BUCKETEER_URL or http://localhost:3000)
   --budget <id>  Budget for list and add commands (default: BUCKETEER_BUDGET)
   --starting-balance <amount>
                  Dollars, signed: 1000, 1,000.50, -412.09 (a card's debt is negative; default 0)
-  --date <date>  Balance date for a new account (default: today)
+  --account <id> Account for tx list and tx add
+  --date <date>  Balance date for a new account (default: today), or a transaction's date
+                 (default: today in the server's time zone)
+  --income       File the transaction as Income, which adds to Ready to assign
   --type <type>  For buckets: recurring (--amount per month), goal (--amount by --by), or plain (default)
   --amount <amount>
-                 Dollars: 160, 3,000.00
+                 Dollars: 160, 3,000.00 (signed for transactions; Income is positive)
   --by <month>   A goal's month, YYYY-MM
   --colour <hue> sky, denim, blue, slate, teal, mint, green, forest,
                  lime, olive, sun, cocoa, peach, tangerine, rose, plum (default: least used)
@@ -80,6 +91,10 @@ try {
       colour: { type: "string" },
       position: { type: "string" },
       archived: { type: "boolean" },
+      account: { type: "string" },
+      income: { type: "boolean" },
+      payee: { type: "string" },
+      memo: { type: "string" },
     },
   });
   jsonOutput = values.json;
@@ -217,8 +232,46 @@ try {
       const bucket = await client.restoreBucket(id);
       result = bucket;
       if (!jsonOutput) console.log(formatBucket(bucket, await client.listBucketTable(bucket.budgetId)));
+    } else if (command === "ready") {
+      options(1, "budget");
+      const ready = await client.readyToAssign(budget());
+      result = ready;
+      if (!jsonOutput) console.log(formatMoney(ready.readyToAssign));
+    } else if (command === "tx" && action === "list" && values.account !== undefined) {
+      options(2, "account");
+      const register = await client.listTransactions(values.account);
+      result = register;
+      if (!jsonOutput) console.log(register.transactions.length ? register.transactions.map(formatTransaction).join("\n") : "No transactions.");
+    } else if (command === "tx" && action === "add" && values.account !== undefined && values.amount !== undefined) {
+      options(2, "account", "amount", "income", "date", "payee", "memo");
+      const category = categoryOption(values);
+      if (!category) throw new ApiError("usage", "Choose a category with --income.");
+      const added = await client.addTransaction(values.account, { amount: parseMoney(values.amount), category, ...transactionFields(values) });
+      result = added;
+      if (!jsonOutput) console.log(formatTransaction(await inRegister(added)));
+    } else if (command === "tx" && action === "edit" && id && ["amount", "income", "date", "payee", "memo"].some((key) => key in values)) {
+      options(3, "amount", "income", "date", "payee", "memo");
+      const category = categoryOption(values);
+      const edited = await client.editTransaction(id, {
+        ...(values.amount !== undefined && { amount: parseMoney(values.amount) }),
+        ...(category && { category }),
+        ...transactionFields(values),
+      });
+      result = edited;
+      if (!jsonOutput) console.log(formatTransaction(await inRegister(edited)));
+    } else if (command === "tx" && action === "delete" && id) {
+      options(3);
+      await client.deleteTransaction(id);
+      result = { id, deleted: true };
+      if (!jsonOutput) console.log(`Deleted transaction ${id}.`);
     } else {
       throw new ApiError("usage", help.trim());
+    }
+
+    // The transaction as its account's register shows it, with the running balance.
+    async function inRegister(transaction: Transaction): Promise<RegisterTransaction> {
+      const { transactions } = await client.listTransactions(transaction.accountId);
+      return transactions.find((row) => row.id === transaction.id) ?? { ...transaction, runningBalance: 0 };
     }
     if (jsonOutput) console.log(JSON.stringify(result));
   }
@@ -254,6 +307,25 @@ function bucketFields(values: { group?: string; "new-group"?: string; amount?: s
 function position(text: string): number {
   if (!/^[1-9][0-9]{0,8}$/.test(text)) throw new BudgetError("invalid_input", "Position must be a whole number from 1.");
   return Number(text) - 1;
+}
+
+// The one category option given, or undefined for none. Buckets, splits and transfers add options here.
+function categoryOption(values: { income?: boolean }): Category | undefined {
+  return values.income ? { kind: "income" } : undefined;
+}
+
+function transactionFields(values: { date?: string; payee?: string; memo?: string }) {
+  return {
+    ...(values.date !== undefined && { date: values.date }),
+    ...(values.payee !== undefined && { payee: values.payee }),
+    ...(values.memo !== undefined && { memo: values.memo }),
+  };
+}
+
+// id, date, payee, category, amount, running balance.
+function formatTransaction(transaction: RegisterTransaction): string {
+  const category = transaction.category.kind === "income" ? "Income" : transaction.category.kind;
+  return [transaction.id, transaction.date, transaction.payee, category, formatMoney(transaction.amount), formatMoney(transaction.runningBalance)].join("\t");
 }
 
 function formatGroup(group: BucketGroup): string {

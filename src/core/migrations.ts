@@ -3,6 +3,7 @@ import { ACCOUNT_TYPES, MAX_ACCOUNT_NAME_LENGTH, MAX_CENTS } from "./accounts.js
 import { MAX_BUDGET_NAME_LENGTH } from "./budget.js";
 import { BUCKET_TYPES, MAX_BUCKET_NAME_LENGTH } from "./buckets.js";
 import { BUCKET_COLOURS } from "./colours.js";
+import { MAX_MEMO_LENGTH, MAX_PAYEE_LENGTH } from "./transactions.js";
 
 const list = (values: readonly string[]) => values.map((value) => `'${value}'`).join(", ");
 const monthCheck = (column: string) => `CHECK(${column} GLOB '[0-9][0-9][0-9][0-9]-[01][0-9]' AND substr(${column}, 6, 2) BETWEEN '01' AND '12')`;
@@ -70,6 +71,40 @@ const migrations: readonly string[] = [
     ) STRICT;
     CREATE UNIQUE INDEX buckets_name ON buckets(budget_id, name COLLATE NOCASE);
     CREATE INDEX buckets_by_group ON buckets(budget_id, group_id, sort_order);
+  `,
+  // 2: transactions and their split lines.
+  `
+    CREATE TABLE transactions (
+      id TEXT PRIMARY KEY,
+      budget_id TEXT NOT NULL REFERENCES budgets(id),
+      account_id TEXT NOT NULL REFERENCES accounts(id),
+      date TEXT NOT NULL CHECK(date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND date(date) = date),
+      payee TEXT NOT NULL CHECK(length(payee) <= ${MAX_PAYEE_LENGTH}),
+      memo TEXT NOT NULL CHECK(length(memo) <= ${MAX_MEMO_LENGTH}),
+      amount INTEGER NOT NULL CHECK(amount <> 0 AND amount BETWEEN -${MAX_CENTS} AND ${MAX_CENTS}),
+      kind TEXT NOT NULL CHECK(kind IN ('income', 'bucket', 'split', 'transfer')),
+      bucket_id TEXT REFERENCES buckets(id),
+      transfer_account_id TEXT REFERENCES accounts(id),
+      transfer_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      CHECK(kind <> 'income' OR amount > 0),
+      CHECK((kind = 'bucket') = (bucket_id IS NOT NULL)),
+      CHECK((kind = 'transfer') = (transfer_account_id IS NOT NULL AND transfer_id IS NOT NULL))
+    ) STRICT;
+    CREATE INDEX transactions_by_account ON transactions(account_id, date);
+    CREATE INDEX transactions_by_bucket ON transactions(bucket_id);
+    CREATE INDEX transactions_by_budget ON transactions(budget_id, date);
+    CREATE INDEX transactions_by_transfer ON transactions(transfer_id);
+    CREATE TABLE transaction_lines (
+      transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+      idx INTEGER NOT NULL CHECK(idx >= 0),
+      bucket_id TEXT NOT NULL REFERENCES buckets(id),
+      amount INTEGER NOT NULL CHECK(amount <> 0 AND amount BETWEEN -${MAX_CENTS} AND ${MAX_CENTS}),
+      memo TEXT NOT NULL CHECK(length(memo) <= ${MAX_MEMO_LENGTH}),
+      PRIMARY KEY (transaction_id, idx)
+    ) STRICT;
+    CREATE INDEX transaction_lines_by_bucket ON transaction_lines(bucket_id);
   `,
 ];
 

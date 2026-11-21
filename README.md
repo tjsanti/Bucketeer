@@ -8,9 +8,10 @@ Early and in active development. Today you can:
 
 - keep several **budgets**, each saved on the server and reopenable by URL;
 - track **accounts** (checking, savings, credit card, cash) with a starting balance, closing and reopening them;
+- record **income** in each account's register, which fills **Ready to assign** (shown in the sidebar) and the account's balance;
 - organise **buckets** into **groups**: recurring (a monthly amount), goal (an amount by a month), or plain; reorder them by drag, keyboard, or the phone Reorder mode; archive and restore them.
 
-Income, spending, assigning money to buckets, and the month view are still to come, so balances and bucket "available" amounts do not move yet. Expect the data model to change between releases.
+Spending from buckets, splits, transfers, assigning money to buckets, and the month view are still to come, so bucket "available" amounts do not move yet. Expect the data model to change between releases.
 
 ## Run with Docker
 
@@ -61,6 +62,23 @@ bucketeer account reopen <account-id> --json
 
 Types are `checking`, `savings`, `credit-card`, and `cash`; a type is fixed once the account exists. A card's debt is a negative balance. `--date` sets the starting balance date (default: today). Names are unique within a budget, ignoring case. An account can be closed only when its balance is zero.
 
+### Transactions and Ready to assign
+
+```sh
+bucketeer tx add --account <account-id> --amount 2000 --income --payee "Acme Payroll" --memo "November" --json
+bucketeer tx add --account <account-id> --amount 50 --income --date 2026-11-14 --json
+bucketeer tx list --account <account-id> --json
+bucketeer tx edit <transaction-id> --amount 1950 --json
+bucketeer tx delete <transaction-id> --json
+bucketeer ready --budget <id> --json
+```
+
+Every transaction needs exactly one category option; `--income` is the only one so far. Income always has a positive amount and adds to Ready to assign, which is every account's starting balance plus all Income (a card's starting debt reduces it). Ready to assign can be negative.
+
+`--date` defaults to today in the server's time zone. A transaction can't be dated after today or before the first day of the month twelve months before the budget began; a date before the account's starting date is fine and counts toward its balance. An account's balance is its starting balance plus all of its transactions. A closed account takes no new transactions. Payees hold up to 120 characters and memos up to 500, both trimmed.
+
+`tx list` prints the register newest first as `id`, `date`, `payee`, `category`, `amount` and the running `balance`, tab-separated; `tx add` and `tx edit` print the same line for their transaction. `--json` gives `{ "transactions": [...] }` with integer cents and a `runningBalance` on each.
+
 ### Buckets and groups
 
 Buckets live in groups. `--position` is 1-based.
@@ -93,10 +111,12 @@ Everything the UI and CLI do goes through JSON routes under `/api`, plus `GET /h
 | --- | --- |
 | Budgets | `GET`, `POST /api/budgets`; `GET`, `PUT /api/budgets/:id` |
 | Accounts | `GET`, `POST /api/budgets/:id/accounts`; `GET`, `PATCH /api/accounts/:id`; `POST /api/accounts/:id/close`, `/reopen` |
+| Transactions | `GET`, `POST /api/accounts/:id/transactions` (the register, newest first, with `runningBalance`); `GET`, `PATCH`, `DELETE /api/transactions/:id` |
+| Ready to assign | `GET /api/budgets/:id/ready-to-assign` → `{ "readyToAssign" }` |
 | Groups | `POST /api/budgets/:id/groups`; `PATCH`, `DELETE /api/groups/:id`; `POST /api/groups/:id/move` |
 | Buckets | `GET /api/budgets/:id/buckets` (groups and buckets together); `POST /api/budgets/:id/buckets`; `GET`, `PATCH /api/buckets/:id`; `POST /api/buckets/:id/move`, `/archive`, `/restore`, `/revert` |
 
-Errors have the shape `{ "error": { "code", "message" } }` with a matching HTTP status.
+Errors have the shape `{ "error": { "code", "message" } }` with a matching HTTP status, plus a `field` when one input is to blame.
 
 ## Development and verification
 
@@ -109,7 +129,7 @@ npm test
 npm run acceptance
 ```
 
-Browser tests cover the budget picker, accounts, and buckets (add, edit, archive, restore, undo, drag and keyboard reordering), failed saves and failed refreshes, mobile layouts, the light/dark theme and its saved override, and bundled fonts loading with no external requests. Install Chromium once, then run them:
+Browser tests cover the budget picker, accounts, the account register and income entry, Ready to assign, and buckets (add, edit, archive, restore, undo, drag and keyboard reordering), failed saves and failed refreshes, mobile layouts, the light/dark theme and its saved override, and bundled fonts loading with no external requests. Install Chromium once, then run them:
 
 ```sh
 npx playwright-core install chromium
@@ -118,7 +138,7 @@ npm run test:ui
 
 To use an existing Chrome or Chromium executable instead, set `BUCKETEER_BROWSER_PATH` to its full path.
 
-`npm run acceptance` builds an isolated Docker Compose project, saves and updates a budget through the CLI, recreates the container on a non-default port, and verifies the same budget reopens from its SQLite volume. It also starts the image built from `main` on a separate volume, then upgrades that volume in place with the current build. It checks health, errors, and UI assets, then removes only its own containers, volume, and image.
+`npm run acceptance` builds an isolated Docker Compose project, saves and updates a budget, its accounts, income and buckets through the CLI, recreates the container on a non-default port, and verifies the same budget reopens from its SQLite volume. It also starts the image built from `main` on a separate volume, then upgrades that volume in place with the current build. It checks health, errors, and UI assets, then removes only its own containers, volume, and image.
 
 To run without Docker during development:
 
@@ -133,11 +153,11 @@ Server configuration: `PORT` defaults to `3000`, `HOST` to `0.0.0.0`, and `DATAB
 
 ## Structure
 
-- `src/core/` owns budgeting rules, IDs, timestamps, money, and SQLite persistence behind `openBucketeer`. Rules live here and are never reimplemented in clients; `money.ts` and `colours.ts` are pure and shared with the browser.
+- `src/core/` owns budgeting rules (transaction rules in `transactions.ts`, schema history in `migrations.ts`), IDs, timestamps, money, and SQLite persistence behind `openBucketeer`. Rules live here and are never reimplemented in clients; `money.ts` and `colours.ts` are pure and shared with the browser.
 - `src/api.ts` exposes the core over HTTP and serves the UI.
 - `src/client.ts` is the HTTP client shared by the CLI and UI.
 - `src/cli.ts` provides scriptable commands.
-- `src/ui/` is the web app, with no framework: the shell and budget picker, the Accounts and Buckets pages, and their dialogs. `styles.css` holds the design tokens and light/dark themes. The build bundles the Nunito and Figtree fonts from Fontsource into `dist/ui/fonts` with content-hashed names, served as immutable.
+- `src/ui/` is the web app, with no framework: the shell and budget picker, the Accounts page and each account's register, the Buckets page, and their dialogs. `styles.css` holds the design tokens and light/dark themes. The build bundles the Nunito and Figtree fonts from Fontsource into `dist/ui/fonts` with content-hashed names, served as immutable.
 - `scripts/` holds the asset build and the Docker acceptance check; `test/` holds core, API, CLI, and browser tests.
 
 ## Contributing
