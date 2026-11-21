@@ -568,7 +568,13 @@ main { padding: var(--s-8) var(--s-10) var(--s-16); min-width: 0; max-width: 110
 .reg .edit { background: var(--surface-sunken); border-top: 1px solid var(--border); box-shadow: inset 3px 0 0 var(--focus); }
 .reg .edit .erow { padding-top: 6px; }
 .efoot { display: flex; justify-content: flex-end; padding: 6px 10px 8px; }
-.efoot:empty { display: none; }
+.efoot:empty, .efoot:not(:has(> :not([hidden]))) { display: none; }
+/* A transfer's "Visa −412.09 → 0.00": the other account's balance before and after. */
+.xfer-prev { display: flex; align-items: center; gap: 6px; margin-right: auto; min-width: 0; font-size: var(--fs-sm); color: var(--text-muted); }
+.xfer-prev[hidden] { display: none; }
+.xfer-prev strong { color: var(--text); font-weight: var(--fw-semibold); }
+.tx-sheet .xfer-prev { margin: calc(-1 * var(--s-2)) 0 0; }
+.lead-ic { display: inline-flex; align-items: center; color: var(--text-muted); flex: none; }
 .eacts { display: flex; gap: 6px; align-items: center; }
 .eacts .del { margin-right: auto; }
 .amt-wrap { display: flex; width: 100%; }
@@ -663,6 +669,25 @@ input[list]::-webkit-calendar-picker-indicator { display: none !important; }
 .frow2 { display: flex; }
 .frow2 .btn { min-height: var(--touch); }
 .reg-end { display: flex; justify-content: space-between; gap: var(--s-3); padding: 10px var(--s-4); border-top: 1px solid var(--border); font-size: var(--fs-sm); color: var(--text-muted); }
+/* Recent activity: read-only rows, the register's look, with an Account column on the Accounts overview. */
+.recent { display: flex; flex-direction: column; gap: var(--s-3); align-self: stretch; margin-top: var(--s-3); }
+.recent h2 { font-size: var(--fs-lg); }
+.atable { overflow: hidden; }
+.atable [role="row"] { display: grid; grid-template-columns: 88px minmax(0, 1.3fr) minmax(0, 1.2fr) 128px; }
+.atable.with-acct [role="row"] { grid-template-columns: 88px minmax(0, 1.3fr) minmax(0, 1.2fr) minmax(0, 1fr) 128px; }
+.atable .c { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 var(--s-3); }
+.atable .c.amt { justify-content: flex-end; }
+.atable .ahead { min-height: 40px; border-bottom: 1px solid var(--border-strong); }
+.atable .ahead .c { font-size: var(--fs-xs); font-weight: var(--fw-semibold); color: var(--text-muted); letter-spacing: .02em; }
+.atable .arow { min-height: var(--row-h); }
+.atable .arow + .arow { border-top: 1px solid var(--border); }
+.atable .arow .date, .atable .arow .acct { color: var(--text-muted); white-space: nowrap; }
+.atable .arow .payee { font-weight: var(--fw-semibold); }
+.atable .arow .pn, .atable .arow .cn { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.atable .arow .amt { font-weight: var(--fw-semibold); white-space: nowrap; }
+.atable .arow .amt.in { color: var(--ok); }
+.atable .arow .cat .dot { --dot: 9px; }
+.atable .arow .sub, .atable .arow .pfall { display: none; }
 .otable .ototal { height: var(--row-h); border-top: 1px solid var(--border-strong); font-weight: var(--fw-bold); }
 .otable .ototal th { font-weight: var(--fw-bold); }
 .otable .ototal .bal { font-size: var(--fs-md); }
@@ -936,6 +961,13 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 
   /* Register: two-line rows (payee over category and date; amount over balance). Entry comes with the phone sheet. */
   .reg .rhead, .reg .entry { display: none; }
+  .atable .ahead { display: none; }
+  .atable [role="row"].arow, .atable.with-acct [role="row"].arow { grid-template-columns: minmax(0, 1fr) auto; min-height: 60px; }
+  .atable .arow .c.date, .atable .arow .c.cat, .atable .arow .c.acct { display: none; }
+  .atable .arow .c.payee { flex-direction: column; align-items: flex-start; justify-content: center; gap: 1px; padding: 9px 4px 9px var(--s-3); }
+  .atable .arow .pn:empty { display: none; }
+  .atable .arow .pfall { display: block; }
+  .atable .arow .sub { display: block; max-width: 100%; font-size: var(--fs-sm); font-weight: var(--fw-regular); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .reg [role="row"].rrow { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "main amt" "main bal"; min-height: 60px; }
   .reg .rrow > .c { min-height: 0; }
   .reg .rrow .c.date, .reg .rrow .c.cat, .reg .rrow .c.memo { display: none; }

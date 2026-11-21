@@ -1,7 +1,7 @@
 // Transaction input rules. Rules that need the database or the clock (dates, closed accounts) live in index.ts.
 import { MAX_CENTS } from "./accounts.js";
 import { BudgetError } from "./types.js";
-import type { BudgetErrorField, Category, SplitLine, TransactionEditInput } from "./types.js";
+import type { BudgetErrorField, CategoryInput, SplitLine, TransactionEditInput } from "./types.js";
 
 export const MAX_PAYEE_LENGTH = 120;
 export const MAX_MEMO_LENGTH = 500;
@@ -12,7 +12,7 @@ export interface TransactionFields {
   payee?: string;
   memo?: string;
   amount?: number;
-  category?: Category;
+  category?: CategoryInput;
 }
 
 function invalid(message: string, field?: BudgetErrorField): never {
@@ -74,7 +74,7 @@ function readSplitLine(value: unknown): SplitLine {
   return { bucketId: fields.bucketId, amount: fields.amount as number, memo: readText(fields.memo, MAX_MEMO_LENGTH, "Memo", "category") };
 }
 
-function readCategory(value: unknown): Category {
+function readCategory(value: unknown): CategoryInput {
   const fields = asObject(value);
   const keys = Object.keys(fields).sort().join();
   if (fields.kind === "income" && keys === "kind") return { kind: "income" };
@@ -83,11 +83,15 @@ function readCategory(value: unknown): Category {
     if (fields.lines.length < 2) invalid("A split needs at least two lines.", "category");
     return { kind: "split", lines: fields.lines.map(readSplitLine) };
   }
-  return invalid("Category must be Income, a bucket or a split.", "category");
+  // A transfer's transferId belongs to the pair, so one sent back (an Undo resending the whole category) is ignored.
+  if (fields.kind === "transfer" && ["accountId,kind", "accountId,kind,transferId"].includes(keys) && isId(fields.accountId)) {
+    return { kind: "transfer", accountId: fields.accountId };
+  }
+  return invalid("Category must be Income, a bucket, a split or a transfer account.", "category");
 }
 
 /** The buckets a category files money to, each once. */
-export function bucketIdsOf(category: Category): string[] {
+export function bucketIdsOf(category: CategoryInput): string[] {
   if (category.kind === "bucket") return [category.bucketId];
   if (category.kind === "split") return [...new Set(category.lines.map((line) => line.bucketId))];
   return [];
@@ -103,11 +107,11 @@ function readFields(fields: Record<string, unknown>): TransactionFields {
   return read;
 }
 
-export function readNewTransaction(input: unknown): TransactionFields & { amount: number; category: Category } {
+export function readNewTransaction(input: unknown): TransactionFields & { amount: number; category: CategoryInput } {
   const fields = readObject(input);
   if (!("amount" in fields)) invalid("An amount is required.", "amount");
   if (!("category" in fields)) invalid("A category is required.", "category");
-  return readFields(fields) as TransactionFields & { amount: number; category: Category };
+  return readFields(fields) as TransactionFields & { amount: number; category: CategoryInput };
 }
 
 export function readTransactionEdit(input: unknown): TransactionEditInput {
@@ -117,7 +121,7 @@ export function readTransactionEdit(input: unknown): TransactionEditInput {
 }
 
 /** The rules between amount and category, checked on the transaction as it will be saved. */
-export function assertConsistent(transaction: { amount: number; category: Category }): void {
+export function assertConsistent(transaction: { amount: number; category: CategoryInput }): void {
   const { amount, category } = transaction;
   if (category.kind === "income" && amount <= 0) invalid("Income must be more than 0.00.", "amount");
   if (category.kind === "split") {

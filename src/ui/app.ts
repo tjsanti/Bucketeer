@@ -12,6 +12,7 @@ import { createBucketsPage } from "./buckets.js";
 import { byId, el, messageOf, setNote } from "./dom.js";
 import { createMonthHeader } from "./month-header.js";
 import { createRegisterPage } from "./register.js";
+import { RECENT_LIMIT, recentActivity } from "./recent-activity.js";
 import { field, openSheet, textInput } from "./sheet.js";
 import { accountsPath, createShell } from "./shell.js";
 import type { Section } from "./shell.js";
@@ -246,13 +247,13 @@ async function route(): Promise<void> {
             if (stale()) return;
             showSide(next);
             const current = next.accounts.find((candidate) => candidate.id === account.id);
-            if (current) page.render({ account: current, ...data });
+            if (current) page.render({ account: current, accounts: next.accounts, ...data });
           } catch {
             if (!stale()) page.note("Your change was saved, but the register could not refresh. Reload to try again.");
           }
         },
       });
-      page.render({ account, ...first });
+      page.render({ account, accounts: side.accounts, ...first });
       main.replaceChildren(page.root);
       restoreMonthFocus(header);
       document.title = `${account.name} · ${budget.name} · Bucketeer`;
@@ -260,7 +261,7 @@ async function route(): Promise<void> {
     }
 
     if (section === "buckets") {
-      const [side, range] = await Promise.all([loadSide(budget.id), client.monthRange(budget.id)]);
+      const [side, range, recent] = await Promise.all([loadSide(budget.id), client.monthRange(budget.id), client.recentTransactions(budget.id, RECENT_LIMIT)]);
       if (stale()) return;
       const month = monthFromUrl(range);
       const load = async () => {
@@ -285,6 +286,7 @@ async function route(): Promise<void> {
       });
       showSide(side);
       page.render(first);
+      page.root.append(recentActivity({ transactions: recent, accounts: side.accounts, table: first.table, showAccount: false }) ?? "");
       main.replaceChildren(page.root);
       restoreMonthFocus(header);
       document.title = `Buckets · ${budget.name} · Bucketeer`;
@@ -294,7 +296,8 @@ async function route(): Promise<void> {
     const [side, range] = await Promise.all([loadSide(budget.id), client.monthRange(budget.id)]);
     if (stale()) return;
     const month = monthFromUrl(range);
-    const balances = await client.accountBalances(budget.id, month);
+    const [balances, recent, table] = await Promise.all([
+      client.accountBalances(budget.id, month), client.recentTransactions(budget.id, RECENT_LIMIT), client.listBucketTable(budget.id)]);
     if (stale()) return;
     const header = monthHeader(range, month);
     const page = createAccountsPage({
@@ -317,6 +320,7 @@ async function route(): Promise<void> {
     });
     showSide(side);
     page.render(side.accounts, balances);
+    page.root.append(recentActivity({ transactions: recent, accounts: side.accounts, table, showAccount: true }) ?? "");
     main.replaceChildren(page.root);
     restoreMonthFocus(header);
     document.title = `Accounts · ${budget.name} · Bucketeer`;
