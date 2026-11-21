@@ -108,7 +108,7 @@ try {
   assert.deepEqual(JSON.parse(cli("tx", "delete", early.id, "--json")), { id: early.id, deleted: true });
   assert.equal(ready(), 258791);
   accounts = JSON.parse(cli("account", "list", ...budgetArgs, "--json"));
-  const register = JSON.parse(cli("tx", "list", ...accountArgs, "--json"));
+  let register = JSON.parse(cli("tx", "list", ...accountArgs, "--json"));
   // Buckets and groups: dollars in, cents out; positions are 1-based.
   assert.deepEqual(JSON.parse(cli("bucket", "list", ...budgetArgs, "--json")), { groups: [], buckets: [] });
   const fixed = JSON.parse(cli("group", "add", ...budgetArgs, "--name", "Fixed", "--json"));
@@ -150,9 +150,37 @@ try {
   cliFails("not_found", "bucket", "archive", "missing");
   cliFails("not_found", "group", "delete", "missing");
   cliFails("not_found", "bucket", "add", ...budgetArgs, "--name", "Car", "--group", "missing");
+  // Spending: a bucket takes either sign. Money out is Spent, money back in is assigned to the bucket, and
+  // neither moves Ready to assign.
+  const bucketOf = (id: string) => JSON.parse(cli("bucket", "list", ...budgetArgs, "--archived", "--json")).buckets.find((bucket: { id: string }) => bucket.id === id);
+  const eatingOut = JSON.parse(cli("bucket", "add", ...budgetArgs, "--name", "Eating out", "--group", fixed.id, "--json"));
+  const readyBeforeSpending = ready();
+  cli("tx", "add", "--account", visa.id, "--amount", "-120", "--bucket", eatingOut.id, "--payee", "Noodle Bar");
+  assert.deepEqual([bucketOf(eatingOut.id).available, bucketOf(eatingOut.id).spent], [-12000, 12000]);
+  assert.equal(ready(), readyBeforeSpending);
+  cliFails("bucket_overspent", "bucket", "archive", eatingOut.id);
+  const reimbursed = JSON.parse(cli("tx", "add", ...accountArgs, "--amount", "30", "--bucket", eatingOut.id, "--json"));
+  assert.deepEqual(reimbursed.category, { kind: "bucket", bucketId: eatingOut.id });
+  assert.deepEqual([bucketOf(eatingOut.id).available, bucketOf(eatingOut.id).spent], [-9000, 12000]);
+  assert.equal(ready(), readyBeforeSpending);
+  cliFails("usage", "tx", "add", ...accountArgs, "--amount", "-5", "--income", "--bucket", eatingOut.id);
+  // Money left in a bucket blocks archiving until the ledger can return it; an archived bucket takes no new money,
+  // but what was filed to it stays and can still be edited.
+  const coat = JSON.parse(cli("tx", "add", ...accountArgs, "--amount", "-40", "--bucket", clothing.id, "--payee", "Coat", "--json"));
+  const refund = JSON.parse(cli("tx", "add", ...accountArgs, "--amount", "50", "--bucket", clothing.id, "--json"));
+  cliFails("bucket_has_money", "bucket", "archive", clothing.id);
+  cli("tx", "edit", refund.id, "--amount", "40");
+  assert.equal(JSON.parse(cli("bucket", "archive", clothing.id, "--json")).bucket.archived, true);
+  cliFails("bucket_archived", "tx", "add", ...accountArgs, "--amount", "-5", "--bucket", clothing.id);
+  cliFails("bucket_archived", "tx", "edit", reimbursed.id, "--bucket", clothing.id);
+  const kept = JSON.parse(cli("tx", "edit", coat.id, "--memo", "Winter", "--json"));
+  assert.deepEqual([kept.memo, kept.category], ["Winter", { kind: "bucket", bucketId: clothing.id }]);
+  cli("bucket", "restore", clothing.id);
+  accounts = JSON.parse(cli("account", "list", ...budgetArgs, "--json"));
+  register = JSON.parse(cli("tx", "list", ...accountArgs, "--json"));
   const bucketsBefore = JSON.parse(cli("bucket", "list", ...budgetArgs, "--archived", "--json"));
   assert.deepEqual(bucketsBefore.groups.map((group: { name: string }) => group.name), ["Goals", "Fixed"]);
-  console.log("Budget saved and updated, accounts added and edited, income recorded, buckets and groups added, moved, archived and restored. Recreating with the same volume and a non-default port...");
+  console.log("Budget saved and updated, accounts added and edited, income recorded, spending and reimbursements filed to buckets, buckets and groups added, moved, archived and restored. Recreating with the same volume and a non-default port...");
   port = 4317;
   compose("up", "-d", "--force-recreate", "--wait", "--wait-timeout", "60");
   assert.deepEqual(JSON.parse(cli("budget", "open", saved.id, "--json")), updated);
@@ -168,7 +196,7 @@ try {
   }, "Missing budgets must produce a nonzero exit code.");
   compose("exec", "-T", "bucketeer", "node", "--input-type=module", "-e", `
     import assert from 'node:assert/strict';
-    for (const path of ['/', '/ui/app.js', '/ui/theme.js', '/ui/dom.js', '/ui/sheet.js', '/ui/shell.js', '/ui/accounts.js', '/ui/buckets.js', '/ui/bucket-dialog.js', '/ui/reorder.js', '/ui/register.js', '/ui/styles.css', '/client.js', '/core/money.js', '/core/types.js', '/core/colours.js']) {
+    for (const path of ['/', '/ui/app.js', '/ui/theme.js', '/ui/dom.js', '/ui/sheet.js', '/ui/shell.js', '/ui/accounts.js', '/ui/buckets.js', '/ui/bucket-dialog.js', '/ui/reorder.js', '/ui/register.js', '/ui/category-picker.js', '/ui/styles.css', '/client.js', '/core/money.js', '/core/types.js', '/core/colours.js']) {
       const response = await fetch('http://localhost:${port}' + path);
       assert.equal(response.status, 200, path);
       assert.ok((await response.text()).length > 0, path);
@@ -197,7 +225,7 @@ try {
       assert.ok((await response.arrayBuffer()).byteLength > 0, path);
     }
   `);
-  console.log("PASS: Docker health on default and custom ports, CLI budget, account, income, group and bucket flows, container recreation, persistence, errors, and UI assets.");
+  console.log("PASS: Docker health on default and custom ports, CLI budget, account, income, spending, group and bucket flows, container recreation, persistence, errors, and UI assets.");
 
   // Upgrade: a volume written by the image from main, before versioned migrations, opens in place with the current build.
   console.log("Building the image from main and filling an old volume with it...");
@@ -227,6 +255,8 @@ try {
     accounts: JSON.parse(oldCli("account", "list", ...oldBudgetArgs, "--json")),
     buckets: JSON.parse(oldCli("bucket", "list", ...oldBudgetArgs, "--archived", "--json")),
   };
+  // Buckets gained Spent after main; an upgraded bucket has spent nothing.
+  for (const bucket of oldState.buckets.buckets) bucket.spent ??= 0;
   docker(["stop", mainContainer]);
   docker(["rm", mainContainer]);
 

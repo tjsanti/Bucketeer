@@ -181,24 +181,29 @@ async function route(): Promise<void> {
         showMessage("Account not found", "That account does not exist in this budget.", false);
         return;
       }
-      const register = await client.listTransactions(account.id);
+      const load = async () => {
+        const [register, table, payees] = await Promise.all([client.listTransactions(account.id), client.listBucketTable(budget.id), client.payees(budget.id)]);
+        return { transactions: register.transactions, table, payees };
+      };
+      const first = await load();
       if (stale()) return;
       const page = createRegisterPage({
         client,
         account,
+        snack: shell.showSnack,
         async refresh() {
           try {
-            const [next, nextRegister] = await Promise.all([loadSide(budget.id), client.listTransactions(account.id)]);
+            const [next, data] = await Promise.all([loadSide(budget.id), load()]);
             if (stale()) return;
             showSide(next);
             const current = next.accounts.find((candidate) => candidate.id === account.id);
-            if (current) page.render(current, nextRegister.transactions);
+            if (current) page.render({ account: current, ...data });
           } catch {
             if (!stale()) page.note("Your change was saved, but the register could not refresh. Reload to try again.");
           }
         },
       });
-      page.render(account, register.transactions);
+      page.render({ account, ...first });
       main.replaceChildren(page.root);
       document.title = `${account.name} · ${budget.name} · Bucketeer`;
       return;

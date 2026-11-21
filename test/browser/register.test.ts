@@ -63,14 +63,21 @@ test("income entered in the register updates the register, the account balance a
   assert.equal(await register.locator(".rrow").count(), 0);
   assert.equal(compact(await register.locator(".reg-end").innerText()), "Starting balance 1,000.00");
 
-  // The entry row is always ready: date defaults to today and the category is Income.
+  // The entry row is always ready: date defaults to today; Income is picked from the category list.
   const entry = page.locator("form.entry");
   const date = entry.getByLabel("Date");
   const payee = entry.getByLabel("Payee");
   const memo = entry.getByLabel("Memo");
   const amount = entry.getByLabel("Amount");
+  const category = entry.getByRole("combobox", { name: "Category" });
   assert.equal(await date.inputValue(), today());
-  assert.equal(await entry.getByLabel("Category").inputValue(), "Income");
+  assert.equal(await category.inputValue(), "");
+  const pickIncome = async () => {
+    await category.fill("Inc");
+    await category.press("Enter");
+  };
+  await pickIncome();
+  assert.equal(await entry.locator("button.sign").textContent(), "+");
 
   await date.fill(earlier);
   await payee.fill("Acme Payroll");
@@ -89,6 +96,7 @@ test("income entered in the register updates the register, the account balance a
   assert.equal(compact(await page.locator("#side-ready").innerText()), "Ready to assign $2,587.91");
 
   // A second entry lands newest first with its running balance; typing in Payee then Enter also saves.
+  await pickIncome();
   await amount.fill("50");
   await date.fill(today());
   await payee.fill("Refund");
@@ -99,6 +107,7 @@ test("income entered in the register updates the register, the account balance a
 
   // Problems keep the draft and use neutral ink; Escape cancels the draft.
   await payee.fill("Mystery");
+  await pickIncome();
   await amount.fill("-5");
   await amount.press("Enter");
   const note = page.locator(".page > .note");
@@ -175,6 +184,8 @@ test("in the dark theme on desktop the entry row saves income and the register r
   await page.goto(`${app.url}/budgets/${budgetId}/accounts/${checking.id}`);
   await ready(page);
   const entry = page.locator("form.entry");
+  await entry.getByRole("combobox", { name: "Category" }).fill("Income");
+  await entry.getByRole("combobox", { name: "Category" }).press("Enter");
   await entry.getByLabel("Payee").fill("Acme");
   await entry.getByLabel("Amount").fill("10");
   await entry.getByLabel("Amount").press("Enter");

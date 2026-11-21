@@ -73,8 +73,10 @@ export interface Bucket {
   amount: number | null;
   /** "YYYY-MM", goal only. */
   goalMonth: string | null;
-  /** Integer cents. 0 until assigning exists. */
+  /** Integer cents: the sum of every transaction filed to the bucket, whatever its date. The ledger adds to it later. */
   available: number;
+  /** Integer cents ≥ 0: the gross money out of the bucket, whatever its date. Money back in never reduces it (ADR-0003). */
+  spent: number;
   /** Position within its group. */
   order: number;
   archived: boolean;
@@ -119,8 +121,11 @@ export interface ArchiveResult {
   returned: number;
 }
 
-/** What a transaction is filed under. Only Income exists so far; buckets, splits and transfers come next. */
-export type Category = { kind: "income" };
+/**
+ * What a transaction is filed under. Income is always positive; a bucket takes either sign, where money in counts
+ * as assigned to it, never as negative spending (ADR-0003). Splits and transfers come next.
+ */
+export type Category = { kind: "income" } | { kind: "bucket"; bucketId: string };
 
 export interface Transaction {
   id: string;
@@ -155,7 +160,13 @@ export interface NewTransactionInput {
 
 export type TransactionEditInput = Partial<NewTransactionInput>;
 
-export type BudgetErrorCode = "invalid_input" | "not_found" | "name_taken" | "balance_not_zero" | "group_not_empty" | "bucket_overspent" | "bucket_changed" | "account_closed";
+/** A payee and the category of its latest transaction, for filling in the category as the payee is typed. */
+export interface PayeeHistory {
+  payee: string;
+  category: Category;
+}
+
+export type BudgetErrorCode = "invalid_input" | "not_found" | "name_taken" | "balance_not_zero" | "group_not_empty" | "bucket_overspent" | "bucket_changed" | "account_closed" | "bucket_archived" | "bucket_has_money";
 
 /** The input a validation error belongs to, so clients can mark the right field without reading the message. */
 export type BudgetErrorField = "name" | "group" | "colour" | "type" | "amount" | "month" | "date" | "payee" | "memo" | "category";

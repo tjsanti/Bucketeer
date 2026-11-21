@@ -540,6 +540,65 @@ main { padding: var(--s-8) var(--s-10) var(--s-16); min-width: 0; max-width: 110
 .cin[aria-invalid="true"] { border-color: var(--text-muted); box-shadow: 0 0 0 3px var(--focus-halo); }
 .cin.locked { border-style: dashed; color: var(--text-muted); background: transparent; cursor: default; }
 .cin.amt-in { text-align: right; font-weight: var(--fw-semibold); }
+.reg .rrow { cursor: pointer; }
+.reg .rrow:hover { background: color-mix(in srgb, var(--surface-sunken) 70%, transparent); }
+.reg .rrow:focus-visible { outline-offset: -2px; }
+.reg .rrow.just-saved { background: color-mix(in srgb, var(--ok-soft) 85%, var(--surface)); box-shadow: inset 3px 0 0 var(--ok); }
+.reg .rrow .cat .dot { --dot: 9px; }
+.reg .edit { background: var(--surface-sunken); border-top: 1px solid var(--border); box-shadow: inset 3px 0 0 var(--focus); }
+.reg .edit .erow { padding-top: 6px; }
+.efoot { display: flex; justify-content: flex-end; padding: 6px 10px 8px; }
+.efoot:empty { display: none; }
+.eacts { display: flex; gap: 6px; align-items: center; }
+.eacts .del { margin-right: auto; }
+.amt-wrap { display: flex; width: 100%; }
+.amt-wrap .sign { flex: none; width: 30px; height: 32px; padding: 0; border: 1px solid var(--border-control); border-right: 0; border-radius: var(--r-sm) 0 0 var(--r-sm); background: var(--surface); color: var(--text); font: inherit; font-weight: var(--fw-bold); font-size: 16px; cursor: pointer; }
+.amt-wrap .sign.in { color: var(--ok); }
+.amt-wrap .cin { border-radius: 0 var(--r-sm) var(--r-sm) 0; }
+/* The category combobox and its list (floating on desktop, in the flow of the phone sheet). */
+.cat-in { position: relative; display: flex; flex-direction: column; width: 100%; }
+.cat-in .lead { position: absolute; left: 10px; top: 0; height: 32px; display: inline-flex; align-items: center; pointer-events: none; }
+.cat-in .lead .dot { --dot: 10px; }
+.cat-in > .icon { position: absolute; right: 8px; top: 9px; color: var(--text-muted); pointer-events: none; }
+.cat-in .has-chev { padding-right: 26px; }
+.cat-in.has-lead .has-chev { padding-left: 27px; }
+.tx-sheet .cat-in .lead { height: var(--touch); left: 14px; }
+.tx-sheet .cat-in > .icon { top: 15px; right: 12px; }
+.tx-sheet .cat-in.has-lead .has-chev { padding-left: 34px; }
+.picker { position: fixed; z-index: 65; width: 320px; max-height: 352px; overflow-y: auto; padding: 6px; border-radius: var(--r-md); background: var(--surface-raised); box-shadow: var(--shadow-pop); overscroll-behavior: contain; }
+.picker[hidden] { display: none; }
+.picker.inline { position: static; width: auto; max-height: 264px; margin-top: 6px; }
+.og { padding: 10px 10px 4px; font-size: 11px; font-weight: var(--fw-bold); letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
+.og:first-child { padding-top: 4px; }
+.opt { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 0 10px; border-radius: var(--r-sm); font-size: 14px; cursor: pointer; }
+.opt .on { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.opt .ov { font-size: 13px; color: var(--text-muted); white-space: nowrap; }
+.opt .ov.neg { color: var(--over); font-weight: var(--fw-bold); }
+.opt[aria-selected="true"] { background: var(--accent-soft); }
+.opt:hover:not([aria-selected="true"]) { background: var(--surface-sunken); }
+.picker.inline .opt { min-height: var(--touch); }
+.picker-empty { padding: 10px; font-size: 14px; color: var(--text-muted); }
+.addbar { display: none; }
+/* Payee suggestions come from a datalist; its native arrow isn't part of the design. */
+input[list]::-webkit-calendar-picker-indicator { display: none !important; }
+/* The phone transaction sheet */
+.sstat { flex: none; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 4px; font-size: var(--fs-sm); color: var(--text-muted); border-bottom: 1px solid var(--border); }
+.sstat > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.sstat.ok > .icon { color: var(--ok); }
+.sstat.err { color: var(--text); font-weight: var(--fw-semibold); }
+.sstat .btn { flex: none; height: var(--touch); }
+.amt-row { display: flex; gap: var(--s-3); align-items: flex-end; }
+.amt-row .field { flex: 1; min-width: 0; }
+.amt-row .seg { width: 128px; flex: none; grid-template-columns: 1fr 1fr; }
+.amt-row .seg > button { min-height: 52px; }
+.amount { position: relative; display: flex; align-items: center; }
+.amount .sign { position: absolute; left: var(--s-3); font-size: 20px; font-weight: var(--fw-bold); color: var(--text-muted); pointer-events: none; }
+.amount .sign.in { color: var(--ok); }
+.amount.big .input { height: 56px; padding-left: 48px; font-size: 24px; font-weight: var(--fw-bold); }
+.tx-sheet .input { height: var(--touch); }
+.tx-sheet .amount.big .input { height: 56px; }
+.frow2 { display: flex; }
+.frow2 .btn { min-height: var(--touch); }
 .reg-end { display: flex; justify-content: space-between; gap: var(--s-3); padding: 10px var(--s-4); border-top: 1px solid var(--border); font-size: var(--fs-sm); color: var(--text-muted); }
 .otable .ototal { height: var(--row-h); border-top: 1px solid var(--border-strong); font-weight: var(--fw-bold); }
 .otable .ototal th { font-weight: var(--fw-bold); }
@@ -813,6 +872,12 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
   .reg .rrow .sub { display: flex; min-width: 0; max-width: 100%; font-size: var(--fs-sm); font-weight: var(--fw-regular); color: var(--text-muted); }
   .reg .rrow .sub .st { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .acct-summary .figure { font-size: var(--fs-xl); }
+  .reg .rrow { min-height: 60px; }
+  .addbar { display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; padding: 12px var(--s-4) max(12px, env(safe-area-inset-bottom, 0px)); background: var(--surface); border-top: 1px solid var(--border); box-shadow: 0 -6px 20px -14px rgba(21, 48, 60, .35); }
+  .addbar[hidden] { display: none; }
+  .addbar .btn { flex: 1; height: var(--touch); }
+  .page.register { padding-bottom: 80px; }
+  body:has(.addbar:not([hidden])) .snack { bottom: 84px; }
 
   main { padding: var(--s-4) var(--s-4) var(--s-8); }
   .page-row h1 { font-size: var(--fs-xl); }

@@ -385,3 +385,39 @@ test("HTTP exposes an account's transactions and Ready to assign, with status co
     core.close();
   }
 });
+
+test("HTTP files transactions to buckets, refuses archived ones, and serves payee history", async () => {
+  const core = openBucketeer(":memory:", { now: () => new Date("2026-11-20T12:00:00.000Z"), timeZone: "UTC" });
+  const server = createApi(core);
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const url = `http://127.0.0.1:${address.port}`;
+  const client = createClient(url);
+  const statuses = async (path: string, method: string, body?: unknown) => {
+    const response = await fetch(`${url}${path}`, { method, ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }) });
+    return [response.status, (await response.json()).error.code];
+  };
+  try {
+    const budget = await client.createBudget({ name: "Household" });
+    const visa = await client.createAccount(budget.id, { name: "Visa", type: "credit-card", startingBalance: 0, startingDate: "2026-11-01" });
+    const group = await client.createGroup(budget.id, { name: "Everyday" });
+    const eatingOut = await client.createBucket(budget.id, { name: "Eating out", groupId: group.id, type: "plain" });
+    const old = await client.createBucket(budget.id, { name: "Old", groupId: group.id, type: "plain" });
+    const dinner = await client.addTransaction(visa.id, { payee: "Noodle Bar", amount: -12_000, category: { kind: "bucket", bucketId: eatingOut.id } });
+    assert.equal((await client.openBucket(eatingOut.id)).available, -12_000);
+    assert.deepEqual(await client.payees(budget.id), [{ payee: "Noodle Bar", category: { kind: "bucket", bucketId: eatingOut.id } }]);
+    assert.deepEqual(await statuses(`/api/buckets/${eatingOut.id}/archive`, "POST"), [409, "bucket_overspent"]);
+    await client.archiveBucket(old.id);
+    assert.deepEqual(await statuses(`/api/accounts/${visa.id}/transactions`, "POST", { amount: -100, category: { kind: "bucket", bucketId: old.id } }), [409, "bucket_archived"]);
+    assert.deepEqual(await statuses(`/api/transactions/${dinner.id}`, "PATCH", { category: { kind: "bucket", bucketId: old.id } }), [409, "bucket_archived"]);
+    await client.addTransaction(visa.id, { amount: 13_000, category: { kind: "bucket", bucketId: eatingOut.id } });
+    assert.deepEqual(await statuses(`/api/buckets/${eatingOut.id}/archive`, "POST"), [409, "bucket_has_money"]);
+    assert.deepEqual(await statuses("/api/budgets/missing/payees", "GET"), [404, "not_found"]);
+    assert.deepEqual(await statuses(`/api/budgets/${budget.id}/payees`, "POST", {}), [404, "not_found"]);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    core.close();
+  }
+});

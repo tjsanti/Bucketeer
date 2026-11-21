@@ -9,9 +9,10 @@ Early and in active development. Today you can:
 - keep several **budgets**, each saved on the server and reopenable by URL;
 - track **accounts** (checking, savings, credit card, cash) with a starting balance, closing and reopening them;
 - record **income** in each account's register, which fills **Ready to assign** (shown in the sidebar) and the account's balance;
+- **spend** from buckets and get money back into them, on desktop (an inline entry row, editing rows in place) and on a phone (a bottom sheet), with Undo for every add, edit and delete;
 - organise **buckets** into **groups**: recurring (a monthly amount), goal (an amount by a month), or plain; reorder them by drag, keyboard, or the phone Reorder mode; archive and restore them.
 
-Spending from buckets, splits, transfers, assigning money to buckets, and the month view are still to come, so bucket "available" amounts do not move yet. Expect the data model to change between releases.
+Splits, transfers, assigning money to buckets, and the month view are still to come, so a bucket's Available moves only with the transactions filed to it. Expect the data model to change between releases.
 
 ## Run with Docker
 
@@ -67,17 +68,21 @@ Types are `checking`, `savings`, `credit-card`, and `cash`; a type is fixed once
 ```sh
 bucketeer tx add --account <account-id> --amount 2000 --income --payee "Acme Payroll" --memo "November" --json
 bucketeer tx add --account <account-id> --amount 50 --income --date 2026-11-14 --json
+bucketeer tx add --account <account-id> --amount -120 --bucket <bucket-id> --payee "Noodle Bar" --json
+bucketeer tx add --account <account-id> --amount 30 --bucket <bucket-id> --payee "Friend" --json
 bucketeer tx list --account <account-id> --json
 bucketeer tx edit <transaction-id> --amount 1950 --json
 bucketeer tx delete <transaction-id> --json
 bucketeer ready --budget <id> --json
 ```
 
-Every transaction needs exactly one category option; `--income` is the only one so far. Income always has a positive amount and adds to Ready to assign, which is every account's starting balance plus all Income (a card's starting debt reduces it). Ready to assign can be negative.
+Every transaction needs exactly one category option: `--income` or `--bucket <id>`. Giving none, or both, is a usage error. Income always has a positive amount and adds to Ready to assign, which is every account's starting balance plus all Income (a card's starting debt reduces it). Ready to assign can be negative.
+
+A bucket takes either sign. Money out counts as the bucket's Spent; money back in (a reimbursement) counts as assigned to that bucket and never reduces Spent. Neither changes Ready to assign. A bucket's `available` is the sum of its transactions and `spent` is its gross money out, whatever their dates. An archived bucket takes no new transactions and can't be chosen in an edit (`bucket_archived`), but a transaction already filed to it keeps it and can still be edited.
 
 `--date` defaults to today in the server's time zone. A transaction can't be dated after today or before the first day of the month twelve months before the budget began; a date before the account's starting date is fine and counts toward its balance. An account's balance is its starting balance plus all of its transactions. A closed account takes no new transactions. Payees hold up to 120 characters and memos up to 500, both trimmed.
 
-`tx list` prints the register newest first as `id`, `date`, `payee`, `category`, `amount` and the running `balance`, tab-separated; `tx add` and `tx edit` print the same line for their transaction. `--json` gives `{ "transactions": [...] }` with integer cents and a `runningBalance` on each.
+`tx list` prints the register newest first as `id`, `date`, `payee`, `category` (`Income` or the bucket's name), `amount` and the running `balance`, tab-separated; `tx add` and `tx edit` print the same line for their transaction. `--json` gives `{ "transactions": [...] }` with integer cents and a `runningBalance` on each.
 
 ### Buckets and groups
 
@@ -97,7 +102,7 @@ bucketeer group move <group-id> --position 1 --json
 bucketeer group delete <group-id> --json
 ```
 
-`--type` defaults to plain (no amount). A goal month must be this month or later when it is set or changed. Without `--colour`, a bucket gets the least used colour among active buckets. Bucket names stay unique within a budget, archived buckets included. A bucket can't be archived while overspent. A group can be deleted only when it has no active buckets.
+`--type` defaults to plain (no amount). A goal month must be this month or later when it is set or changed. Without `--colour`, a bucket gets the least used colour among active buckets. Bucket names stay unique within a budget, archived buckets included. A bucket can't be archived while overspent (`bucket_overspent`), or, until assigning exists, while it holds money from a reimbursement (`bucket_has_money`). A group can be deleted only when it has no active buckets.
 
 ### Remote servers
 
@@ -113,6 +118,7 @@ Everything the UI and CLI do goes through JSON routes under `/api`, plus `GET /h
 | Accounts | `GET`, `POST /api/budgets/:id/accounts`; `GET`, `PATCH /api/accounts/:id`; `POST /api/accounts/:id/close`, `/reopen` |
 | Transactions | `GET`, `POST /api/accounts/:id/transactions` (the register, newest first, with `runningBalance`); `GET`, `PATCH`, `DELETE /api/transactions/:id` |
 | Ready to assign | `GET /api/budgets/:id/ready-to-assign` → `{ "readyToAssign" }` |
+| Payees | `GET /api/budgets/:id/payees` → `[{ "payee", "category" }]`, each payee's latest category |
 | Groups | `POST /api/budgets/:id/groups`; `PATCH`, `DELETE /api/groups/:id`; `POST /api/groups/:id/move` |
 | Buckets | `GET /api/budgets/:id/buckets` (groups and buckets together); `POST /api/budgets/:id/buckets`; `GET`, `PATCH /api/buckets/:id`; `POST /api/buckets/:id/move`, `/archive`, `/restore`, `/revert` |
 
@@ -129,7 +135,7 @@ npm test
 npm run acceptance
 ```
 
-Browser tests cover the budget picker, accounts, the account register and income entry, Ready to assign, and buckets (add, edit, archive, restore, undo, drag and keyboard reordering), failed saves and failed refreshes, mobile layouts, the light/dark theme and its saved override, and bundled fonts loading with no external requests. Install Chromium once, then run them:
+Browser tests cover the budget picker, accounts, the account register (income and spending entry, the category picker, the sign control, editing in place, the phone entry sheet, and Undo for add, edit and delete), Ready to assign, and buckets (add, edit, archive, restore, undo, drag and keyboard reordering), failed saves and failed refreshes, mobile layouts, the light/dark theme and its saved override, and bundled fonts loading with no external requests. Install Chromium once, then run them:
 
 ```sh
 npx playwright-core install chromium

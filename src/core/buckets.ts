@@ -8,9 +8,10 @@ import type { BucketType } from "./types.js";
 export const MAX_BUCKET_NAME_LENGTH = 60;
 export const BUCKET_TYPES: readonly BucketType[] = ["recurring", "goal", "plain"];
 
-// The one place a bucket's Available is computed. Assigning, spending and the month view add to it.
-export function bucketAvailable(_bucket: { id: string }): number {
-  return 0;
+// The one place a bucket's Available is computed: the sum of its transaction lines across all dates, money
+// in and money out (PR 1). Assigning and the month view add the ledger.
+export function bucketAvailable(activity: { moneyIn: number; moneyOut: number }): number {
+  return activity.moneyIn - activity.moneyOut;
 }
 
 export function nameKey(name: string): string {

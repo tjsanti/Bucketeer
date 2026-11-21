@@ -58,9 +58,17 @@ export function readDate(value: unknown): string {
 }
 
 function readCategory(value: unknown): Category {
-  const kind = typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>).kind : undefined;
-  if (kind === "income" && Object.keys(value as object).length === 1) return { kind: "income" };
-  return invalid("Category must be Income.", "category");
+  const fields = typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  const keys = Object.keys(fields).sort().join();
+  if (fields.kind === "income" && keys === "kind") return { kind: "income" };
+  if (fields.kind === "bucket" && keys === "bucketId,kind" && typeof fields.bucketId === "string" && fields.bucketId !== "") {
+    return { kind: "bucket", bucketId: fields.bucketId };
+  }
+  return invalid("Category must be Income or a bucket.", "category");
+}
+
+export function sameCategory(a: Category, b: Category): boolean {
+  return a.kind === b.kind && (a.kind !== "bucket" || a.bucketId === (b as typeof a).bucketId);
 }
 
 function readFields(fields: Record<string, unknown>): TransactionFields {

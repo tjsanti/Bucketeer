@@ -397,6 +397,24 @@ test("CLI tx and ready commands record income with dollars, tab-separated text a
     await failure("usage", "tx", "list");
     await failure("usage", "tx", "edit", paycheck.id);
     await failure("usage", "ready");
+
+    // Buckets: either sign, the bucket's name in text output, and archived buckets refused.
+    const group = core.createGroup(budget.id, { name: "Everyday" });
+    const eatingOut = core.createBucket(budget.id, { name: "Eating out", groupId: group.id, type: "plain" });
+    const old = core.createBucket(budget.id, { name: "Old", groupId: group.id, type: "plain" });
+    const dinner = await cli("tx", "add", ...a, "--amount", "-120", "--bucket", eatingOut.id, "--payee", "Noodle Bar");
+    const dinnerId = dinner.stdout.split("\t")[0]!;
+    assert.deepEqual(dinner, { code: 0, stdout: `${dinnerId}\t2026-11-20\tNoodle Bar\tEating out\t−120.00\t880.00`, stderr: "" });
+    const back = await json("tx", "add", ...a, "--amount", "30", "--bucket", eatingOut.id);
+    assert.deepEqual(back.category, { kind: "bucket", bucketId: eatingOut.id });
+    assert.deepEqual([core.openBucket(eatingOut.id).available, core.openBucket(eatingOut.id).spent], [-9_000, 12_000]);
+    assert.deepEqual(await json("ready", "--budget", budget.id), { readyToAssign: 58_791 });
+    assert.deepEqual((await json("tx", "edit", back.id, "--income")).category, { kind: "income" });
+    core.archiveBucket(old.id);
+    await failure("bucket_archived", "tx", "add", ...a, "--amount", "-5", "--bucket", old.id);
+    await failure("bucket_archived", "tx", "edit", dinnerId, "--bucket", old.id);
+    await failure("usage", "tx", "add", ...a, "--amount", "-5", "--bucket", eatingOut.id, "--income");
+    await failure("usage", "tx", "edit", dinnerId, "--bucket", eatingOut.id, "--income");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     core.close();

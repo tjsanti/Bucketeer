@@ -7,11 +7,11 @@ import { bucketAvailable, nameKey, readBucketEdit, readBucketMove, readBucketRev
 import type { BucketFields, GroupChoice } from "./buckets.js";
 import { leastUsedColour } from "./colours.js";
 import { calendarIn, defaultTimeZone } from "./time.js";
-import { assertConsistent, readNewTransaction, readTransactionEdit } from "./transactions.js";
+import { assertConsistent, readNewTransaction, readTransactionEdit, sameCategory } from "./transactions.js";
 import type { BucketColour } from "./colours.js";
 import { BudgetError } from "./types.js";
 import type {
-  Account, AccountType, ArchiveResult, Bucket, BucketGroup, BucketTable, BucketType, Budget, Category, Health, RegisterTransaction, Transaction,
+  Account, AccountType, ArchiveResult, Bucket, BucketGroup, BucketTable, BucketType, Budget, Category, Health, PayeeHistory, RegisterTransaction, Transaction,
 } from "./types.js";
 
 export { BudgetError } from "./types.js";
@@ -19,7 +19,7 @@ export type { BucketColour } from "./colours.js";
 export type {
   Account, AccountEditInput, AccountType, ArchiveResult, Bucket, BucketEditInput, BucketGroup, BucketMoveInput, BucketRevertInput, BucketTable, BucketType,
   Budget, BudgetErrorCode, BudgetErrorField, BudgetNameInput, Category, GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput,
-  NewTransactionInput, RegisterTransaction, Transaction, TransactionEditInput,
+  NewTransactionInput, PayeeHistory, RegisterTransaction, Transaction, TransactionEditInput,
 } from "./types.js";
 
 export interface BucketeerOptions {
@@ -56,6 +56,14 @@ function accountFromRow(row: Record<string, SQLOutputValue>): Account {
   };
 }
 
+function categoryFromRow(row: Record<string, SQLOutputValue>): Category {
+  return row.kind === "bucket" ? { kind: "bucket", bucketId: String(row.bucket_id) } : { kind: "income" };
+}
+
+function bucketIdOf(category: Category): string | null {
+  return category.kind === "bucket" ? category.bucketId : null;
+}
+
 function transactionFromRow(row: Record<string, SQLOutputValue>): Transaction {
   return {
     id: String(row.id),
@@ -65,7 +73,7 @@ function transactionFromRow(row: Record<string, SQLOutputValue>): Transaction {
     payee: String(row.payee),
     memo: String(row.memo),
     amount: Number(row.amount),
-    category: { kind: String(row.kind) } as Category,
+    category: categoryFromRow(row),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
@@ -98,7 +106,8 @@ function bucketFromRow(row: Record<string, SQLOutputValue>): Bucket {
     type: String(row.type) as BucketType,
     amount: row.amount === null ? null : Number(row.amount),
     goalMonth: row.goal_month === null ? null : String(row.goal_month),
-    available: bucketAvailable({ id }),
+    available: bucketAvailable({ moneyIn: Number(row.money_in), moneyOut: Number(row.money_out) }),
+    spent: Number(row.money_out),
     order: Number(row.sort_order),
     archived: row.archived_at !== null,
     archivedAt: row.archived_at === null ? null : String(row.archived_at),
@@ -137,11 +146,16 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   const orderGroup = database.prepare("UPDATE bucket_groups SET sort_order = ? WHERE id = ?");
   const touchGroup = database.prepare("UPDATE bucket_groups SET updated_at = ? WHERE id = ?");
   const deleteGroupRow = database.prepare("DELETE FROM bucket_groups WHERE id = ?");
-  const findBucket = database.prepare("SELECT * FROM buckets WHERE id = ?");
+  // A bucket's money: its whole transactions plus its split lines, in and out kept apart so Spent stays gross.
+  const bucketLines = "SELECT amount FROM transactions WHERE bucket_id = buckets.id UNION ALL SELECT amount FROM transaction_lines WHERE bucket_id = buckets.id";
+  const withMoney = `buckets.*,
+    (SELECT COALESCE(SUM(amount), 0) FROM (${bucketLines}) WHERE amount > 0) AS money_in,
+    (SELECT COALESCE(-SUM(amount), 0) FROM (${bucketLines}) WHERE amount < 0) AS money_out`;
+  const findBucket = database.prepare(`SELECT ${withMoney} FROM buckets WHERE id = ?`);
   // Active buckets in group and position order, then archived buckets, also by group and position
   // (those whose group was deleted first), with the archive date breaking ties.
   const bucketsOf = database.prepare(`
-    SELECT buckets.* FROM buckets LEFT JOIN bucket_groups ON bucket_groups.id = buckets.group_id
+    SELECT ${withMoney} FROM buckets LEFT JOIN bucket_groups ON bucket_groups.id = buckets.group_id
     WHERE buckets.budget_id = ?
     ORDER BY buckets.archived_at IS NOT NULL, bucket_groups.sort_order, buckets.sort_order, buckets.archived_at, buckets.created_at, buckets.id`);
   const activeIn = database.prepare("SELECT id FROM buckets WHERE group_id = ? AND archived_at IS NULL ORDER BY sort_order, created_at, id");
@@ -158,9 +172,11 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   // Oldest first, so running balances can be summed forward; ties keep entry order.
   const transactionsOf = database.prepare("SELECT * FROM transactions WHERE account_id = ? ORDER BY date, created_at, rowid");
   const insertTransaction = database.prepare(`
-    INSERT INTO transactions (id, budget_id, account_id, date, payee, memo, amount, kind, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-  const updateTransaction = database.prepare("UPDATE transactions SET date = ?, payee = ?, memo = ?, amount = ?, kind = ?, updated_at = ? WHERE id = ?");
+    INSERT INTO transactions (id, budget_id, account_id, date, payee, memo, amount, kind, bucket_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const updateTransaction = database.prepare("UPDATE transactions SET date = ?, payee = ?, memo = ?, amount = ?, kind = ?, bucket_id = ?, updated_at = ? WHERE id = ?");
+  // Every payee's transactions, latest first, so the first row per payee (ignoring case) is its latest.
+  const payeeRows = database.prepare("SELECT payee, kind, bucket_id FROM transactions WHERE budget_id = ? AND payee <> '' ORDER BY date DESC, created_at DESC, rowid DESC");
   const deleteTransactionRow = database.prepare("DELETE FROM transactions WHERE id = ?");
   const incomeOf = database.prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE budget_id = ? AND kind = 'income'");
 
@@ -325,6 +341,15 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
     if (date < earliest) throw new BudgetError("invalid_input", `Transactions can't be dated before ${earliest}.`, "date");
   }
 
+  // A bucket category must name a bucket in the transaction's budget; a new filing to an archived one is refused.
+  function assertCategoryAllowed(budgetId: string, category: Category): void {
+    if (category.kind !== "bucket") return;
+    const row = findBucket.get(category.bucketId);
+    if (!row || String(row.budget_id) !== budgetId) throw new BudgetError("not_found", "Bucket not found.", "category");
+    const bucket = bucketFromRow(row);
+    if (bucket.archived) throw new BudgetError("bucket_archived", `${bucket.name} is archived. Restore it to file money to it.`, "category");
+  }
+
   function assertOpen(account: Account): void {
     if (account.closed) throw new BudgetError("account_closed", `${account.name} is closed. Reopen it first.`);
   }
@@ -408,9 +433,10 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
         const next = { date: fields.date ?? calendar.dateOf(clock()), payee: fields.payee ?? "", memo: fields.memo ?? "", amount: fields.amount, category: fields.category };
         assertConsistent(next);
         assertDateAllowed(openBudget(account.budgetId), next.date);
+        assertCategoryAllowed(account.budgetId, next.category);
         const now = timestamp();
         const id = randomUUID();
-        insertTransaction.run(id, account.budgetId, account.id, next.date, next.payee, next.memo, next.amount, next.category.kind, now, now);
+        insertTransaction.run(id, account.budgetId, account.id, next.date, next.payee, next.memo, next.amount, next.category.kind, bucketIdOf(next.category), now, now);
         return openTransaction(id);
       });
     },
@@ -425,7 +451,9 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
         if (next.amount !== existing.amount) assertOpen(account);
         assertConsistent(next);
         if (edit.date !== undefined) assertDateAllowed(openBudget(existing.budgetId), next.date);
-        updateTransaction.run(next.date, next.payee, next.memo, next.amount, next.category.kind, timestamp(), id);
+        // Only a change of category is checked, so a transaction keeps a bucket that's since been archived.
+        if (!sameCategory(next.category, existing.category)) assertCategoryAllowed(existing.budgetId, next.category);
+        updateTransaction.run(next.date, next.payee, next.memo, next.amount, next.category.kind, bucketIdOf(next.category), timestamp(), id);
         return openTransaction(id);
       });
     },
@@ -446,6 +474,16 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
         return { ...found, runningBalance: balance };
       });
       return { transactions: register.reverse() };
+    },
+    /** Every payee in the budget with its latest transaction's category, sorted by name; the latest spelling wins. */
+    payees(budgetId: string): PayeeHistory[] {
+      openBudget(budgetId);
+      const latest = new Map<string, PayeeHistory>();
+      for (const row of payeeRows.all(budgetId)) {
+        const key = String(row.payee).toLowerCase();
+        if (!latest.has(key)) latest.set(key, { payee: String(row.payee), category: categoryFromRow(row) });
+      }
+      return [...latest.values()].sort((a, b) => a.payee.localeCompare(b.payee));
     },
     listBucketTable,
     createGroup(budgetId: string, input: unknown): BucketGroup {
@@ -519,18 +557,18 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
         return writeBucket({ ...openBucket(id), groupId: group.id });
       });
     },
-    // Owner rule (2026-11-17): refused while overspent. A positive Available returns to Ready to assign
-    // in the same transaction; that is unreachable until assigning exists, and the month view slice books it.
+    // Owner rule (2026-11-17): refused while overspent. A positive Available (only a reimbursement can make one
+    // until the ledger exists) is refused too; the month slice returns it to Ready to assign instead.
     // Idempotent: archiving an archived bucket returns it unchanged with nothing returned.
     archiveBucket(id: string): ArchiveResult {
       return transaction(() => {
         const bucket = openBucket(id);
         if (bucket.archived) return { bucket, returned: 0 };
         if (bucket.available < 0) throw new BudgetError("bucket_overspent", "A bucket can't be archived while its Available is negative.");
-        const returned = bucket.available;
+        if (bucket.available > 0) throw new BudgetError("bucket_has_money", `${bucket.name} still holds money. Spend it or move it before archiving.`);
         const archived = writeBucket({ ...bucket, archivedAt: timestamp() });
         if (bucket.groupId) renumberBuckets(activeIds(bucket.groupId));
-        return { bucket: archived, returned };
+        return { bucket: archived, returned: 0 };
       });
     },
     // Restore appends to the end of the bucket's group, or of the first group if its group was deleted.

@@ -141,3 +141,105 @@ test("an account's register is newest first with running balances, and readyToAs
     core.close();
   }
 });
+
+/** The household plus an Everyday group holding Eating out and Groceries. */
+function withBuckets() {
+  const house = household();
+  const group = house.core.createGroup(house.budget.id, { name: "Everyday" });
+  const eatingOut = house.core.createBucket(house.budget.id, { name: "Eating out", groupId: group.id, type: "plain" });
+  const groceries = house.core.createBucket(house.budget.id, { name: "Groceries", groupId: group.id, type: "recurring", amount: 60_000 });
+  return { ...house, group, eatingOut, groceries };
+}
+
+test("money out of a bucket is Spent; money back in is assigned to it and never reduces Spent", () => {
+  const { core, budget, visa, checking, eatingOut, groceries } = withBuckets();
+  try {
+    const dinner = core.addTransaction(visa.id, { payee: "Noodle Bar", amount: -12_000, category: { kind: "bucket", bucketId: eatingOut.id } });
+    assert.deepEqual(dinner.category, { kind: "bucket", bucketId: eatingOut.id });
+    assert.deepEqual(core.openTransaction(dinner.id).category, dinner.category);
+    let bucket = core.openBucket(eatingOut.id);
+    assert.deepEqual([bucket.available, bucket.spent], [-12_000, 12_000]);
+    assert.equal(core.readyToAssign(budget.id), 58_791);
+    assert.equal(core.openAccount(visa.id).balance, -53_209);
+
+    core.addTransaction(checking.id, { payee: "Friend", amount: 3_000, category: { kind: "bucket", bucketId: eatingOut.id } });
+    bucket = core.openBucket(eatingOut.id);
+    assert.deepEqual([bucket.available, bucket.spent], [-9_000, 12_000]);
+    assert.equal(core.readyToAssign(budget.id), 58_791);
+    assert.deepEqual(core.listBucketTable(budget.id).buckets.map((row) => [row.name, row.available]), [["Eating out", -9_000], ["Groceries", 0]]);
+
+    // Moving a transaction to another bucket moves its money.
+    core.editTransaction(dinner.id, { category: { kind: "bucket", bucketId: groceries.id } });
+    assert.deepEqual([core.openBucket(eatingOut.id).available, core.openBucket(groceries.id).available], [3_000, -12_000]);
+    // Income can't be negative, but a bucket can't be refiled to Income while negative either.
+    assert.throws(() => core.editTransaction(dinner.id, { category: income }), code("invalid_input"));
+  } finally {
+    core.close();
+  }
+});
+
+test("a bucket category must name a bucket in the same budget", () => {
+  const { core, checking, eatingOut } = withBuckets();
+  try {
+    const other = core.createBudget({ name: "Other" });
+    const group = core.createGroup(other.id, { name: "Bills" });
+    const foreign = core.createBucket(other.id, { name: "Rent", groupId: group.id, type: "plain" });
+    assert.throws(() => core.addTransaction(checking.id, { amount: -100, category: { kind: "bucket", bucketId: foreign.id } }), code("not_found"));
+    assert.throws(() => core.addTransaction(checking.id, { amount: -100, category: { kind: "bucket", bucketId: "missing" } }), code("not_found"));
+    for (const category of [{ kind: "bucket" }, { kind: "bucket", bucketId: 7 }, { kind: "bucket", bucketId: eatingOut.id, extra: 1 }]) {
+      assert.throws(() => core.addTransaction(checking.id, { amount: -100, category }), code("invalid_input"), JSON.stringify(category));
+    }
+  } finally {
+    core.close();
+  }
+});
+
+test("archived buckets refuse new money and refiling, but keep what they already hold", () => {
+  const { core, checking, visa, eatingOut, groceries } = withBuckets();
+  try {
+    const old = core.addTransaction(visa.id, { amount: -2_000, category: { kind: "bucket", bucketId: groceries.id } });
+    core.addTransaction(checking.id, { amount: 2_000, category: { kind: "bucket", bucketId: groceries.id } });
+    core.archiveBucket(groceries.id);
+    assert.throws(() => core.addTransaction(visa.id, { amount: -100, category: { kind: "bucket", bucketId: groceries.id } }), code("bucket_archived"));
+    const other = core.addTransaction(visa.id, { amount: -100, category: { kind: "bucket", bucketId: eatingOut.id } });
+    assert.throws(() => core.editTransaction(other.id, { category: { kind: "bucket", bucketId: groceries.id } }), code("bucket_archived"));
+    const edited = core.editTransaction(old.id, { memo: "Still groceries" });
+    assert.deepEqual([edited.memo, edited.category], ["Still groceries", { kind: "bucket", bucketId: groceries.id }]);
+    // Resending the same category isn't a change.
+    assert.equal(core.editTransaction(old.id, { amount: -2_500, category: { kind: "bucket", bucketId: groceries.id } }).amount, -2_500);
+  } finally {
+    core.close();
+  }
+});
+
+test("archiving refuses an overspent bucket and, until the ledger exists, one holding money", () => {
+  const { core, checking, visa, eatingOut, groceries } = withBuckets();
+  try {
+    const dinner = core.addTransaction(visa.id, { amount: -12_000, category: { kind: "bucket", bucketId: eatingOut.id } });
+    assert.throws(() => core.archiveBucket(eatingOut.id), code("bucket_overspent"));
+    core.addTransaction(checking.id, { amount: 2_000, category: { kind: "bucket", bucketId: groceries.id } });
+    assert.throws(() => core.archiveBucket(groceries.id), code("bucket_has_money"));
+    core.deleteTransaction(dinner.id);
+    assert.equal(core.archiveBucket(eatingOut.id).bucket.archived, true);
+  } finally {
+    core.close();
+  }
+});
+
+test("payees remember the category of their latest transaction", () => {
+  const { core, budget, checking, visa, eatingOut, groceries } = withBuckets();
+  try {
+    assert.deepEqual(core.payees(budget.id), []);
+    core.addTransaction(visa.id, { date: "2026-11-10", payee: "Corner Shop", amount: -500, category: { kind: "bucket", bucketId: groceries.id } });
+    core.addTransaction(visa.id, { date: "2026-11-02", payee: "corner shop", amount: -500, category: { kind: "bucket", bucketId: eatingOut.id } });
+    core.addTransaction(checking.id, { date: "2026-11-12", payee: "Acme", amount: 200_000, category: income });
+    core.addTransaction(checking.id, { amount: 100, category: income });
+    assert.deepEqual(core.payees(budget.id), [
+      { payee: "Acme", category: income },
+      { payee: "Corner Shop", category: { kind: "bucket", bucketId: groceries.id } },
+    ]);
+    assert.throws(() => core.payees("missing"), code("not_found"));
+  } finally {
+    core.close();
+  }
+});

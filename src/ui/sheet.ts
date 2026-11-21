@@ -29,6 +29,8 @@ export function moneyInput(id: string, value: string): { wrap: HTMLDivElement; i
 export interface Segmented<T extends string> {
   root: HTMLDivElement;
   value(): T;
+  /** Selects a value without calling onChange. */
+  set(value: T): void;
 }
 
 /** A radiogroup of buttons with a roving tabindex: arrows move and select, Home and End jump. */
@@ -68,7 +70,7 @@ export function segmented<T extends string>(label: string, options: readonly (re
   });
   root.append(...buttons);
   paint();
-  return { root, value: () => current };
+  return { root, value: () => current, set: (value) => { current = value; paint(); } };
 }
 
 /** An error that belongs to one field: the dialog note shows it, and that field is marked and focused. */

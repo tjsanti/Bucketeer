@@ -54,7 +54,7 @@ class HttpError extends Error {
   }
 }
 
-const statuses = { invalid_input: 400, not_found: 404, name_taken: 409, balance_not_zero: 409, group_not_empty: 409, bucket_overspent: 409, bucket_changed: 409, account_closed: 409 } as const;
+const statuses = { invalid_input: 400, not_found: 404, name_taken: 409, balance_not_zero: 409, group_not_empty: 409, bucket_overspent: 409, bucket_changed: 409, account_closed: 409, bucket_archived: 409, bucket_has_money: 409 } as const;
 
 function decodeId(segment: string, what: string): string {
   try {
@@ -125,6 +125,11 @@ export function createApi(core: Bucketeer) {
       const budgetReady = /^\/api\/budgets\/([^/]+)\/ready-to-assign$/.exec(pathname)?.[1];
       if (budgetReady && request.method === "GET") {
         json(response, 200, { readyToAssign: core.readyToAssign(decodeId(budgetReady, "Budget")) });
+        return;
+      }
+      const budgetPayees = /^\/api\/budgets\/([^/]+)\/payees$/.exec(pathname)?.[1];
+      if (budgetPayees && request.method === "GET") {
+        json(response, 200, core.payees(decodeId(budgetPayees, "Budget")));
         return;
       }
       const accountTransactions = /^\/api\/accounts\/([^/]+)\/transactions$/.exec(pathname)?.[1];

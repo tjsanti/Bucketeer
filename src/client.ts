@@ -1,6 +1,6 @@
 import type {
   Account, AccountEditInput, ArchiveResult, Bucket, BucketEditInput, BucketGroup, BucketRevertInput, BucketMoveInput, BucketTable, Budget, BudgetNameInput,
-  GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput, NewTransactionInput, RegisterTransaction, Transaction, TransactionEditInput,
+  GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput, NewTransactionInput, PayeeHistory, RegisterTransaction, Transaction, TransactionEditInput,
 } from "./core/index.js";
 
 export class ApiError extends Error {
@@ -75,6 +75,7 @@ export function createClient(baseUrl: string) {
     moveBucket: (id: string, input: BucketMoveInput) => request<Bucket>(`${bucket(id)}/move`, send("POST", input)),
     archiveBucket: (id: string) => request<ArchiveResult>(`${bucket(id)}/archive`, send("POST")),
     restoreBucket: (id: string) => request<Bucket>(`${bucket(id)}/restore`, send("POST")),
+    payees: (budgetId: string) => request<PayeeHistory[]>(`${budgetPath(budgetId)}/payees`),
     readyToAssign: (budgetId: string) => request<{ readyToAssign: number }>(`${budgetPath(budgetId)}/ready-to-assign`),
     listTransactions: (accountId: string) => request<{ transactions: RegisterTransaction[] }>(`${account(accountId)}/transactions`),
     addTransaction: (accountId: string, input: NewTransactionInput) => request<Transaction>(`${account(accountId)}/transactions`, send("POST", input)),
