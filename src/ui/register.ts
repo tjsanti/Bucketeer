@@ -3,7 +3,7 @@
 // does both. Every add, edit and delete offers Undo.
 import type { createClient } from "../client.js";
 import { ApiError } from "../client.js";
-import type { Account, AccountMonth, BucketTable, CategoryInput, NewTransactionInput, PayeeHistory, RegisterTransaction, TransactionEditInput } from "../core/index.js";
+import type { Account, AccountMonth, BucketTable, Category, CategoryInput, NewTransactionInput, PayeeHistory, RegisterTransaction, TransactionEditInput } from "../core/index.js";
 import { formatMoney, parseMoney } from "../core/money.js";
 import { lastDayOf } from "../core/months.js";
 import { BudgetError } from "../core/types.js";
@@ -391,11 +391,32 @@ export function createRegisterPage(ctx: RegisterContext) {
     await client.deleteTransaction(id);
     await ctx.refresh();
   };
-  const undoDelete = (transaction: RegisterTransaction) => async () => {
-    const back = await client.addTransaction(transaction.accountId, fieldsOf(transaction));
-    highlight(back.id);
-    await ctx.refresh();
-  };
+  /** A transfer's other side, from its account's register; undefined for anything else. */
+  async function partnerOf(transaction: { id: string; category: Category }): Promise<RegisterTransaction | undefined> {
+    const category = transaction.category;
+    if (category.kind !== "transfer") return undefined;
+    const { transactions: rows } = await client.listTransactions(category.accountId);
+    return rows.find((row) => row.id !== transaction.id && row.category.kind === "transfer" && row.category.transferId === category.transferId);
+  }
+
+  /**
+   * Deletes a transaction (both sides of a transfer) and returns its Undo. Re-adding a transfer re-creates the
+   * other side with no payee and this side's memo, so Undo gives it back its own, read before the delete.
+   */
+  async function deleteWithUndo(transaction: RegisterTransaction): Promise<() => Promise<void>> {
+    const partner = await partnerOf(transaction);
+    await client.deleteTransaction(transaction.id);
+    return async () => {
+      const back = await client.addTransaction(transaction.accountId, fieldsOf(transaction));
+      const other = partner && await partnerOf(back);
+      if (partner && other && (other.payee !== partner.payee || other.memo !== partner.memo)) {
+        await client.editTransaction(other.id, { payee: partner.payee, memo: partner.memo });
+      }
+      highlight(back.id);
+      await ctx.refresh();
+    };
+  }
+
   const undoEdit = (id: string, previous: TransactionEditInput) => async () => {
     await client.editTransaction(id, previous);
     highlight(id);
@@ -502,11 +523,11 @@ export function createRegisterPage(ctx: RegisterContext) {
     setNote(note, null);
     await busy(form, async () => {
       try {
-        await client.deleteTransaction(transaction.id);
+        const undo = await deleteWithUndo(transaction);
         editing = null;
         await ctx.refresh();
             entryDraft.payee.focus();
-        ctx.snack(`Deleted ${describe(transaction)}.`, undoDelete(transaction));
+        ctx.snack(`Deleted ${describe(transaction)}.`, undo);
       } catch (error) {
         setNote(note, messageOf(error));
       }
@@ -627,10 +648,10 @@ export function createRegisterPage(ctx: RegisterContext) {
     });
     secondary.addEventListener("click", () => void run(async () => {
       if (!transaction) return saveNew(true);
-      await client.deleteTransaction(transaction.id);
+      const undo = await deleteWithUndo(transaction);
       await ctx.refresh();
       dialog.close();
-      ctx.snack(`Deleted ${describe(transaction)}.`, undoDelete(transaction));
+      ctx.snack(`Deleted ${describe(transaction)}.`, undo);
     }));
     form.addEventListener("input", () => {
       draft.clearMarks();

@@ -85,6 +85,33 @@ test("desktop: a transfer from the picker previews the other balance, and Recent
   assert.deepEqual(app.foreignRequests, []);
 });
 
+test("undoing a transfer's delete restores the other side's own payee and memo", { timeout: 60_000 }, async (t) => {
+  const app = await openApp(t);
+  const { page } = app;
+  const { budgetId, checking, savings } = await household(app.url);
+  const sent = await api(app.url, "POST", `/api/accounts/${checking.id}/transactions`, { payee: "Rainy day", memo: "November", amount: -5_000, category: { kind: "transfer", accountId: savings.id } });
+  const sideOf = async () => ((await api(app.url, "GET", `/api/accounts/${savings.id}/transactions`)).transactions as any[])[0];
+  await api(app.url, "PATCH", `/api/transactions/${(await sideOf()).id}`, { payee: "From checking", memo: "Emergency fund" });
+  await page.goto(`${app.url}/budgets/${budgetId}/accounts/${checking.id}`);
+  await ready(page);
+
+  await page.locator(".rrow", { hasText: "Rainy day" }).click();
+  const editor = page.locator("form.edit");
+  await editor.getByRole("button", { name: "Delete" }).click();
+  await editor.waitFor({ state: "detached" });
+  assert.equal(await sideOf(), undefined);
+  const snack = page.locator("#snack");
+  await snack.getByRole("button", { name: "Undo" }).click();
+  await page.locator(".rrow", { hasText: "Rainy day" }).waitFor();
+
+  const back = ((await api(app.url, "GET", `/api/accounts/${checking.id}/transactions`)).transactions as any[])[0];
+  assert.deepEqual([back.payee, back.memo, back.amount], ["Rainy day", "November", -5_000]);
+  assert.notEqual(back.id, sent.id);
+  const other = await sideOf();
+  assert.deepEqual([other.payee, other.memo, other.amount, other.category.transferId], ["From checking", "Emergency fund", 5_000, back.category.transferId]);
+  assert.deepEqual(app.pageErrors, []);
+});
+
 test("phone: Recent activity fits 390px and the sheet's transfer shows its preview", { timeout: 60_000 }, async (t) => {
   const app = await openApp(t, { width: 390, height: 844, touch: true });
   const { page } = app;
