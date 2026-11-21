@@ -627,7 +627,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
       });
     },
     // Owner rule: an account's starting balance counts as money to assign, and a card's negative
-    // opening balance reduces it. Closed accounts are included.
+    // starting balance reduces it. Closed accounts are included.
     readyToAssign(budgetId: string): number {
       return readyToAssign(budgetId);
     },

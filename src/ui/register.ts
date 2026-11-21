@@ -134,10 +134,10 @@ function createDraft(config: {
   const date = input("date", { type: "date", class: `${config.inputClass} num` });
   const payee = input("payee", { type: "text", maxlength: "120", list: config.payeeList });
   const memo = input("memo", { type: "text", maxlength: "500" });
-  const amount = input("amount", { type: "text", inputmode: "decimal", class: `${config.inputClass} num amt-in`, "aria-label": "Amount, outflow" });
+  const amount = input("amount", { type: "text", inputmode: "decimal", class: `${config.inputClass} num amt-in`, "aria-label": "Amount, money out" });
   const setSign = (next: Sign) => {
     sign = next;
-    amount.setAttribute("aria-label", `Amount, ${sign > 0 ? "inflow" : "outflow"}`);
+    amount.setAttribute("aria-label", `Amount, ${sign > 0 ? "money in" : "money out"}`);
     config.onSign(sign);
     paintPreview();
   };

@@ -136,7 +136,7 @@ test("with nothing to fill, the preview says why", { timeout: 60_000 }, async (t
   assert.equal(await rainButton(page).isEnabled(), true);
   await rainButton(page).click();
   await preview(page).waitFor();
-  assert.equal(compact(await preview(page).locator(".rain-empty").innerText()), `Every bucket's target is met for ${currentName}.`);
+  assert.equal(compact(await preview(page).locator(".rain-empty").innerText()), `Every bucket has what it needs for ${currentName}.`);
   assert.equal(await preview(page).getByRole("button", { name: /^Rain / }).count(), 0);
   await preview(page).getByRole("button", { name: "Done" }).click();
   await preview(page).waitFor({ state: "detached" });

@@ -37,7 +37,7 @@ export function rainButton(open: () => void): HTMLButtonElement {
 function previewBody(plan: RainPlan, month: string, readyToAssign: number, buckets: readonly BucketMonth[]): HTMLElement[] {
   const byId = new Map(buckets.map((bucket) => [bucket.id, bucket]));
   if (plan.fills.length === 0) {
-    return [el("p", { class: "rain-empty" }, readyToAssign <= 0 ? "Nothing ready to assign." : `Every bucket's target is met for ${monthName(month)}.`)];
+    return [el("p", { class: "rain-empty" }, readyToAssign <= 0 ? "Nothing ready to assign." : `Every bucket has what it needs for ${monthName(month)}.`)];
   }
   return [
     el("ul", { class: "rain-fills" }, ...plan.fills.map((fill) => {

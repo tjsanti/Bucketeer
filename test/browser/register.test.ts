@@ -66,12 +66,14 @@ test("income entered in the register updates the register and the account balanc
   const category = entry.getByRole("combobox", { name: "Category" });
   assert.equal(await date.inputValue(), today());
   assert.equal(await category.inputValue(), "");
+  assert.equal(await amount.getAttribute("aria-label"), "Amount, money out");
   const pickIncome = async () => {
     await category.fill("Inc");
     await category.press("Enter");
   };
   await pickIncome();
   assert.equal(await entry.locator("button.sign").textContent(), "+");
+  assert.equal(await amount.getAttribute("aria-label"), "Amount, money in");
 
   await date.fill(earlier);
   await payee.fill("Acme Payroll");
