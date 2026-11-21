@@ -12,9 +12,13 @@ Early and in active development. Today you can:
 - **transfer** money between accounts, including paying a credit card, with a preview of the other account's balance; a transfer touches no bucket and never Ready to assign;
 - see **Recent activity** on the Accounts and Buckets pages, with each transfer shown once;
 - **spend** from buckets and get money back into them, on desktop (an inline entry row, editing rows in place) and on a phone (a bottom sheet), with Undo for every add, edit and delete;
-- organise **buckets** into **groups**: recurring (a monthly amount), goal (an amount by a month), or plain; reorder them by drag, keyboard, or the phone Reorder mode; archive and restore them.
+- **split** a transaction across several buckets;
+- organise **buckets** into **groups**: recurring (a monthly amount), goal (an amount by a month), or plain; reorder them by drag, keyboard, or the phone Reorder mode; archive and restore them;
+- move between **months**, with each month's summary of Ready to assign, Income, Assigned and Spent, and each bucket's Assigned, Spent and Available, which carries forward (overspending included);
+- **assign** money from Ready to assign to a bucket, or **take** it back, with the add/take pill on desktop or the bucket sheet on a phone, with Undo;
+- **make it rain**: fill the month's recurring and goal buckets from Ready to assign in bucket order, after a preview, with one Undo for the whole rain.
 
-Assigning money to buckets and the month view are still to come, so a bucket's Available moves only with the transactions filed to it. Expect the data model to change between releases.
+Expect the data model to change between releases.
 
 ## Run with Docker
 
