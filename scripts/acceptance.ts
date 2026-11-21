@@ -289,6 +289,30 @@ try {
   assert.deepEqual(partial.fills, [{ bucketId: fuel, amount: 16000 }, { bucketId: saving, amount: 24000 }]);
   cli("tx", "add", "--account", rainAccount.id, "--amount", "-1", "--bucket", fuel);
   cliFails("money_moved", "rain", "undo", partial.rainId);
+  // A reimbursement and an overspend, in a budget of their own: Groceries (recurring 100) with 300 ready.
+  const spillBudget = ["--budget", JSON.parse(cli("budget", "save", "--name", "Spill", "--json")).id];
+  const spillAccount = JSON.parse(cli("account", "add", ...spillBudget, "--name", "Checking", "--type", "checking", "--starting-balance", "300", "--json"));
+  const spillGroup = JSON.parse(cli("group", "add", ...spillBudget, "--name", "All", "--json")).id;
+  const groceries = JSON.parse(cli("bucket", "add", ...spillBudget, "--group", spillGroup, "--name", "Groceries", "--type", "recurring", "--amount", "100", "--json")).id as string;
+  const spillMonth = (...args: string[]) => JSON.parse(cli("month", ...spillBudget, ...args, "--json"));
+  const groceriesIn = (...args: string[]) => spillMonth(...args).buckets.find((bucket: { id: string }) => bucket.id === groceries);
+  const summaryBefore = spillMonth().summary;
+  assert.equal(groceriesIn().need, 10000);
+  // Money back into a bucket counts as assigned to it: its need drops by 30, and the month's income and
+  // assigned both include the 30, while spent stays gross.
+  cli("tx", "add", "--account", spillAccount.id, "--amount", "30", "--bucket", groceries, "--payee", "Refund");
+  assert.equal(groceriesIn().need, 7000);
+  const summaryAfter = spillMonth().summary;
+  assert.deepEqual([summaryAfter.income, summaryAfter.assigned, summaryAfter.spent, summaryAfter.readyToAssign],
+    [summaryBefore.income + 3000, summaryBefore.assigned + 3000, summaryBefore.spent, summaryBefore.readyToAssign]);
+  // Fill the rest, then overspend by 40: next month carries −40, and its rain gives only the monthly 100.
+  cli("assign", groceries, "--amount", "70");
+  cli("tx", "add", "--account", spillAccount.id, "--amount", "-140", "--bucket", groceries);
+  const spillNext = monthsAfter(month, 1);
+  assert.deepEqual([groceriesIn("--month", spillNext).available, groceriesIn("--month", spillNext).need], [-4000, 10000]);
+  const spillRain = JSON.parse(cli("rain", ...spillBudget, "--month", spillNext, "--json"));
+  assert.deepEqual(spillRain.fills, [{ bucketId: groceries, amount: 10000 }]);
+  assert.equal(groceriesIn("--month", spillNext).available, 6000);
   assert.throws(() => cli("budget", "open", "missing", "--json"), (error: unknown) => {
     assert.ok(error && typeof error === "object" && "status" in error && "stdout" in error);
     assert.equal(error.status, 1);
@@ -297,7 +321,7 @@ try {
   }, "Missing budgets must produce a nonzero exit code.");
   compose("exec", "-T", "bucketeer", "node", "--input-type=module", "-e", `
     import assert from 'node:assert/strict';
-    for (const path of ['/', '/ui/app.js', '/ui/theme.js', '/ui/dom.js', '/ui/sheet.js', '/ui/shell.js', '/ui/accounts.js', '/ui/buckets.js', '/ui/bucket-dialog.js', '/ui/reorder.js', '/ui/register.js', '/ui/split-lines.js', '/ui/category-picker.js', '/ui/styles.css', '/client.js', '/core/money.js', '/core/types.js', '/core/colours.js']) {
+    for (const path of ['/', '/ui/app.js', '/ui/theme.js', '/ui/dom.js', '/ui/sheet.js', '/ui/shell.js', '/ui/accounts.js', '/ui/buckets.js', '/ui/bucket-dialog.js', '/ui/reorder.js', '/ui/register.js', '/ui/split-lines.js', '/ui/category-picker.js', '/ui/styles.css', '/client.js', '/core/money.js', '/core/types.js', '/core/colours.js', '/core/refusals.js']) {
       const response = await fetch('http://localhost:${port}' + path);
       assert.equal(response.status, 200, path);
       assert.ok((await response.text()).length > 0, path);
