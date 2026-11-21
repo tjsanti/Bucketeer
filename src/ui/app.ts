@@ -238,6 +238,7 @@ async function route(): Promise<void> {
         monthHeader: header.root,
         month,
         past: month < addMonths(range.last, -12),
+        today: range.today,
         async refresh() {
           try {
             const [next, data] = await Promise.all([loadSide(budget.id), load()]);

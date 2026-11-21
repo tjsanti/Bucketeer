@@ -177,3 +177,24 @@ test("in the dark theme on desktop the entry row saves income and the register r
   assert.equal(await noHorizontalScroll(page), true);
   assert.deepEqual(app.pageErrors, []);
 });
+
+test("a new transaction's date defaults to the server's today, not the browser's", { timeout: 60_000 }, async (t) => {
+  // Kiritimati (UTC+14) is always a day or more ahead of Pago Pago (UTC−11).
+  const serverZone = "Pacific/Pago_Pago";
+  const app = await openApp(t, { serverTimeZone: serverZone, browserTimeZone: "Pacific/Kiritimati" });
+  const { page } = app;
+  const { budgetId, checking } = await household(app.url);
+  const serverToday = new Intl.DateTimeFormat("en-CA", { timeZone: serverZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  await page.goto(`${app.url}/budgets/${budgetId}/accounts/${checking.id}`);
+  await ready(page);
+
+  const entry = page.locator("form.entry");
+  assert.equal(await entry.getByLabel("Date").inputValue(), serverToday);
+  await entry.getByRole("combobox", { name: "Category" }).fill("Inc");
+  await entry.getByRole("combobox", { name: "Category" }).press("Enter");
+  await entry.getByLabel("Amount").fill("20");
+  await entry.getByLabel("Amount").press("Enter");
+  await page.locator("#snack-msg", { hasText: "Added" }).waitFor();
+  assert.equal(await entry.locator(".note, [role=alert]").filter({ hasText: "future" }).count(), 0);
+  assert.deepEqual(app.pageErrors, []);
+});

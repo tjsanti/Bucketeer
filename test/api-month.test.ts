@@ -5,7 +5,7 @@ import { createApi } from "../src/api.js";
 import { createClient } from "../src/client.js";
 import { openBucketeer } from "../src/core/index.js";
 
-test("HTTP exposes the month range, account months and month-end balances", async () => {
+test("HTTP exposes the month range with today, account months and month-end balances", async () => {
   const core = openBucketeer(":memory:", { now: () => new Date("2026-11-20T12:00:00.000Z"), timeZone: "UTC" });
   const server = createApi(core);
   server.listen(0, "127.0.0.1");
@@ -20,7 +20,8 @@ test("HTTP exposes the month range, account months and month-end balances", asyn
     const october = core.addTransaction(checking.id, { date: "2026-10-15", amount: 20_000, category: { kind: "income" } });
     core.addTransaction(checking.id, { date: "2026-11-02", amount: 5_000, category: { kind: "income" } });
 
-    assert.deepEqual(await client.monthRange(budget.id), { first: "2025-11", last: "2027-11" });
+    // With the range comes the server's today, which new transactions default to (ADR-0007).
+    assert.deepEqual(await client.monthRange(budget.id), { first: "2025-11", last: "2027-11", today: "2026-11-20" });
     assert.deepEqual(await client.accountMonth(checking.id, "2026-10"), { balance: 120_000, transactions: [{ ...october, runningBalance: 120_000 }] });
     assert.deepEqual(await client.accountBalances(budget.id, "2026-10"), { [checking.id]: 120_000 });
 

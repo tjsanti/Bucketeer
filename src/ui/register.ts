@@ -26,6 +26,8 @@ export interface RegisterContext {
   month: string;
   /** Whether the month is before the current one. */
   past: boolean;
+  /** The server's today, "YYYY-MM-DD": new entries default to it, not the viewer's clock (ADR-0007). */
+  today: string;
 }
 
 export interface RegisterData {
@@ -42,12 +44,6 @@ const columns = ["Date", "Payee", "Category", "Memo", "Amount", "Balance"] as co
 const columnClass = ["date", "payee", "cat", "memo", "amt", "bal"] as const;
 const MINUS = "−";
 const phone = window.matchMedia("(max-width: 760px)");
-
-/** Today as YYYY-MM-DD in the viewer's own time zone. */
-function today(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-}
 
 /** "2026-11-14" -> "Nov 14", read as a calendar date so no time zone can shift it. */
 function shortDate(date: string): string {
@@ -294,7 +290,7 @@ export function createRegisterPage(ctx: RegisterContext) {
   const heading = el("h1", {}, account.name);
   const balance = el("p", { class: "figure num" });
   // New entries start today, or on a past month's last day; that day's balance is the summary's.
-  const defaultDate = () => ctx.past ? lastDayOf(ctx.month) : today();
+  const defaultDate = () => ctx.past ? lastDayOf(ctx.month) : ctx.today;
   const summaryLabel = ctx.past ? `Balance on ${shortDate(lastDayOf(ctx.month))}` : "Balance";
   const summary = el("div", { class: "acct-summary card" }, el("p", { class: "label" }, summaryLabel), balance);
   const note = el("div", { class: "note", role: "alert" });

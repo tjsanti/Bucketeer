@@ -83,7 +83,8 @@ export function createClient(baseUrl: string) {
     openTransaction: (id: string) => request<Transaction>(transaction(id)),
     editTransaction: (id: string, input: TransactionEditInput) => request<Transaction>(transaction(id), send("PATCH", input)),
     deleteTransaction: (id: string) => request<void>(transaction(id), send("DELETE")),
-    monthRange: (budgetId: string) => request<MonthRange>(`${budgetPath(budgetId)}/month-range`),
+    /** The budget's month range and the server's today, "YYYY-MM-DD" (ADR-0007). */
+    monthRange: (budgetId: string) => request<MonthRange & { today: string }>(`${budgetPath(budgetId)}/month-range`),
     accountBalances: (budgetId: string, month: string) =>
       request<Record<string, number>>(`${budgetPath(budgetId)}/account-balances?month=${encodeURIComponent(month)}`),
     bucketMonth: (budgetId: string, month: string) => request<BucketMonthView>(`${budgetPath(budgetId)}/months/${encodeURIComponent(month)}`),

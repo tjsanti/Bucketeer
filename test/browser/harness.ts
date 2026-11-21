@@ -7,10 +7,13 @@ import type { TestContext } from "node:test";
 import { chromium } from "playwright-core";
 import type { Browser, Page } from "playwright-core";
 
-/** Starts the built server on a free port with an in-memory database; stops it when the test ends. */
-export async function startServer(t: TestContext): Promise<string> {
+/**
+ * Starts the built server on a free port with an in-memory database; stops it when the test ends. `timeZone`
+ * sets its TZ; it shares the test machine's otherwise.
+ */
+export async function startServer(t: TestContext, timeZone?: string): Promise<string> {
   const server = spawn(process.execPath, [resolve("dist/server.js")], {
-    env: { ...process.env, HOST: "127.0.0.1", PORT: "0", DATABASE_PATH: ":memory:" },
+    env: { ...process.env, HOST: "127.0.0.1", PORT: "0", DATABASE_PATH: ":memory:", ...(timeZone ? { TZ: timeZone } : {}) },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const exited = once(server, "exit");
@@ -46,14 +49,21 @@ export interface App {
   foreignRequests: string[];
 }
 
-/** A fresh server and browser page; tracks page errors and requests that leave the app's origin. */
-export async function openApp(t: TestContext, options: { colorScheme?: "light" | "dark"; width?: number; height?: number; touch?: boolean; reducedMotion?: "reduce" | "no-preference" } = {}): Promise<App> {
-  const url = await startServer(t);
+/**
+ * A fresh server and browser page; tracks page errors and requests that leave the app's origin. `serverTimeZone`
+ * and `browserTimeZone` put the two in different zones; both share the test machine's otherwise.
+ */
+export async function openApp(t: TestContext, options: {
+  colorScheme?: "light" | "dark"; width?: number; height?: number; touch?: boolean; reducedMotion?: "reduce" | "no-preference";
+  serverTimeZone?: string; browserTimeZone?: string;
+} = {}): Promise<App> {
+  const url = await startServer(t, options.serverTimeZone);
   const browser = await launchBrowser(t);
   const context = await browser.newContext({
     colorScheme: options.colorScheme ?? "light",
     viewport: { width: options.width ?? 1280, height: options.height ?? 900 },
     reducedMotion: options.reducedMotion ?? "reduce",
+    ...(options.browserTimeZone ? { timezoneId: options.browserTimeZone } : {}),
     ...(options.touch ? { hasTouch: true, isMobile: true } : {}),
   });
   const page = await context.newPage();

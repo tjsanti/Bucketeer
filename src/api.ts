@@ -144,7 +144,8 @@ export function createApi(core: Bucketeer) {
       }
       const budgetRange = /^\/api\/budgets\/([^/]+)\/month-range$/.exec(pathname)?.[1];
       if (budgetRange && request.method === "GET") {
-        json(response, 200, core.monthRange(decodeId(budgetRange, "Budget")));
+        // With the range, the server's today: clients default new dates to it, never their own clock (ADR-0007).
+        json(response, 200, { ...core.monthRange(decodeId(budgetRange, "Budget")), today: core.today() });
         return;
       }
       const budgetBalances = /^\/api\/budgets\/([^/]+)\/account-balances$/.exec(pathname)?.[1];
