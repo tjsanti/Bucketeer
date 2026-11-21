@@ -272,6 +272,7 @@ async function route(): Promise<void> {
         client,
         budget,
         monthHeader: header.root,
+        thisMonth: addMonths(range.last, -12),
         snack: shell.showSnack,
         announce: shell.announce,
         async reload() {

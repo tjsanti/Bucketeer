@@ -103,7 +103,8 @@ test("the pill adds and takes for the month, previews the result, and Undo or Cm
   assert.doesNotMatch((await readyFigure(page).getAttribute("class"))!, /is-preview/);
   await eventually(async () => assert.match(await page.locator("#announce").innerText(), /Added \$20\.00 to Fuel\./));
   // The confirming flash is skipped under reduced motion.
-  assert.equal(await rowOf(page, "Fuel").locator(".c.avail").evaluate((node) => getComputedStyle(node).animationDuration), "0s");
+  const flash = await rowOf(page, "Fuel").locator(".c.avail").evaluate((node) => [getComputedStyle(node).animationName, getComputedStyle(node).animationDuration]);
+  assert.deepEqual(flash, ["avail-flash", "0s"]);
 
   // The snackbar's Undo reverses it.
   await snack(page).getByRole("button", { name: "Undo" }).click();
