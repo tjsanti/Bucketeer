@@ -3,8 +3,9 @@
 // does both. Every add, edit and delete offers Undo.
 import type { createClient } from "../client.js";
 import { ApiError } from "../client.js";
-import type { Account, BucketTable, Category, NewTransactionInput, PayeeHistory, RegisterTransaction, TransactionEditInput } from "../core/index.js";
+import type { Account, AccountMonth, BucketTable, Category, NewTransactionInput, PayeeHistory, RegisterTransaction, TransactionEditInput } from "../core/index.js";
 import { formatMoney, parseMoney } from "../core/money.js";
+import { lastDayOf } from "../core/months.js";
 import { BudgetError } from "../core/types.js";
 import { categoryDot, categoryLabel, categoryPicker, sameCategory } from "./category-picker.js";
 import type { CategoryPicker } from "./category-picker.js";
@@ -17,11 +18,18 @@ export interface RegisterContext {
   snack(message: string, undo: () => Promise<void>): void;
   /** Re-reads the account, its register, the buckets, payees and the sidebar, and redraws them. Never throws. */
   refresh(): Promise<void>;
+  /** The month header; the summary and the register show its month. */
+  monthHeader: HTMLElement;
+  /** The month shown, "YYYY-MM". */
+  month: string;
+  /** Whether the month is before the current one. */
+  past: boolean;
 }
 
 export interface RegisterData {
   account: Account;
-  transactions: RegisterTransaction[];
+  /** The month's transactions and the account's balance at its end. */
+  register: AccountMonth;
   table: BucketTable;
   payees: PayeeHistory[];
 }
@@ -85,6 +93,8 @@ function createDraft(config: {
   table: () => BucketTable;
   payees: () => PayeeHistory[];
   payeeList: string;
+  /** The date a new draft starts on. */
+  defaultDate: () => string;
   inputClass: string;
   inline: boolean;
   onSign: (sign: Sign) => void;
@@ -149,7 +159,7 @@ function createDraft(config: {
       memo.value = transaction?.memo ?? "";
       amount.value = transaction ? formatMoney(Math.abs(transaction.amount)).replaceAll(",", "") : "";
       if (transaction) date.value = transaction.date;
-      else if (!keepDate || !date.value) date.value = today();
+      else if (!keepDate || !date.value) date.value = config.defaultDate();
       picker.set(transaction?.category ?? null);
       setSign(transaction && transaction.amount > 0 ? 1 : -1);
       draft.clearMarks();
@@ -205,7 +215,10 @@ export function createRegisterPage(ctx: RegisterContext) {
 
   const heading = el("h1", {}, account.name);
   const balance = el("p", { class: "figure num" });
-  const summary = el("div", { class: "acct-summary card" }, el("p", { class: "label" }, "Balance"), balance);
+  // New entries start today, or on a past month's last day; that day's balance is the summary's.
+  const defaultDate = () => ctx.past ? lastDayOf(ctx.month) : today();
+  const summaryLabel = ctx.past ? `Balance on ${shortDate(lastDayOf(ctx.month))}` : "Balance";
+  const summary = el("div", { class: "acct-summary card" }, el("p", { class: "label" }, summaryLabel), balance);
   const note = el("div", { class: "note", role: "alert" });
   const payeeListId = uid("payees");
   const payeeList = el("datalist", { id: payeeListId });
@@ -225,7 +238,7 @@ export function createRegisterPage(ctx: RegisterContext) {
   function rowEditor(kind: "new" | "edit"): { node: HTMLFormElement; draft: Draft; footer: HTMLElement } {
     let sign!: HTMLButtonElement;
     const draft = createDraft({
-      table: () => table, payees: () => payees, payeeList: payeeListId, inputClass: "cin", inline: false,
+      table: () => table, payees: () => payees, payeeList: payeeListId, defaultDate, inputClass: "cin", inline: false,
       onSign: (next) => { if (sign) paintSign(sign, next); },
     });
     sign = signButton(() => draft);
@@ -257,7 +270,7 @@ export function createRegisterPage(ctx: RegisterContext) {
   const addButton = el("button", { class: "btn btn-primary", type: "button" }, icon("plus", "sm"), "New transaction");
   addButton.addEventListener("click", () => openPhoneSheet(null));
   const addbar = el("div", { class: "addbar" }, addButton);
-  const root = el("div", { class: "page register" }, el("div", { class: "page-row" }, heading), summary, note, tableNode, addbar, payeeList);
+  const root = el("div", { class: "page register" }, el("div", { class: "page-row" }, heading, ctx.monthHeader), summary, note, tableNode, addbar, payeeList);
 
   function highlight(id: string): void {
     highlightId = id;
@@ -426,7 +439,7 @@ export function createRegisterPage(ctx: RegisterContext) {
     let signSeg!: ReturnType<typeof segmented<"out" | "in">>;
     const prefix = el("span", { class: "sign", "aria-hidden": "true" }, `${MINUS}$`);
     const draft = createDraft({
-      table: () => table, payees: () => payees, payeeList: payeeListId, inputClass: "input", inline: true,
+      table: () => table, payees: () => payees, payeeList: payeeListId, defaultDate, inputClass: "input", inline: true,
       onSign: (next) => {
         signSeg?.set(next > 0 ? "in" : "out");
         prefix.textContent = `${next > 0 ? "+" : MINUS}$`;
@@ -586,15 +599,19 @@ export function createRegisterPage(ctx: RegisterContext) {
       account = data.account;
       table = data.table;
       payees = data.payees;
-      transactions = data.transactions;
+      transactions = data.register.transactions;
       heading.textContent = account.name;
       // A closed account takes no new transactions.
       entry.hidden = addbar.hidden = account.closed;
       tableNode.setAttribute("aria-label", `${account.name} register`);
-      balance.textContent = formatMoney(account.balance, { symbol: true });
+      const closing = data.register.balance;
+      balance.textContent = formatMoney(closing, { symbol: true });
       payeeList.replaceChildren(...payees.map((entry) => el("option", { value: entry.payee })));
       paint();
-      end.replaceChildren(el("span", {}, "Starting balance"), el("span", {}, formatMoney(account.startingBalance)));
+      // The register ends with the balance the month began with.
+      const oldest = transactions.at(-1);
+      const opening = oldest ? oldest.runningBalance - oldest.amount : closing;
+      end.replaceChildren(el("span", {}, `Balance before ${shortDate(`${ctx.month}-01`)}`), el("span", {}, formatMoney(opening)));
     },
     note: (message: string | null) => setNote(note, message),
   };

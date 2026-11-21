@@ -7,6 +7,8 @@ import { bucketAvailable, nameKey, readBucketEdit, readBucketMove, readBucketRev
 import type { BucketFields, GroupChoice } from "./buckets.js";
 import { leastUsedColour } from "./colours.js";
 import { calendarIn, defaultTimeZone } from "./time.js";
+import { monthRangeOf, readMonth } from "./months.js";
+import type { AccountMonth, MonthRange } from "./months.js";
 import { assertConsistent, readNewTransaction, readTransactionEdit, sameCategory } from "./transactions.js";
 import type { BucketColour } from "./colours.js";
 import { BudgetError } from "./types.js";
@@ -16,6 +18,7 @@ import type {
 
 export { BudgetError } from "./types.js";
 export type { BucketColour } from "./colours.js";
+export type { AccountMonth, MonthRange } from "./months.js";
 export type {
   Account, AccountEditInput, AccountType, ArchiveResult, Bucket, BucketEditInput, BucketGroup, BucketMoveInput, BucketRevertInput, BucketTable, BucketType,
   Budget, BudgetErrorCode, BudgetErrorField, BudgetNameInput, Category, GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput,
@@ -354,6 +357,29 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
     if (account.closed) throw new BudgetError("account_closed", `${account.name} is closed. Reopen it first.`);
   }
 
+  /** The months the budget can be viewed in: creation month − 12 … current month + 12. */
+  function monthRange(budgetId: string): MonthRange {
+    return monthRangeOf(calendar.monthOf(new Date(openBudget(budgetId).createdAt)), thisMonth());
+  }
+
+  /** Every transaction of the account, oldest first, each with the balance just after it. */
+  function registerOf(account: Account): RegisterTransaction[] {
+    let balance = account.startingBalance;
+    return transactionsOf.all(account.id).map((row) => {
+      const found = transactionFromRow(row);
+      balance += found.amount;
+      return { ...found, runningBalance: balance };
+    });
+  }
+
+  function accountMonthOf(account: Account, month: string): AccountMonth {
+    const upTo = registerOf(account).filter((row) => row.date.slice(0, 7) <= month);
+    return {
+      balance: upTo.at(-1)?.runningBalance ?? account.startingBalance,
+      transactions: upTo.filter((row) => row.date.startsWith(month)).reverse(),
+    };
+  }
+
   function openBudget(id: string): Budget {
     const row = find.get(id);
     if (!row) throw new BudgetError("not_found", "Budget not found.");
@@ -383,6 +409,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
       return openBudget(id);
     },
     openBudget,
+    monthRange,
     listBudgets(): Budget[] {
       return list.all().map(budgetFromRow);
     },
@@ -466,14 +493,20 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
     },
     /** The account's register, newest first, each with the balance just after it. */
     listTransactions(accountId: string): { transactions: RegisterTransaction[] } {
+      return { transactions: registerOf(openAccount(accountId)).reverse() };
+    },
+    /** Each account's balance at the end of the month, by account ID; closed accounts included. */
+    accountBalances(budgetId: string, month: string): Record<string, number> {
+      const chosen = readMonth(month, monthRange(budgetId));
+      return Object.fromEntries(listAccounts(budgetId).map((account) => [account.id, accountMonthOf(account, chosen).balance]));
+    },
+    /**
+     * The account in one month: its balance at the end of the month (today's, for the current month, since
+     * nothing is dated later) and that month's rows, newest first, with running balances over all earlier ones.
+     */
+    accountMonth(accountId: string, month: string): AccountMonth {
       const account = openAccount(accountId);
-      let balance = account.startingBalance;
-      const register = transactionsOf.all(accountId).map((row) => {
-        const found = transactionFromRow(row);
-        balance += found.amount;
-        return { ...found, runningBalance: balance };
-      });
-      return { transactions: register.reverse() };
+      return accountMonthOf(account, readMonth(month, monthRange(account.budgetId)));
     },
     /** Every payee in the budget with its latest transaction's category, sorted by name; the latest spelling wins. */
     payees(budgetId: string): PayeeHistory[] {

@@ -107,6 +107,18 @@ try {
   assert.equal(JSON.parse(cli("tx", "edit", early.id, "--amount", "10", "--json")).amount, 1000);
   assert.deepEqual(JSON.parse(cli("tx", "delete", early.id, "--json")), { id: early.id, deleted: true });
   assert.equal(ready(), 258791);
+  // tx list --month: only that month's rows, then the balance at its end (the container's zone is UTC).
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  const lastMonth = new Date(Date.UTC(Number(thisMonth.slice(0, 4)), Number(thisMonth.slice(5, 7)) - 2, 15)).toISOString().slice(0, 7);
+  const backPay = JSON.parse(cli("tx", "add", "--account", savings.id, "--amount", "25", "--income", "--date", `${lastMonth}-15`, "--json"));
+  assert.deepEqual(cli("tx", "list", "--account", savings.id, "--month", lastMonth).split("\n"), [
+    `${backPay.id}\t${lastMonth}-15\t\tIncome\t25.00\t25.00`,
+    `Balance at end of ${lastMonth}\t25.00`,
+  ]);
+  assert.deepEqual(cli("tx", "list", "--account", savings.id, "--month", thisMonth).split("\n"), ["No transactions.", `Balance at end of ${thisMonth}\t25.00`]);
+  assert.deepEqual(JSON.parse(cli("tx", "list", "--account", savings.id, "--month", lastMonth, "--json")).balance, 2500);
+  cliFails("invalid_input", "tx", "list", "--account", savings.id, "--month", "2999-01");
+  cli("tx", "delete", backPay.id);
   accounts = JSON.parse(cli("account", "list", ...budgetArgs, "--json"));
   let register = JSON.parse(cli("tx", "list", ...accountArgs, "--json"));
   // Buckets and groups: dollars in, cents out; positions are 1-based.

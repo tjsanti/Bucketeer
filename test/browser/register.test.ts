@@ -18,9 +18,11 @@ function localDate(daysAgo = 0): Date {
 }
 const iso = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 const today = () => iso(localDate());
-// Six days back stays inside the budget's 12-month window and sorts before today.
-const earlier = iso(localDate(6));
-const earlierLabel = localDate(6).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+// Up to six days back stays inside this month, which the register shows, and sorts no later than today.
+const back = Math.min(6, new Date().getDate() - 1);
+const earlier = iso(localDate(back));
+const earlierLabel = localDate(back).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 
 async function post(url: string, path: string, body: unknown): Promise<{ id: string }> {
   const response = await fetch(`${url}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -61,7 +63,7 @@ test("income entered in the register updates the register, the account balance a
   const register = page.getByRole("table", { name: "Checking register" });
   assert.deepEqual((await register.getByRole("columnheader").allInnerTexts()).map(compact), ["Date", "Payee", "Category", "Memo", "Amount", "Balance"]);
   assert.equal(await register.locator(".rrow").count(), 0);
-  assert.equal(compact(await register.locator(".reg-end").innerText()), "Starting balance 1,000.00");
+  assert.equal(compact(await register.locator(".reg-end").innerText()), `Balance before ${monthStart} 1,000.00`);
 
   // The entry row is always ready: date defaults to today; Income is picked from the category list.
   const entry = page.locator("form.entry");

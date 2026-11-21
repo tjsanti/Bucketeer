@@ -31,7 +31,7 @@ const help = `Usage:
   bucketeer bucket move <id> [--group <id>] --position <n> [--json]
   bucketeer bucket archive <id> [--json]
   bucketeer bucket restore <id> [--json]
-  bucketeer tx list --account <id> [--json]
+  bucketeer tx list --account <id> [--month <YYYY-MM>] [--json]
   bucketeer tx add --account <id> --amount <amount> (--income | --bucket <id>)
                    [--date <YYYY-MM-DD>] [--payee <payee>] [--memo <memo>] [--json]
   bucketeer tx edit <id> [--amount <amount>] [--income | --bucket <id>] [--date <YYYY-MM-DD>] [--payee <payee>] [--memo <memo>] [--json]
@@ -52,6 +52,8 @@ Options:
   --amount <amount>
                  Dollars: 160, 3,000.00 (signed for transactions; Income is positive)
   --by <month>   A goal's month, YYYY-MM
+  --month <month>
+                 Only that month's transactions, then the balance at its end, YYYY-MM
   --colour <hue> sky, denim, blue, slate, teal, mint, green, forest,
                  lime, olive, sun, cocoa, peach, tangerine, rose, plum (default: least used)
   --position <n> 1 is first
@@ -97,6 +99,7 @@ try {
       bucket: { type: "string" },
       payee: { type: "string" },
       memo: { type: "string" },
+      month: { type: "string" },
     },
   });
   jsonOutput = values.json;
@@ -240,11 +243,18 @@ try {
       result = ready;
       if (!jsonOutput) console.log(formatMoney(ready.readyToAssign));
     } else if (command === "tx" && action === "list" && values.account !== undefined) {
-      options(2, "account");
-      const register = await client.listTransactions(values.account);
-      result = register;
-      const names = register.transactions.length ? await bucketNames((await client.openAccount(values.account)).budgetId) : new Map<string, string>();
-      if (!jsonOutput) console.log(register.transactions.length ? register.transactions.map((row) => formatTransaction(row, names)).join("\n") : "No transactions.");
+      options(2, "account", "month");
+      const names = await bucketNames((await client.openAccount(values.account)).budgetId);
+      const listed = (rows: { transactions: RegisterTransaction[] }) => rows.transactions.length ? rows.transactions.map((row) => formatTransaction(row, names)).join("\n") : "No transactions.";
+      if (values.month === undefined) {
+        const register = await client.listTransactions(values.account);
+        result = register;
+        if (!jsonOutput) console.log(listed(register));
+      } else {
+        const month = await client.accountMonth(values.account, values.month);
+        result = month;
+        if (!jsonOutput) console.log(`${listed(month)}\nBalance at end of ${values.month}\t${formatMoney(month.balance)}`);
+      }
     } else if (command === "tx" && action === "add" && values.account !== undefined && values.amount !== undefined) {
       options(2, "account", "amount", "income", "bucket", "date", "payee", "memo");
       const category = categoryOption(values);

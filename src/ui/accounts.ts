@@ -16,6 +16,8 @@ export interface AccountsContext {
   snack(message: string, undo: () => Promise<void>): void;
   /** Routes to another page of the app. */
   navigate(path: string): void;
+  /** The month header; the table shows balances at the end of its month. */
+  monthHeader: HTMLElement;
 }
 
 const typeOptions = [["checking", "Checking"], ["savings", "Savings"], ["credit-card", "Credit card"], ["cash", "Cash"]] as const;
@@ -36,7 +38,7 @@ export function createAccountsPage(ctx: AccountsContext) {
   const note = el("div", { class: "note", role: "alert" });
   const content = el("div", { class: "accounts-content" });
   const root = el("div", { class: "page" },
-    el("div", { class: "page-row" }, el("h1", {}, "Accounts"), addButton),
+    el("div", { class: "page-row" }, el("h1", {}, "Accounts"), ctx.monthHeader, addButton),
     note,
     content);
   let closedOpen = false;
@@ -156,13 +158,13 @@ export function createAccountsPage(ctx: AccountsContext) {
     }
   }
 
-  function renderTable(open: Account[]): HTMLElement {
-    const total = open.reduce((sum, account) => sum + account.balance, 0);
+  function renderTable(open: Account[], balanceOf: (account: Account) => number): HTMLElement {
+    const total = open.reduce((sum, account) => sum + balanceOf(account), 0);
     const rows = open.map((account) => {
       const edit = el("button", { class: "row-edit", type: "button", "aria-label": `Edit ${account.name}`, "data-edit-id": account.id }, icon("pencil"));
       const row = el("tr", { class: "orow" },
         el("th", { scope: "row", class: "aname" }, routeLink(el("a", { href: accountPath(budget.id, account.id) }, account.name), ctx.navigate)),
-        el("td", { class: "bal num" }, formatMoney(account.balance)),
+        el("td", { class: "bal num" }, formatMoney(balanceOf(account))),
         el("td", { class: "go" }, edit));
       row.addEventListener("click", (event) => {
         if (!(event.target instanceof Element && event.target.closest("a"))) openEdit(account);
@@ -195,12 +197,13 @@ export function createAccountsPage(ctx: AccountsContext) {
     return details;
   }
 
-  function render(next: Account[]): void {
+  /** `balances` are each account's balance at the end of the header's month, by ID. */
+  function render(next: Account[], balances: Record<string, number>): void {
     const open = next.filter((account) => !account.closed);
     const closed = next.filter((account) => account.closed);
     if (closed.length === 0) closedOpen = false;
     content.replaceChildren(
-      open.length ? renderTable(open) : el("p", { class: "empty" }, "No accounts yet."),
+      open.length ? renderTable(open, (account) => balances[account.id] ?? account.balance) : el("p", { class: "empty" }, "No accounts yet."),
       ...(closed.length ? [renderClosed(closed)] : []));
   }
 
