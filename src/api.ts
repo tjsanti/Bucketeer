@@ -56,7 +56,7 @@ class HttpError extends Error {
   }
 }
 
-const statuses = { invalid_input: 400, not_found: 404, name_taken: 409, balance_not_zero: 409, group_not_empty: 409, bucket_overspent: 409, bucket_changed: 409, account_closed: 409, bucket_archived: 409, bucket_has_future: 409, not_enough_ready: 409, not_enough_available: 409, money_moved: 409 } as const;
+const statuses = { invalid_input: 400, not_found: 404, name_taken: 409, balance_not_zero: 409, group_not_empty: 409, bucket_overspent: 409, bucket_changed: 409, account_closed: 409, bucket_archived: 409, bucket_has_future: 409, not_enough_ready: 409, not_enough_available: 409, money_moved: 409, rain_changed: 409 } as const;
 
 function decodeId(segment: string, what: string): string {
   try {
@@ -161,7 +161,9 @@ export function createApi(core: Bucketeer) {
           return;
         }
         if (request.method === "POST") {
-          json(response, 201, core.rain(budgetId, month));
+          // The body, { expect: plan }, is optional: without one the server rains whatever the plan is now.
+          const body = request.headers["content-type"] === undefined ? undefined : await readJson(request);
+          json(response, 201, core.rain(budgetId, month, body));
           return;
         }
       }

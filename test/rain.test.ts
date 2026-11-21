@@ -160,3 +160,21 @@ test("undo is refused with money_moved when a later month would be left with les
     core.close();
   }
 });
+
+test("a rain sent with the plan it previewed is refused with rain_changed once the plan differs, and writes nothing", () => {
+  const { core, budget, fuel, row } = household(40_000);
+  try {
+    const preview = core.planRain(budget.id, "2026-11");
+    core.assign(fuel.id, { month: "2026-11", amount: 1_000 });
+    assert.throws(() => core.rain(budget.id, "2026-11", { expect: preview }), code("rain_changed"));
+    assert.deepEqual([row("2026-11", fuel.id).assigned, core.readyToAssign(budget.id)], [1_000, 39_000]);
+    assert.throws(() => core.rain(budget.id, "2026-11", { expect: { total: "lots" } }), code("invalid_input"));
+
+    const fresh = core.planRain(budget.id, "2026-11");
+    const { rainId, ...applied } = core.rain(budget.id, "2026-11", { expect: fresh });
+    assert.ok(rainId);
+    assert.deepEqual(applied, fresh);
+  } finally {
+    core.close();
+  }
+});

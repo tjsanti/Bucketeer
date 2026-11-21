@@ -89,7 +89,9 @@ export function createClient(baseUrl: string) {
     bucketMonth: (budgetId: string, month: string) => request<BucketMonthView>(`${budgetPath(budgetId)}/months/${encodeURIComponent(month)}`),
     assign: (bucketId: string, input: AssignInput) => request<BucketMonth>(`${bucket(bucketId)}/assign`, send("POST", input)),
     planRain: (budgetId: string, month: string) => request<RainPlan>(`${budgetPath(budgetId)}/months/${encodeURIComponent(month)}/rain`),
-    rain: (budgetId: string, month: string) => request<Rain>(`${budgetPath(budgetId)}/months/${encodeURIComponent(month)}/rain`, send("POST")),
+    /** With `expect`, the preview being confirmed, the server refuses with rain_changed if the plan differs now. */
+    rain: (budgetId: string, month: string, expect?: RainPlan) =>
+      request<Rain>(`${budgetPath(budgetId)}/months/${encodeURIComponent(month)}/rain`, send("POST", expect === undefined ? undefined : { expect })),
     undoRain: (rainId: string) => request<void>(`/api/rains/${encodeURIComponent(rainId)}/undo`, send("POST")),
     accountMonth: (accountId: string, month: string) => request<AccountMonth>(`${account(accountId)}/months/${encodeURIComponent(month)}`),
   };

@@ -1,7 +1,8 @@
 // Make it rain (ADR-0005): the button beside Ready to assign, the preview of the server's dry run, and the brief
 // rain flourish after a confirmed rain. The preview shows the plan exactly as the server computed it; confirming
-// asks the server to apply it, and the snackbar's Undo reverses the whole rain (or shows why it can't).
+// asks the server to apply that plan (refused if it has changed since), and the snackbar's Undo reverses the whole rain (or shows why it can't).
 import type { createClient } from "../client.js";
+import { ApiError } from "../client.js";
 import type { BucketMonth, Budget, RainPlan } from "../core/index.js";
 import { formatMoney } from "../core/money.js";
 import { el, icon, withVars } from "./dom.js";
@@ -32,6 +33,28 @@ export function rainButton(open: () => void): HTMLButtonElement {
   return button;
 }
 
+/** The preview's body for a plan: each fill in bucket order, the total, and Ready to assign before → after. */
+function previewBody(plan: RainPlan, month: string, readyToAssign: number, buckets: readonly BucketMonth[]): HTMLElement[] {
+  const byId = new Map(buckets.map((bucket) => [bucket.id, bucket]));
+  if (plan.fills.length === 0) {
+    return [el("p", { class: "rain-empty" }, readyToAssign <= 0 ? "Nothing ready to assign." : `Every bucket's target is met for ${monthName(month)}.`)];
+  }
+  return [
+    el("ul", { class: "rain-fills" }, ...plan.fills.map((fill) => {
+      const bucket = byId.get(fill.bucketId);
+      return el("li", {},
+        withVars(el("span", { class: "dot", "aria-hidden": "true" }), { "--c": `var(--b-${bucket?.colour ?? "slate"})` }),
+        el("span", { class: "rn" }, bucket?.name ?? "Bucket"), " ",
+        el("span", { class: "num" }, money(fill.amount)));
+    })),
+    el("div", { class: "rain-total" }, el("span", {}, "Total"), " ", el("span", { class: "num" }, money(plan.total))),
+    el("div", { class: "rain-ready" }, el("span", {}, "Ready to assign"), " ",
+      el("span", { class: "num" }, money(readyToAssign), " → ", el("strong", {}, money(readyToAssign - plan.total)))),
+  ];
+}
+
+const submitLabel = (plan: RainPlan) => plan.fills.length === 0 ? "Done" : `Rain ${money(plan.total)}`;
+
 /** Loads the dry run and opens the preview. A failed load leaves the page as it was and reports through `onError`. */
 export async function openRainPreview(ctx: RainContext, onError: (error: unknown) => void): Promise<void> {
   let plan: RainPlan;
@@ -41,38 +64,39 @@ export async function openRainPreview(ctx: RainContext, onError: (error: unknown
     onError(error);
     return;
   }
-  const byId = new Map(ctx.buckets.map((bucket) => [bucket.id, bucket]));
-  const empty = plan.fills.length === 0;
-  const body = empty
-    ? [el("p", { class: "rain-empty" }, ctx.readyToAssign <= 0 ? "Nothing ready to assign." : `Every bucket's target is met for ${monthName(ctx.month)}.`)]
-    : [
-      el("ul", { class: "rain-fills" }, ...plan.fills.map((fill) => {
-        const bucket = byId.get(fill.bucketId);
-        return el("li", {},
-          withVars(el("span", { class: "dot", "aria-hidden": "true" }), { "--c": `var(--b-${bucket?.colour ?? "slate"})` }),
-          el("span", { class: "rn" }, bucket?.name ?? "Bucket"), " ",
-          el("span", { class: "num" }, money(fill.amount)));
-      })),
-      el("div", { class: "rain-total" }, el("span", {}, "Total"), " ", el("span", { class: "num" }, money(plan.total))),
-      el("div", { class: "rain-ready" }, el("span", {}, "Ready to assign"), " ",
-        el("span", { class: "num" }, money(ctx.readyToAssign), " → ", el("strong", {}, money(ctx.readyToAssign - plan.total)))),
-    ];
 
   let dialog: HTMLDialogElement | undefined;
+  // Confirming sends the plan shown. If the server's plan has changed since (rain_changed), nothing rains: the
+  // preview redraws with the new plan and the note says why, so the next confirm rains what's on screen.
+  const showChanged = async (error: ApiError): Promise<never> => {
+    const [next, view] = await Promise.all([ctx.client.planRain(ctx.budget.id, ctx.month), ctx.client.bucketMonth(ctx.budget.id, ctx.month)]);
+    plan = next;
+    dialog?.querySelector(".sheet-fields")?.replaceChildren(...previewBody(plan, ctx.month, view.summary.readyToAssign, view.buckets));
+    const submit = dialog?.querySelector<HTMLButtonElement>("button[type=submit]");
+    if (submit) submit.textContent = submitLabel(plan);
+    await ctx.refresh();
+    throw error;
+  };
   openSheet({
     title: "Make it rain",
-    submitLabel: empty ? "Done" : `Rain ${money(plan.total)}`,
+    submitLabel: submitLabel(plan),
     body: (sheet) => {
       dialog = sheet.dialog;
       dialog.classList.add("rain-sheet");
-      return body;
+      return previewBody(plan, ctx.month, ctx.readyToAssign, ctx.buckets);
     },
     initialFocus: () => dialog?.querySelector<HTMLElement>("button[type=submit]") ?? null,
     // Evaluated on close: after a rain the page has redrawn, so this finds the new button.
     returnFocus: ctx.returnFocus,
     submit: async () => {
-      if (empty) return;
-      const rain = await ctx.client.rain(ctx.budget.id, ctx.month);
+      if (plan.fills.length === 0) return;
+      let rain;
+      try {
+        rain = await ctx.client.rain(ctx.budget.id, ctx.month, plan);
+      } catch (error) {
+        if (error instanceof ApiError && error.code === "rain_changed") await showChanged(error);
+        throw error;
+      }
       await ctx.refresh();
       if (!rain.rainId || rain.fills.length === 0) return;
       const rainId = rain.rainId;

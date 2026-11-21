@@ -10,7 +10,7 @@ import type { BucketFields, GroupChoice } from "./buckets.js";
 import { leastUsedColour } from "./colours.js";
 import { calendarIn, defaultTimeZone } from "./time.js";
 import { monthName, monthRangeOf, readMonth } from "./months.js";
-import { needOf, planRain } from "./rain.js";
+import { needOf, planRain, readRainRequest, samePlan } from "./rain.js";
 import type { Rain, RainPlan } from "./rain.js";
 import type { AccountMonth, MonthRange } from "./months.js";
 import { assertConsistent, bucketIdsOf, readNewTransaction, readTransactionEdit } from "./transactions.js";
@@ -646,10 +646,17 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
     planRain(budgetId: string, month: string): RainPlan {
       return rainPlanOf(budgetId, month).plan;
     },
-    /** Fills the month's needs from Ready to assign, every fill in one transaction under one rain id. */
-    rain(budgetId: string, month: string): Rain {
+    /**
+     * Fills the month's needs from Ready to assign, every fill in one transaction under one rain id. Sent with
+     * `{ expect: plan }`, the preview it was confirmed from, it is refused with rain_changed if the plan differs now.
+     */
+    rain(budgetId: string, month: string, input?: unknown): Rain {
+      const expected = readRainRequest(input);
       return transaction(() => {
         const { month: chosen, plan } = rainPlanOf(budgetId, month);
+        if (expected && !samePlan(expected, plan)) {
+          throw new BudgetError("rain_changed", "The buckets have changed since this preview. Check the new amounts and rain again.");
+        }
         if (plan.fills.length === 0) return plan;
         const rainId = randomUUID();
         const now = timestamp();

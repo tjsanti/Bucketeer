@@ -40,6 +40,17 @@ test("HTTP previews, applies and undoes a rain, and serves each bucket's need", 
     assert.equal(await client.undoRain(rain.rainId), undefined);
     assert.equal(core.readyToAssign(budget.id), 40_000);
 
+    // A rain sent with the plan it previewed is refused, 409, if the plan has changed since.
+    const stale = await client.planRain(budget.id, "2026-11");
+    core.assign(fuel.id, { month: "2026-11", amount: 1_000 });
+    const changed = await fetch(`${url}/api/budgets/${budget.id}/months/2026-11/rain`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expect: stale }),
+    });
+    assert.equal(changed.status, 409);
+    assert.equal((await changed.json()).error.code, "rain_changed");
+    const fresh = await client.planRain(budget.id, "2026-11");
+    assert.deepEqual((await client.rain(budget.id, "2026-11", fresh)).total, fresh.total);
+
     await assert.rejects(client.rain(budget.id, "2026-10"), { code: "invalid_input" });
     await assert.rejects(client.planRain(budget.id, "2026-10"), { code: "invalid_input" });
     await assert.rejects(client.undoRain("missing"), { code: "not_found" });

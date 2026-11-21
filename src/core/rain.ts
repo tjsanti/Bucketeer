@@ -1,6 +1,7 @@
 // Make it rain (ADR-0005): fill each bucket's need for a month from Ready to assign, strictly in bucket order,
 // with no special case for overspent buckets. Need and planning are pure, so the preview is exactly what's applied.
 import type { MonthFigures } from "./assignments.js";
+import { BudgetError } from "./types.js";
 import type { Bucket } from "./types.js";
 
 export interface RainFill {
@@ -50,4 +51,27 @@ export function planRain(buckets: readonly { id: string; need: number }[], ready
     remaining -= amount;
   }
   return { fills, total: fills.reduce((sum, fill) => sum + fill.amount, 0) };
+}
+
+/**
+ * A rain request's optional `{ expect: plan }`: the preview it was confirmed from. Undefined when there's none,
+ * as from the CLI, which rains whatever the plan is now.
+ */
+export function readRainRequest(input: unknown): RainPlan | undefined {
+  if (input === undefined) return undefined;
+  const fields = typeof input === "object" && input !== null && !Array.isArray(input) ? input as Record<string, unknown> : null;
+  const expect = fields && Object.keys(fields).join() === "expect" ? fields.expect as Record<string, unknown> | null : null;
+  const fills = expect && typeof expect === "object" && Array.isArray(expect.fills) ? expect.fills as unknown[] : null;
+  const valid = fills !== null && Number.isSafeInteger(expect!.total) && fills.every((fill) => {
+    const each = fill as Record<string, unknown> | null;
+    return typeof each === "object" && each !== null && typeof each.bucketId === "string" && Number.isSafeInteger(each.amount);
+  });
+  if (!valid) throw new BudgetError("invalid_input", "A rain takes only the plan it was previewed from, as { expect: { fills, total } }.");
+  return { fills: (fills as RainFill[]).map(({ bucketId, amount }) => ({ bucketId, amount })), total: expect!.total as number };
+}
+
+/** Whether two plans fill the same buckets with the same amounts, in the same order. */
+export function samePlan(a: RainPlan, b: RainPlan): boolean {
+  return a.total === b.total && a.fills.length === b.fills.length
+    && a.fills.every((fill, index) => fill.bucketId === b.fills[index]!.bucketId && fill.amount === b.fills[index]!.amount);
 }

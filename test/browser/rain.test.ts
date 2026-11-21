@@ -97,6 +97,32 @@ test("a refused Undo shows the API's message", { timeout: 60_000 }, async (t) =>
   assert.deepEqual(app.pageErrors, []);
 });
 
+test("when the plan changes behind an open preview, confirming rains nothing and shows the new plan", { timeout: 60_000 }, async (t) => {
+  const app = await openApp(t);
+  const { page, url } = app;
+  const { budgetId, fuel } = await household(url);
+  await openBuckets(page, url, budgetId);
+  await rainButton(page).click();
+  const sheet = preview(page);
+  await sheet.waitFor();
+  // Someone else assigns 60.00 to Fuel, so rain would now give it 100.00.
+  await send(url, `/api/buckets/${fuel.id}/assign`, { month: current, amount: 6_000 }, 200);
+
+  await sheet.getByRole("button", { name: "Rain $1,810.00" }).click();
+  await sheet.locator(".snote", { hasText: "changed" }).waitFor();
+  assert.equal(compact(await sheet.locator(".snote").innerText()), "The buckets have changed since this preview. Check the new amounts and rain again.");
+  assert.deepEqual(await rows(sheet.locator(".rain-fills")), ["Rent $1,650.00", "Fuel $100.00"]);
+  assert.equal(compact(await sheet.locator(".rain-ready").innerText()), "Ready to assign $4,940.00 → $3,190.00");
+  const dry = (await (await fetch(`${url}/api/budgets/${budgetId}/ready-to-assign`)).json()) as { readyToAssign: number };
+  assert.equal(dry.readyToAssign, 494_000);
+
+  await sheet.getByRole("button", { name: "Rain $1,750.00" }).click();
+  await sheet.waitFor({ state: "detached" });
+  await snack(page).locator("#snack-msg", { hasText: "Rained" }).waitFor();
+  assert.equal(await readyFigure(page), "$3,190.00");
+  assert.deepEqual(app.pageErrors, []);
+});
+
 test("with nothing to fill, the preview says why", { timeout: 60_000 }, async (t) => {
   const app = await openApp(t);
   const { page, url } = app;
