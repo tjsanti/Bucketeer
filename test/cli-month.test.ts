@@ -77,7 +77,7 @@ test("CLI assign moves money into a bucket's month and month prints the Buckets 
 
     assert.deepEqual(await cli("month", "--budget", budget.id), {
       code: 0, stderr: "",
-      stdout: "2026-11\tReady to assign\t300.00\nFixed\tRent\t1,650.00/month\t1,600.00\t0.00\t1,600.00\nFixed\tGifts\t500.00 by 2026-12\t0.00\t25.00\t−25.00",
+      stdout: "2026-11\tReady to assign\t300.00\tIncome\t0.00\tAssigned\t1,600.00\tSpent\t25.00\nFixed\tRent\t1,650.00/month\t1,600.00\t0.00\t1,600.00\nFixed\tGifts\t500.00 by 2026-12\t0.00\t25.00\t−25.00",
     });
     assert.deepEqual(JSON.parse((await cli("month", "--budget", budget.id, "--month", "2026-12", "--json")).stdout), core.bucketMonth(budget.id, "2026-12"));
 

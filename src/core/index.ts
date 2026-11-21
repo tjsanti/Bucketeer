@@ -15,7 +15,7 @@ import { assertConsistent, bucketIdsOf, readNewTransaction, readTransactionEdit 
 import type { BucketColour } from "./colours.js";
 import { BudgetError } from "./types.js";
 import type {
-  Account, AccountType, ArchiveResult, Bucket, BucketGroup, BucketMonth, BucketMonthView, BucketTable, BucketType, Budget, Category, CategoryInput, Health, PayeeHistory,
+  Account, AccountType, ArchiveResult, Bucket, BucketGroup, BucketMonth, BucketMonthView, BucketTable, BucketType, Budget, Category, CategoryInput, Health, MonthSummary, PayeeHistory,
   RegisterTransaction, Transaction,
 } from "./types.js";
 
@@ -23,7 +23,7 @@ export { BudgetError } from "./types.js";
 export type { BucketColour } from "./colours.js";
 export type { AccountMonth, MonthRange } from "./months.js";
 export type {
-  Account, AccountEditInput, AccountType, ArchiveResult, AssignInput, Bucket, BucketEditInput, BucketMonth, BucketMonthView, GroupMonth, GroupTotals, BucketGroup, BucketMoveInput, BucketRevertInput, BucketTable, BucketType,
+  Account, AccountEditInput, AccountType, ArchiveResult, AssignInput, Bucket, BucketEditInput, BucketMonth, BucketMonthView, GroupMonth, GroupTotals, MonthSummary, BucketGroup, BucketMoveInput, BucketRevertInput, BucketTable, BucketType,
   Budget, BudgetErrorCode, BudgetErrorField, BudgetNameInput, Category, CategoryInput, GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput,
   NewTransactionInput, PayeeHistory, RegisterTransaction, SplitLine, Transaction, TransactionEditInput,
 } from "./types.js";
@@ -217,6 +217,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   }
   const incomeOf = database.prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE budget_id = ? AND kind = 'income'");
   const ledgerOf = database.prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM assignments WHERE budget_id = ?");
+  const incomeIn = database.prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE budget_id = ? AND kind = 'income' AND substr(date, 1, 7) = ?");
   const insertAssignment = database.prepare("INSERT INTO assignments (id, budget_id, bucket_id, month, amount, rain_id, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?)");
   // Each bucket's activity per month up to a month: ledger entries, then money in and out of whole transactions
   // and of split lines, by the month they are dated. Parameters: budget, month, three times.
@@ -484,6 +485,20 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
     return withFigures(bucket, activityByBucket(bucket.budgetId, month).get(bucket.id) ?? [], month);
   }
 
+  // Every bucket's activity counts, shown or not: an archived bucket with activity that month is shown anyway.
+  function summaryOf(budgetId: string, month: string, activity: Map<string, MonthActivity[]>): MonthSummary {
+    const inMonth = [...activity.values()].flat().filter((entry) => entry.month === month);
+    const sum = (pick: (entry: MonthActivity) => number) => inMonth.reduce((total, entry) => total + pick(entry), 0);
+    const moneyIn = sum((entry) => entry.moneyIn);
+    return {
+      month,
+      readyToAssign: readyToAssign(budgetId),
+      income: Number(incomeIn.get(budgetId, month)?.total) + moneyIn,
+      assigned: sum((entry) => entry.ledger) + moneyIn,
+      spent: sum((entry) => entry.moneyOut),
+    };
+  }
+
   function bucketMonthOf(budgetId: string, month: string): BucketMonthView {
     const activity = activityByBucket(budgetId, month);
     const buckets = bucketsOf.all(budgetId).map(bucketFromRow)
@@ -491,7 +506,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
       .map((bucket) => withFigures(bucket, activity.get(bucket.id) ?? [], month));
     const groups = groupsOf.all(budgetId).map(groupFromRow)
       .map((group) => ({ ...group, ...totalsOf(buckets.filter((bucket) => bucket.groupId === group.id)) }));
-    return { summary: { month, readyToAssign: readyToAssign(budgetId) }, groups, buckets };
+    return { summary: summaryOf(budgetId, month, activity), groups, buckets };
   }
 
   function openBudget(id: string): Budget {

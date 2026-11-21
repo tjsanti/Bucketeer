@@ -430,7 +430,7 @@ fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
   position: sticky; top: 0; max-height: 100vh; overflow-y: auto;
   padding: var(--s-5) var(--s-4) var(--s-6);
   display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; row-gap: var(--s-6); column-gap: var(--s-2);
-  grid-template-areas: "brand toggle" "budget budget" "nav nav" "ready ready" "accounts accounts";
+  grid-template-areas: "brand toggle" "budget budget" "nav nav" "accounts accounts";
   align-content: start;
 }
 .wordmark { grid-area: brand; display: flex; align-items: center; gap: 10px; min-height: var(--touch); color: var(--text); text-decoration: none; border-radius: var(--r-md); }
@@ -461,13 +461,6 @@ fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
 .nav a:hover { color: var(--text); background: color-mix(in srgb, var(--surface) 55%, transparent); }
 .nav a[aria-current="page"] { background: var(--surface); color: var(--accent-ink); font-weight: var(--fw-semibold); box-shadow: var(--shadow-btn), 0 0 0 1px var(--card-ring); }
 
-/* Ready to assign: violet, or the overspent red when negative. A stopgap until the month's summary strip. */
-.side-ready { grid-area: ready; display: flex; flex-direction: column; gap: 2px; padding: var(--s-3); border-radius: var(--r-md); background: var(--unassigned-soft); }
-.side-ready[hidden] { display: none; }
-.side-ready .label { font-size: var(--fs-sm); font-weight: var(--fw-medium); color: var(--text-muted); }
-.side-ready .figure { font-size: var(--fs-lg); font-weight: var(--fw-heavy); color: var(--unassigned); letter-spacing: -0.01em; overflow-wrap: anywhere; }
-.side-ready.neg { background: var(--over-soft); }
-.side-ready.neg .figure { color: var(--over); }
 .accounts { grid-area: accounts; }
 .side-label { font-size: var(--fs-xs); font-weight: var(--fw-semibold); color: var(--text-muted); letter-spacing: .04em; text-transform: uppercase; padding: 0 var(--s-3) var(--s-2); }
 .acct-list { list-style: none; padding: 0; }
@@ -486,6 +479,27 @@ main { padding: var(--s-8) var(--s-10) var(--s-16); min-width: 0; max-width: 110
 .page > * { max-width: 100%; }
 .page-row { align-self: stretch; display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap; min-height: var(--touch); }
 .page-row h1 { font-size: var(--fs-2xl); overflow-wrap: anywhere; }
+
+/* The month's summary strip: Ready to assign (violet, largest, small cents; the overspent red when negative)
+   with the Make it rain slot beside it, then Income, Assigned and Spent. */
+.summary-wrap { align-self: stretch; }
+.summary { display: grid; grid-template-columns: minmax(0, 2.1fr) repeat(3, minmax(0, 1fr)); overflow: hidden; }
+.ready {
+  background: var(--unassigned-soft); box-shadow: inset -1px 0 0 var(--unassigned-line);
+  padding: var(--s-4) var(--s-5) var(--s-4) var(--s-6);
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s-4); min-width: 0;
+}
+.ready > div:first-child { min-width: 0; }
+.ready-label { display: flex; align-items: center; gap: var(--s-2); color: var(--unassigned); font-weight: var(--fw-bold); font-size: 14px; }
+.ready-figure { font-weight: var(--fw-bold); font-size: var(--fs-hero); line-height: 1.05; color: var(--unassigned); letter-spacing: -0.02em; margin-top: 2px; overflow-wrap: anywhere; }
+.ready-figure .cents { font-size: .58em; letter-spacing: 0; margin-left: 1px; }
+.ready.neg { background: var(--over-soft); box-shadow: inset -1px 0 0 var(--border); }
+.ready.neg .ready-label, .ready.neg .ready-figure { color: var(--over); }
+.rain-slot:empty { display: none; }
+.stat { padding: var(--s-4) var(--s-5); display: flex; flex-direction: column; justify-content: center; gap: 4px; min-width: 0; }
+.stat + .stat { border-left: 1px solid var(--border); }
+.stat .label { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--fs-sm); font-weight: var(--fw-medium); }
+.stat .figure { font-size: var(--fs-lg); font-weight: var(--fw-semibold); letter-spacing: -0.01em; line-height: 1.15; overflow-wrap: anywhere; }
 .accounts-content { align-self: stretch; min-width: 0; }
 
 /* The month header: ‹ November 2026 ›, with a month and year picker under the label. */
@@ -939,6 +953,15 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
    Phone: sidebar becomes a top bar; 16px gutter, 44px touch targets
    ========================================================================== */
 @media (max-width: 760px) {
+  .summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .ready { grid-column: 1 / -1; padding: var(--s-3) var(--s-4); box-shadow: inset 0 -1px 0 var(--unassigned-line); }
+  .ready.neg { box-shadow: inset 0 -1px 0 var(--border); }
+  .ready-label { font-size: 13px; }
+  .ready-figure { font-size: 34px; }
+  .stat { padding: 10px var(--s-3); gap: 2px; }
+  .stat .label { font-size: var(--fs-xs); }
+  .stat .label .icon { display: none; }
+  .stat .figure { font-size: 15px; font-weight: var(--fw-bold); }
   .app { display: block; }
   .side { border-right: 0; border-bottom: 1px solid var(--border); }
   .side-inner {
@@ -955,9 +978,6 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
   .nav a { flex: 1 1 auto; justify-content: center; padding: 0 8px; font-size: 14px; }
   .nav a .icon { display: none; }
   .accounts { display: none; }
-  .side-inner { grid-template-areas: "brand budget toggle" "nav nav nav" "ready ready ready"; }
-  .side-ready { flex-direction: row; align-items: baseline; justify-content: space-between; gap: var(--s-3); padding: 8px var(--s-3); }
-  .side-ready .figure { font-size: var(--fs-md); }
 
   /* Register: two-line rows (payee over category and date; amount over balance). Entry comes with the phone sheet. */
   .reg .rhead, .reg .entry { display: none; }

@@ -40,8 +40,6 @@ export function createShell(handlers: ShellHandlers) {
   let section: Section = "accounts";
   const sideAccounts = byId("side-accounts");
   const sideList = byId<HTMLUListElement>("side-list");
-  const sideReady = byId("side-ready");
-  const sideReadyFigure = byId("side-ready-figure");
   let budgetId: string | undefined;
   const snack = byId("snack");
   const snackMessage = byId("snack-msg");
@@ -162,12 +160,6 @@ export function createShell(handlers: ShellHandlers) {
           budgetId ? routeLink(el("a", { class: "an", href: accountPath(budgetId, account.id) }, account.name), handlers.navigate) : el("span", { class: "an" }, account.name),
           el("span", {}, formatMoney(account.balance)))),
         el("li", { class: "total" }, el("span", {}, "Total"), el("span", {}, formatMoney(total, { symbol: true }))));
-    },
-    /** Violet, or the overspent red with a true minus when negative; null hides it. */
-    setReady(cents: number | null): void {
-      sideReady.hidden = cents === null;
-      sideReadyFigure.textContent = cents === null ? "" : formatMoney(cents, { symbol: true });
-      sideReady.classList.toggle("neg", cents !== null && cents < 0);
     },
     showSnack(message: string, undo: () => Promise<void>): void {
       pendingUndo = undo;

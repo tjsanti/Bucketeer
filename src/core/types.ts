@@ -106,10 +106,25 @@ export interface GroupTotals {
 /** A group with the totals of the buckets it shows that month. */
 export type GroupMonth = BucketGroup & GroupTotals;
 
+/**
+ * The summary strip for one month (ADR-0003). Ready to assign is the pool, the same figure in every month.
+ * Money paid directly into buckets counts in both Income and Assigned, so the month's change in Ready to
+ * assign is always income − assigned.
+ */
+export interface MonthSummary {
+  month: string;
+  readyToAssign: number;
+  /** Income transactions dated in the month + money paid directly into buckets that month. */
+  income: number;
+  /** Ledger entries for the month + money paid directly into buckets that month. */
+  assigned: number;
+  /** Gross money out of buckets that month. */
+  spent: number;
+}
+
 /** The Buckets page for one month. */
 export interface BucketMonthView {
-  /** The month's summary. Ready to assign is the pool, the same figure in every month. */
-  summary: { month: string; readyToAssign: number };
+  summary: MonthSummary;
   /** Every group, in order, with its month totals. */
   groups: GroupMonth[];
   /** Active buckets, then archived ones with a ledger entry or a transaction that month, in bucket order. */

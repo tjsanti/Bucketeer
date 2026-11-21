@@ -55,7 +55,6 @@ test("desktop: a transfer from the picker previews the other balance, and Recent
   await rows.filter({ hasText: "To Visa" }).waitFor();
   assert.deepEqual((await cells(rows.first())).slice(2, 5), ["To Visa", "", `${MINUS}412.09`]);
   assert.equal(await preview.isHidden(), true);
-  assert.equal(compact(await page.locator("#side-ready").innerText()), "Ready to assign $587.91");
   const sideVisa = page.locator("#side-accounts li.row", { hasText: "Visa" });
   assert.equal(compact(await sideVisa.innerText()), "Visa 0.00");
 

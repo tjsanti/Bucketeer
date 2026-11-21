@@ -694,6 +694,8 @@ test("at 390px: no horizontal scroll, Reorder mode with 44px move buttons and gr
   assert.deepEqual((await order(app, budgetId)).Fixed, ["Rent", "Gym", "Groceries"]);
 
   // Grip drag works in Reorder mode.
+  // The summary strip sits above the table, so bring Rent to the top to have both rows on screen.
+  await grid.locator(".brow", { hasText: "Rent" }).evaluate((row) => row.scrollIntoView({ block: "start" }));
   const vacation = grid.locator(".brow", { hasText: "Vacation" });
   await drag(page, vacation, await rowTop(grid.locator(".brow", { hasText: "Rent" })));
   await waitForSnack(page, "Moved Vacation to Fixed.");
@@ -1022,6 +1024,7 @@ test("on a touch phone, only the grip drags in Reorder mode; swipes on rows scro
   assert.equal(await page.locator("#snack").isHidden(), true);
 
   // A touch drag from Groceries' grip to just above Rent moves it, and the move is saved.
+  await grid.locator(".brow", { hasText: "Rent" }).evaluate((row) => row.scrollIntoView({ block: "start" }));
   const grip = await centre(grid.locator(".brow", { hasText: "Groceries" }).locator("[data-grip]"));
   const rentTop = (await grid.locator(".brow", { hasText: "Rent" }).boundingBox())!.y + 2;
   await swipe(grip, rentTop);
@@ -1030,15 +1033,19 @@ test("on a touch phone, only the grip drags in Reorder mode; swipes on rows scro
 
   // Out of Reorder mode there is no grip to drag; a swipe on a row scrolls, and a tap opens Edit.
   await page.getByRole("button", { name: "Done" }).tap();
+  // The summary strip sits above the table; keep Gym on screen, low enough that the page can still scroll down.
+  const showGym = () => grid.locator(".brow", { hasText: "Gym" }).evaluate((row) => row.scrollIntoView({ block: "end" }));
   await page.evaluate(() => window.scrollTo(0, 0));
+  await showGym();
+  const startY = await scrollY();
   const before = await order(app, budgetId);
   const gymName = await centre(grid.locator(".brow", { hasText: "Gym" }).locator(".name"));
   await swipe(gymName, gymName.y - 150);
-  await eventually(async () => assert.ok((await scrollY()) > 0));
+  await eventually(async () => assert.ok((await scrollY()) > startY));
   assert.equal(await page.locator(".drag-ghost").count(), 0);
   assert.equal(await page.locator("dialog").count(), 0);
   assert.deepEqual(await order(app, budgetId), before);
-  await page.evaluate(() => window.scrollTo(0, 0));
+  await grid.locator(".brow", { hasText: "Gym" }).evaluate((row) => row.scrollIntoView({ block: "center" }));
   await tap(grid.locator(".brow", { hasText: "Gym" }).locator(".name"));
   assert.equal(await page.locator("dialog").getByRole("heading").textContent(), "Edit Gym");
   assert.deepEqual(app.pageErrors, []);

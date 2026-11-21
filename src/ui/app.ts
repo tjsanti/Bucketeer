@@ -56,18 +56,15 @@ const shell = createShell({
 
 interface Side {
   accounts: Account[];
-  ready: number;
 }
 
-/** The sidebar's figures: every account and Ready to assign. */
+/** The sidebar's figures: every account. Ready to assign lives in the Buckets page's summary strip. */
 async function loadSide(budgetId: string): Promise<Side> {
-  const [accounts, { readyToAssign }] = await Promise.all([client.listAccounts(budgetId), client.readyToAssign(budgetId)]);
-  return { accounts, ready: readyToAssign };
+  return { accounts: await client.listAccounts(budgetId) };
 }
 
 function showSide(side: Side | null): void {
   shell.setAccounts(side?.accounts ?? null);
-  shell.setReady(side?.ready ?? null);
 }
 
 /** The query that carries the chosen month, or "" for the current month. */

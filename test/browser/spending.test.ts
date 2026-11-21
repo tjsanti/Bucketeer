@@ -88,8 +88,6 @@ test("desktop entry: the category picker, the sign control, payee history, a hig
   assert.deepEqual((await cells(rows.first())).slice(1), ["Noodle Bar", "Eating out", "", `${MINUS}12.00`, `${MINUS}424.09`]);
   assert.equal(await rows.first().evaluate((node) => node.classList.contains("just-saved")), true);
   assert.equal(compact(await page.locator(".acct-summary").innerText()), `Balance ${MINUS}$424.09`);
-  // Ready to assign doesn't move for spending.
-  assert.equal(compact(await page.locator("#side-ready").innerText()), "Ready to assign $587.91");
   // Enter readied the next row: the category clears with the rest.
   assert.deepEqual([await payee.inputValue(), await category.inputValue(), await amount.inputValue()], ["", "", ""]);
 

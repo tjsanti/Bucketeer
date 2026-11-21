@@ -262,7 +262,9 @@ try {
       const view = await client.bucketMonth(budget(), values.month ?? await currentMonth(budget()));
       result = view;
       if (!jsonOutput) {
-        console.log([`${view.summary.month}\tReady to assign\t${formatMoney(view.summary.readyToAssign)}`, ...view.buckets.map((bucket) => formatBucketMonth(bucket, view.groups))].join("\n"));
+        const { month, readyToAssign, income, assigned, spent } = view.summary;
+        const summary = `${month}\tReady to assign\t${formatMoney(readyToAssign)}\tIncome\t${formatMoney(income)}\tAssigned\t${formatMoney(assigned)}\tSpent\t${formatMoney(spent)}`;
+        console.log([summary, ...view.buckets.map((bucket) => formatBucketMonth(bucket, view.groups))].join("\n"));
       }
     } else if (command === "assign" && action !== undefined && values.amount !== undefined) {
       options(2, "amount", "month");

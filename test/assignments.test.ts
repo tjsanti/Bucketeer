@@ -162,3 +162,56 @@ test("an archived bucket appears only in the months it has a transaction or a le
     core.close();
   }
 });
+
+test("the month summary counts Income, Assigned and Spent in that month, with money paid into buckets on both sides", () => {
+  const { core, budget, checking, rent, groceries, vacation, spend } = household();
+  const summary = (month: string) => core.bucketMonth(budget.id, month).summary;
+  try {
+    core.addTransaction(checking.id, { date: "2026-11-02", amount: 200_000, category: income });
+    core.addTransaction(checking.id, { date: "2026-10-15", amount: 10_000, category: income });
+    core.assign(rent.id, { month: "2026-11", amount: 165_000 });
+    core.assign(vacation.id, { month: "2026-12", amount: 30_000 });
+    spend(groceries.id, "2026-11-03", -8_000);
+    spend(groceries.id, "2026-10-20", -2_000);
+    core.addTransaction(checking.id, { date: "2026-11-04", amount: -5_000, category: { kind: "split", lines: [
+      { bucketId: groceries.id, amount: -4_000, memo: "" }, { bucketId: rent.id, amount: -1_000, memo: "" },
+    ] } });
+    assert.deepEqual(summary("2026-11"), { month: "2026-11", readyToAssign: 515_000, income: 200_000, assigned: 165_000, spent: 13_000 });
+
+    // A 30.00 reimbursement raises Income and Assigned by 30.00; Spent stays gross; Ready to assign doesn't move.
+    spend(groceries.id, "2026-11-05", 3_000);
+    assert.deepEqual(summary("2026-11"), { month: "2026-11", readyToAssign: 515_000, income: 203_000, assigned: 168_000, spent: 13_000 });
+
+    assert.deepEqual(summary("2026-10"), { month: "2026-10", readyToAssign: 515_000, income: 10_000, assigned: 0, spent: 2_000 });
+    assert.deepEqual(summary("2026-12"), { month: "2026-12", readyToAssign: 515_000, income: 0, assigned: 30_000, spent: 0 });
+    // Money in an archived bucket still counts in the months it moved.
+    core.archiveBucket(vacation.id);
+    assert.equal(summary("2026-12").assigned, 30_000);
+  } finally {
+    core.close();
+  }
+});
+
+test("over every month, the change in Ready to assign is strip Income − strip Assigned", () => {
+  const { core, budget, checking, rent, groceries, spend } = household();
+  try {
+    const before = core.readyToAssign(budget.id);
+    core.addTransaction(checking.id, { date: "2026-10-02", amount: 120_000, category: income });
+    core.addTransaction(checking.id, { date: "2026-11-02", amount: 80_000, category: income });
+    core.assign(rent.id, { month: "2026-11", amount: 165_000 });
+    core.assign(groceries.id, { month: "2026-10", amount: 40_000 });
+    core.assign(groceries.id, { month: "2027-01", amount: 20_000 });
+    spend(groceries.id, "2026-11-05", 3_000);
+    spend(groceries.id, "2026-11-06", -9_000);
+    let change = 0;
+    for (const month of ["2026-10", "2026-11", "2026-12", "2027-01"]) {
+      const { income: money, assigned } = core.bucketMonth(budget.id, month).summary;
+      change += money - assigned;
+    }
+    // 120,000 + 80,000 − 165,000 − 40,000 − 20,000
+    assert.equal(change, -25_000);
+    assert.equal(core.readyToAssign(budget.id) - before, -25_000);
+  } finally {
+    core.close();
+  }
+});

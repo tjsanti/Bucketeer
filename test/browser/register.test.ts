@@ -4,7 +4,6 @@ import type { Locator, Page } from "playwright-core";
 import { openApp, ready, seedBudget } from "./harness.js";
 
 const MINUS = "−";
-const violet = { light: "rgb(90, 59, 194)", dark: "rgb(183, 163, 255)" }; // --unassigned
 const over = { light: "rgb(179, 36, 59)", dark: "rgb(255, 150, 164)" }; // --over
 
 const compact = (text: string | null) => (text ?? "").replace(/\s+/g, " ").trim();
@@ -37,19 +36,12 @@ async function household(url: string) {
   return { budgetId, checking, visa };
 }
 
-test("income entered in the register updates the register, the account balance and Ready to assign", { timeout: 60_000 }, async (t) => {
+test("income entered in the register updates the register and the account balance", { timeout: 60_000 }, async (t) => {
   const app = await openApp(t);
   const { page } = app;
   const { budgetId, checking } = await household(app.url);
   await page.goto(`${app.url}/budgets/${budgetId}/accounts`);
   await ready(page);
-
-  // Ready to assign sits above Accounts in the sidebar, violet: starting balances count, the card's debt reduces it.
-  const readyFigure = page.locator("#side-ready .figure");
-  assert.equal(compact(await page.locator("#side-ready").innerText()), "Ready to assign $587.91");
-  assert.equal(await colorOf(readyFigure), violet.light);
-  const sideTop = async (selector: string) => (await page.locator(selector).boundingBox())!.y;
-  assert.ok(await sideTop("#side-ready") < await sideTop("#side-accounts"));
 
   // The sidebar and the overview link to each account's register.
   await page.locator("#side-list").getByRole("link", { name: "Checking" }).click();
@@ -95,7 +87,6 @@ test("income entered in the register updates the register, the account balance a
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-label")), "Payee");
   assert.equal(compact(await page.locator(".acct-summary").innerText()), "Balance $3,000.00");
   assert.equal(compact(await page.locator("#side-list li.row").first().innerText()), "Checking 3,000.00");
-  assert.equal(compact(await page.locator("#side-ready").innerText()), "Ready to assign $2,587.91");
 
   // A second entry lands newest first with its running balance; typing in Payee then Enter also saves.
   await pickIncome();
@@ -123,14 +114,6 @@ test("income entered in the register updates the register, the account balance a
   await payee.press("Escape");
   assert.deepEqual([await payee.inputValue(), await amount.inputValue(), await date.inputValue()], ["", "", today()]);
   assert.equal(compact(await note.innerText()), "");
-
-  // Ready to assign below zero is the overspent red with a true minus.
-  const response = await fetch(`${app.url}/api/accounts/${checking.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ startingBalance: -300_000 }) });
-  assert.equal(response.status, 200);
-  await page.reload();
-  await ready(page);
-  assert.equal(compact(await page.locator("#side-ready").innerText()), `Ready to assign ${MINUS}$1,362.09`);
-  assert.equal(await colorOf(readyFigure), over.light);
   assert.deepEqual(app.pageErrors, []);
   assert.deepEqual(app.foreignRequests, []);
 });
@@ -156,7 +139,7 @@ test("the overview's account names open their registers, and an unknown account 
 });
 
 for (const scheme of ["light", "dark"] as const) {
-  test(`the register at 390px in the ${scheme} theme: no horizontal scroll, two-line rows, Ready to assign shown`, { timeout: 45_000 }, async (t) => {
+  test(`the register at 390px in the ${scheme} theme: no horizontal scroll, two-line rows`, { timeout: 45_000 }, async (t) => {
     const app = await openApp(t, { colorScheme: scheme, width: 390, height: 844 });
     const { page } = app;
     const { budgetId, checking } = await household(app.url);
@@ -170,8 +153,6 @@ for (const scheme of ["light", "dark"] as const) {
     assert.equal(await row.isVisible(), true);
     assert.ok((await row.boundingBox())!.width <= 390 - 32 + 1);
     assert.equal(compact(await row.locator(".amt").innerText()), "999,999,999.99");
-    assert.equal(await colorOf(page.locator("#side-ready .figure")), violet[scheme]);
-    assert.equal(await page.locator("#side-ready").isVisible(), true);
     if (scheme === "dark") {
       assert.equal(await page.locator(".reg").evaluate((node) => getComputedStyle(node).backgroundColor), "rgb(22, 33, 42)");
     }
@@ -192,8 +173,6 @@ test("in the dark theme on desktop the entry row saves income and the register r
   await entry.getByLabel("Amount").fill("10");
   await entry.getByLabel("Amount").press("Enter");
   await page.locator(".rrow").first().waitFor();
-  assert.equal(compact(await page.locator("#side-ready").innerText()), "Ready to assign $597.91");
-  assert.equal(await colorOf(page.locator("#side-ready .figure")), violet.dark);
   assert.equal(await page.locator(".reg").evaluate((node) => getComputedStyle(node).backgroundColor), "rgb(22, 33, 42)");
   assert.equal(await noHorizontalScroll(page), true);
   assert.deepEqual(app.pageErrors, []);

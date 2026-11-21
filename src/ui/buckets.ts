@@ -3,7 +3,7 @@
 // Alt+arrows, and the phone Reorder state). Every change saves at once and offers Undo as an inverse
 // operation. Amounts and every total come from the server in cents; formatting lives in core/money.
 import type { createClient } from "../client.js";
-import type { Bucket, BucketGroup, BucketMonth, BucketMonthView, BucketTable, Budget, GroupMonth } from "../core/index.js";
+import type { Bucket, BucketGroup, BucketMonth, BucketMonthView, BucketTable, Budget, GroupMonth, MonthSummary } from "../core/index.js";
 import { formatMoney } from "../core/money.js";
 import { monthLabel, openBucketDialog } from "./bucket-dialog.js";
 import { el, icon, messageOf, setNote, withVars } from "./dom.js";
@@ -105,16 +105,37 @@ function target(bucket: BucketMonth): Node[] {
   return [el("span", { class: "sr-only" }, "No target")];
 }
 
+/**
+ * The month's summary strip (ADR-0003): Ready to assign, largest, with small cents, violet or the overspent red
+ * when negative; a slot for Make it rain; then the month's Income, Assigned and Spent.
+ */
+function renderSummary(summary: MonthSummary): HTMLElement {
+  const ready = formatMoney(summary.readyToAssign, { symbol: true });
+  const dot = ready.lastIndexOf(".");
+  const stat = (name: string, label: string, cents: number) => el("div", { class: "stat" },
+    el("span", { class: "label" }, icon(name, "sm"), label), el("span", { class: "figure num" }, formatMoney(cents, { symbol: true })));
+  return el("section", { class: "card summary", "aria-label": "Month summary" },
+    el("div", { class: `ready${summary.readyToAssign < 0 ? " neg" : ""}` },
+      el("div", {},
+        el("div", { class: "ready-label", id: "ready-label" }, icon("drop", "sm"), "Ready to assign"),
+        el("div", { class: "ready-figure num", "aria-labelledby": "ready-label" }, ready.slice(0, dot), el("span", { class: "cents" }, ready.slice(dot)))),
+      el("div", { class: "rain-slot" })),
+    stat("in", "Income", summary.income),
+    stat("assign", "Assigned", summary.assigned),
+    stat("receipt", "Spent", summary.spent));
+}
+
 export function createBucketsPage(ctx: BucketsContext) {
   const { client, budget } = ctx;
   const note = el("div", { class: "note", role: "alert" });
   const actions = el("div", { class: "head-actions" });
   const content = el("div", { class: "buckets-content" });
+  const strip = el("div", { class: "summary-wrap" });
   const menu = el("div", { class: "gmenu", role: "menu", hidden: true });
-  const root = el("div", { class: "page" }, el("div", { class: "page-row" }, el("h1", {}, "Buckets"), ctx.monthHeader, actions), note, content, menu);
+  const root = el("div", { class: "page" }, el("div", { class: "page-row" }, el("h1", {}, "Buckets"), ctx.monthHeader, actions), strip, note, content, menu);
 
   let table: BucketTable = { groups: [], buckets: [] };
-  let month: BucketMonthView = { summary: { month: "", readyToAssign: 0 }, groups: [], buckets: [] };
+  let month: BucketMonthView = { summary: { month: "", readyToAssign: 0, income: 0, assigned: 0, spent: 0 }, groups: [], buckets: [] };
   let reordering = false;
   let renaming: { groupId: string; draft: string; error: string } | null = null;
   let archivedOpen = false;
@@ -589,6 +610,7 @@ export function createBucketsPage(ctx: BucketsContext) {
     } else {
       main = renderTable();
     }
+    strip.replaceChildren(renderSummary(month.summary));
     content.replaceChildren(main, ...(archived.length ? [renderArchived(archived)] : []));
     movedKey = null;
   }
