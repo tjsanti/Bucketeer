@@ -1,6 +1,7 @@
-// The category combobox for transactions: Income first, then each bucket group with its active buckets
-// (colour dot and Available, overspent in red). Typing filters; the arrows and Enter pick. Archived buckets
-// are never offered, but a transaction already filed to one still shows its name.
+// The category combobox for transactions: Income and Split first, then each bucket group with its active
+// buckets (colour dot and Available, overspent in red). Typing filters; the arrows and Enter pick. Archived
+// buckets are never offered, but a transaction already filed to one still shows its name. A split line's
+// picker offers buckets only: Income is never a split line.
 import type { Bucket, BucketTable, Category } from "../core/index.js";
 import { formatMoney } from "../core/money.js";
 import { el, icon, withVars } from "./dom.js";
@@ -24,24 +25,47 @@ export interface CategoryPicker {
 
 export function sameCategory(a: Category | null, b: Category | null): boolean {
   if (!a || !b) return a === b;
-  return a.kind === b.kind && (a.kind !== "bucket" || a.bucketId === (b as typeof a).bucketId);
+  if (a.kind === "bucket") return b.kind === "bucket" && a.bucketId === b.bucketId;
+  if (a.kind === "split") return b.kind === "split" && JSON.stringify(a.lines) === JSON.stringify(b.lines);
+  return a.kind === b.kind;
 }
 
+const bucketName = (bucketId: string, table: BucketTable) => table.buckets.find((bucket) => bucket.id === bucketId)?.name ?? "";
+
+/** A category as the register shows it; a split lists its buckets. */
 export function categoryLabel(category: Category, table: BucketTable): string {
   if (category.kind === "income") return "Income";
-  return table.buckets.find((bucket) => bucket.id === category.bucketId)?.name ?? "";
+  if (category.kind === "split") return [...new Set(category.lines.map((line) => bucketName(line.bucketId, table)))].join(", ");
+  return bucketName(category.bucketId, table);
 }
 
 /** The dot shown before a category: the bucket's colour, or a violet ring for Income. */
 export function categoryDot(category: Category | null, table: BucketTable): HTMLElement | null {
   if (!category) return null;
   if (category.kind === "income") return withVars(el("span", { class: "dot ring", "aria-hidden": "true" }), { "--c": "var(--unassigned)" });
-  const bucket = table.buckets.find((candidate) => candidate.id === category.bucketId);
+  if (category.kind === "split") {
+    // Up to three overlapping dots, one per bucket.
+    const dots = [...new Set(category.lines.map((line) => line.bucketId))].slice(0, 3).map((bucketId) => bucketDot(bucketId, table)).filter((dot) => !!dot);
+    return dots.length ? el("span", { class: "dots", "aria-hidden": "true" }, ...dots) : null;
+  }
+  return bucketDot(category.bucketId, table);
+}
+
+function bucketDot(bucketId: string, table: BucketTable): HTMLElement | null {
+  const bucket = table.buckets.find((candidate) => candidate.id === bucketId);
   return bucket ? withVars(el("span", { class: "dot", "aria-hidden": "true" }), { "--c": `var(--b-${bucket.colour})` }) : null;
 }
 
-function optionsOf(table: BucketTable): Option[] {
-  const options: Option[] = [{ category: { kind: "income" }, label: "Income", group: "" }];
+/** The picker's lead: the split icon for a split being edited, otherwise the category's dot. */
+function leadOf(category: Category | null, table: BucketTable): Element | null {
+  return category?.kind === "split" ? icon("split", "sm") : categoryDot(category, table);
+}
+
+function optionsOf(table: BucketTable, linePicker: boolean): Option[] {
+  const options: Option[] = linePicker ? [] : [
+    { category: { kind: "income" }, label: "Income", group: "" },
+    { category: { kind: "split", lines: [] }, label: "Split", group: "" },
+  ];
   for (const group of table.groups) {
     for (const bucket of table.buckets) {
       if (bucket.archived || bucket.groupId !== group.id) continue;
@@ -62,6 +86,8 @@ export function categoryPicker(config: {
   inline?: boolean;
   onPick?: (category: Category) => void;
   inputClass?: string;
+  /** A split line's picker: buckets only. */
+  line?: boolean;
 }): CategoryPicker {
   let value = config.value;
   let shown: Option[] = [];
@@ -79,10 +105,12 @@ export function categoryPicker(config: {
 
   function paintValue(): void {
     const table = config.table();
-    input.value = value ? categoryLabel(value, table) : "";
-    lead.replaceChildren(...[categoryDot(value, table)].filter((node): node is HTMLElement => !!node));
+    input.value = shownText();
+    lead.replaceChildren(...[leadOf(value, table)].filter((node): node is Element => !!node));
     root.classList.toggle("has-lead", !!value);
   }
+
+  const shownText = () => !value ? "" : value.kind === "split" ? "Split" : categoryLabel(value, config.table());
 
   function place(): void {
     if (config.inline || list.hidden) return;
@@ -100,8 +128,8 @@ export function categoryPicker(config: {
 
   function render(filter: string): void {
     const text = filter.trim().toLowerCase();
-    shown = optionsOf(config.table()).filter((option) => !text || option.label.toLowerCase().includes(text) || (option.group && option.group.toLowerCase().startsWith(text)));
-    const current = shown.findIndex((option) => sameCategory(option.category, value));
+    shown = optionsOf(config.table(), !!config.line).filter((option) => !text || option.label.toLowerCase().includes(text) || (option.group && option.group.toLowerCase().startsWith(text)));
+    const current = shown.findIndex((option) => option.category.kind === "split" ? value?.kind === "split" : sameCategory(option.category, value));
     active = text ? 0 : Math.max(0, current);
     const nodes: HTMLElement[] = [];
     let group: string | null = null;
@@ -112,7 +140,7 @@ export function categoryPicker(config: {
       }
       const figure = option.bucket ? el("span", { class: `ov num${option.bucket.available < 0 ? " neg" : ""}` }, formatMoney(option.bucket.available)) : null;
       const node = el("div", { class: "opt", role: "option", id: `${listId}-${index}`, "aria-selected": "false" },
-        categoryDot(option.category, config.table()), el("span", { class: "on" }, option.label), figure);
+        leadOf(option.category, config.table()), el("span", { class: "on" }, option.label), figure);
       node.addEventListener("click", () => choose(index));
       nodes.push(node);
     });
@@ -192,7 +220,7 @@ export function categoryPicker(config: {
       paintValue();
     } else if (event.key === "Tab" && isOpen()) {
       // Typeahead: Tab takes the highlighted match for what was typed.
-      if (input.value && input.value !== (value ? categoryLabel(value, config.table()) : "")) choose(active);
+      if (input.value && input.value !== shownText()) choose(active);
       else close();
     }
   });

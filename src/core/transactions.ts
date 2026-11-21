@@ -1,7 +1,7 @@
 // Transaction input rules. Rules that need the database or the clock (dates, closed accounts) live in index.ts.
 import { MAX_CENTS } from "./accounts.js";
 import { BudgetError } from "./types.js";
-import type { BudgetErrorField, Category, TransactionEditInput } from "./types.js";
+import type { BudgetErrorField, Category, SplitLine, TransactionEditInput } from "./types.js";
 
 export const MAX_PAYEE_LENGTH = 120;
 export const MAX_MEMO_LENGTH = 500;
@@ -30,8 +30,7 @@ function readObject(input: unknown): Record<string, unknown> {
   return fields;
 }
 
-function readText(value: unknown, max: number, what: "Payee" | "Memo"): string {
-  const field = what === "Payee" ? "payee" : "memo";
+function readText(value: unknown, max: number, what: "Payee" | "Memo", field: BudgetErrorField = what === "Payee" ? "payee" : "memo"): string {
   if (typeof value !== "string") invalid(`${what} must be text.`, field);
   const text = value.trim();
   if ([...text].length > max) invalid(`${what} must be at most ${max} characters.`, field);
@@ -57,18 +56,41 @@ export function readDate(value: unknown): string {
   return invalid("Date must be a real date written YYYY-MM-DD.", "date");
 }
 
-function readCategory(value: unknown): Category {
-  const fields = typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-  const keys = Object.keys(fields).sort().join();
-  if (fields.kind === "income" && keys === "kind") return { kind: "income" };
-  if (fields.kind === "bucket" && keys === "bucketId,kind" && typeof fields.bucketId === "string" && fields.bucketId !== "") {
-    return { kind: "bucket", bucketId: fields.bucketId };
-  }
-  return invalid("Category must be Income or a bucket.", "category");
+function asObject(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
-export function sameCategory(a: Category, b: Category): boolean {
-  return a.kind === b.kind && (a.kind !== "bucket" || a.bucketId === (b as typeof a).bucketId);
+const isId = (value: unknown): value is string => typeof value === "string" && value !== "";
+
+// Income is never a split line (Q45): a line names a bucket, nothing else.
+function readSplitLine(value: unknown): SplitLine {
+  const fields = asObject(value);
+  if (Object.keys(fields).sort().join() !== "amount,bucketId,memo" || !isId(fields.bucketId)) {
+    invalid("Each split line needs a bucket, an amount and a memo.", "category");
+  }
+  if (!Number.isSafeInteger(fields.amount) || fields.amount === 0 || Math.abs(fields.amount as number) > MAX_CENTS) {
+    invalid("Each split line's amount must be a whole number of cents, not 0.", "category");
+  }
+  return { bucketId: fields.bucketId, amount: fields.amount as number, memo: readText(fields.memo, MAX_MEMO_LENGTH, "Memo", "category") };
+}
+
+function readCategory(value: unknown): Category {
+  const fields = asObject(value);
+  const keys = Object.keys(fields).sort().join();
+  if (fields.kind === "income" && keys === "kind") return { kind: "income" };
+  if (fields.kind === "bucket" && keys === "bucketId,kind" && isId(fields.bucketId)) return { kind: "bucket", bucketId: fields.bucketId };
+  if (fields.kind === "split" && keys === "kind,lines" && Array.isArray(fields.lines)) {
+    if (fields.lines.length < 2) invalid("A split needs at least two lines.", "category");
+    return { kind: "split", lines: fields.lines.map(readSplitLine) };
+  }
+  return invalid("Category must be Income, a bucket or a split.", "category");
+}
+
+/** The buckets a category files money to, each once. */
+export function bucketIdsOf(category: Category): string[] {
+  if (category.kind === "bucket") return [category.bucketId];
+  if (category.kind === "split") return [...new Set(category.lines.map((line) => line.bucketId))];
+  return [];
 }
 
 function readFields(fields: Record<string, unknown>): TransactionFields {
@@ -96,5 +118,13 @@ export function readTransactionEdit(input: unknown): TransactionEditInput {
 
 /** The rules between amount and category, checked on the transaction as it will be saved. */
 export function assertConsistent(transaction: { amount: number; category: Category }): void {
-  if (transaction.category.kind === "income" && transaction.amount <= 0) invalid("Income must be more than 0.00.", "amount");
+  const { amount, category } = transaction;
+  if (category.kind === "income" && amount <= 0) invalid("Income must be more than 0.00.", "amount");
+  if (category.kind === "split") {
+    // Every line shares the transaction's sign (Q53), and the lines add up to it exactly.
+    if (category.lines.some((line) => Math.sign(line.amount) !== Math.sign(amount))) {
+      invalid(`Every split line must be money ${amount < 0 ? "out" : "in"}, like the transaction.`, "category");
+    }
+    if (category.lines.reduce((sum, line) => sum + line.amount, 0) !== amount) invalid("The split lines must add up to the amount.", "category");
+  }
 }

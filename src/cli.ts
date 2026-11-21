@@ -2,7 +2,7 @@
 import { parseArgs } from "node:util";
 import { ApiError, createClient } from "./client.js";
 import type {
-  Account, AccountType, Bucket, BucketColour, BucketGroup, BucketTable, BucketType, Budget, Category, NewBucketInput, RegisterTransaction, Transaction,
+  Account, AccountType, Bucket, BucketColour, BucketGroup, BucketTable, BucketType, Budget, Category, NewBucketInput, RegisterTransaction, SplitLine, Transaction,
 } from "./core/index.js";
 import { formatMoney, parseMoney } from "./core/money.js";
 import { BudgetError } from "./core/types.js";
@@ -32,9 +32,9 @@ const help = `Usage:
   bucketeer bucket archive <id> [--json]
   bucketeer bucket restore <id> [--json]
   bucketeer tx list --account <id> [--month <YYYY-MM>] [--json]
-  bucketeer tx add --account <id> --amount <amount> (--income | --bucket <id>)
+  bucketeer tx add --account <id> --amount <amount> (--income | --bucket <id> | --line <bucketId>:<amount> --line …)
                    [--date <YYYY-MM-DD>] [--payee <payee>] [--memo <memo>] [--json]
-  bucketeer tx edit <id> [--amount <amount>] [--income | --bucket <id>] [--date <YYYY-MM-DD>] [--payee <payee>] [--memo <memo>] [--json]
+  bucketeer tx edit <id> [--amount <amount>] [--income | --bucket <id> | --line <bucketId>:<amount> --line …] [--date <YYYY-MM-DD>] [--payee <payee>] [--memo <memo>] [--json]
   bucketeer tx delete <id> [--json]
   bucketeer ready --budget <id> [--json]
 
@@ -48,6 +48,9 @@ Options:
                  (default: today in the server's time zone)
   --income       File the transaction as Income, which adds to Ready to assign
   --bucket <id>  File the transaction to a bucket: money out is spent, money in is assigned to it
+  --line <bucketId>:<amount>
+                 One line of a split, repeated for each bucket (at least two). Lines share the
+                 transaction's sign and add up to --amount
   --type <type>  For buckets: recurring (--amount per month), goal (--amount by --by), or plain (default)
   --amount <amount>
                  Dollars: 160, 3,000.00 (signed for transactions; Income is positive)
@@ -97,6 +100,7 @@ try {
       account: { type: "string" },
       income: { type: "boolean" },
       bucket: { type: "string" },
+      line: { type: "string", multiple: true },
       payee: { type: "string" },
       memo: { type: "string" },
       month: { type: "string" },
@@ -256,14 +260,14 @@ try {
         if (!jsonOutput) console.log(`${listed(month)}\nBalance at end of ${values.month}\t${formatMoney(month.balance)}`);
       }
     } else if (command === "tx" && action === "add" && values.account !== undefined && values.amount !== undefined) {
-      options(2, "account", "amount", "income", "bucket", "date", "payee", "memo");
+      options(2, "account", "amount", "income", "bucket", "line", "date", "payee", "memo");
       const category = categoryOption(values);
-      if (!category) throw new ApiError("usage", "Choose a category with --income or --bucket <id>.");
+      if (!category) throw new ApiError("usage", "Choose a category with --income, --bucket <id> or --line <bucketId>:<amount>.");
       const added = await client.addTransaction(values.account, { amount: parseMoney(values.amount), category, ...transactionFields(values) });
       result = added;
       if (!jsonOutput) console.log(await inRegister(added));
-    } else if (command === "tx" && action === "edit" && id && ["amount", "income", "bucket", "date", "payee", "memo"].some((key) => key in values)) {
-      options(3, "amount", "income", "bucket", "date", "payee", "memo");
+    } else if (command === "tx" && action === "edit" && id && ["amount", "income", "bucket", "line", "date", "payee", "memo"].some((key) => key in values)) {
+      options(3, "amount", "income", "bucket", "line", "date", "payee", "memo");
       const category = categoryOption(values);
       const edited = await client.editTransaction(id, {
         ...(values.amount !== undefined && { amount: parseMoney(values.amount) }),
@@ -327,13 +331,21 @@ function position(text: string): number {
   return Number(text) - 1;
 }
 
-// The one category option given, or undefined for none; two is a usage error. Splits and transfers add options here.
-function categoryOption(values: { income?: boolean; bucket?: string }): Category | undefined {
+// The one category option given, or undefined for none; two is a usage error. Repeated --line options make one split.
+function categoryOption(values: { income?: boolean; bucket?: string; line?: string[] }): Category | undefined {
   const given: Category[] = [];
   if (values.income) given.push({ kind: "income" });
   if (values.bucket !== undefined) given.push({ kind: "bucket", bucketId: values.bucket });
-  if (given.length > 1) throw new ApiError("usage", "Give one category: --income or --bucket <id>.");
+  if (values.line !== undefined) given.push({ kind: "split", lines: values.line.map(splitLine) });
+  if (given.length > 1) throw new ApiError("usage", "Give one category: --income, --bucket <id> or --line <bucketId>:<amount> (repeated).");
   return given[0];
+}
+
+// "<bucketId>:<amount>", amount in signed dollars.
+function splitLine(text: string): SplitLine {
+  const colon = text.lastIndexOf(":");
+  if (colon <= 0) throw new BudgetError("invalid_input", "Write each split line as --line <bucketId>:<amount>.");
+  return { bucketId: text.slice(0, colon), amount: parseMoney(text.slice(colon + 1)), memo: "" };
 }
 
 function transactionFields(values: { date?: string; payee?: string; memo?: string }) {
@@ -346,7 +358,8 @@ function transactionFields(values: { date?: string; payee?: string; memo?: strin
 
 // id, date, payee, category, amount, running balance.
 function formatTransaction(transaction: RegisterTransaction, bucketNames: Map<string, string>): string {
-  const category = transaction.category.kind === "income" ? "Income" : bucketNames.get(transaction.category.bucketId) ?? transaction.category.bucketId;
+  const { category: filed } = transaction;
+  const category = filed.kind === "income" ? "Income" : filed.kind === "split" ? `Split (${filed.lines.length})` : bucketNames.get(filed.bucketId) ?? filed.bucketId;
   return [transaction.id, transaction.date, transaction.payee, category, formatMoney(transaction.amount), formatMoney(transaction.runningBalance)].join("\t");
 }
 
