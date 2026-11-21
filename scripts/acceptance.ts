@@ -208,6 +208,14 @@ try {
   assert.deepEqual([bucketOf(eatingOut.id, "--month", nextMonth).carriedIn, bucketOf(eatingOut.id, "--month", nextMonth).available], [-9000, -9000]);
   assert.match(cli("month", ...budgetArgs).split("\n")[0]!, new RegExp(`^${month}\tReady to assign\t`));
   const monthBefore = JSON.parse(cli("month", ...budgetArgs, "--month", nextMonth, "--json"));
+  // Splits: each line draws from its own bucket; lines must share the sign, sum to the amount and number two or more.
+  const [eatingBefore, clothingBefore] = [bucketOf(eatingOut.id).available, bucketOf(clothing.id).available];
+  const splitText = cli("tx", "add", ...accountArgs, "--amount", "-80", "--line", `${eatingOut.id}:-50`, "--line", `${clothing.id}:-30`, "--payee", "Superstore");
+  assert.equal(splitText.split("\t")[3], "Split (2)");
+  assert.deepEqual([bucketOf(eatingOut.id).available, bucketOf(clothing.id).available], [eatingBefore - 5000, clothingBefore - 3000]);
+  cliFails("invalid_input", "tx", "add", ...accountArgs, "--amount", "-80", "--line", `${eatingOut.id}:-50`, "--line", `${clothing.id}:-20`);
+  cliFails("invalid_input", "tx", "add", ...accountArgs, "--amount", "-80", "--line", `${eatingOut.id}:-100`, "--line", `${clothing.id}:20`);
+  cliFails("invalid_input", "tx", "add", ...accountArgs, "--amount", "-80", "--line", `${eatingOut.id}:-80`);
   accounts = JSON.parse(cli("account", "list", ...budgetArgs, "--json"));
   register = JSON.parse(cli("tx", "list", ...accountArgs, "--json"));
   const bucketsBefore = JSON.parse(cli("bucket", "list", ...budgetArgs, "--archived", "--json"));
@@ -229,7 +237,7 @@ try {
   }, "Missing budgets must produce a nonzero exit code.");
   compose("exec", "-T", "bucketeer", "node", "--input-type=module", "-e", `
     import assert from 'node:assert/strict';
-    for (const path of ['/', '/ui/app.js', '/ui/theme.js', '/ui/dom.js', '/ui/sheet.js', '/ui/shell.js', '/ui/accounts.js', '/ui/buckets.js', '/ui/bucket-dialog.js', '/ui/reorder.js', '/ui/register.js', '/ui/category-picker.js', '/ui/styles.css', '/client.js', '/core/money.js', '/core/types.js', '/core/colours.js']) {
+    for (const path of ['/', '/ui/app.js', '/ui/theme.js', '/ui/dom.js', '/ui/sheet.js', '/ui/shell.js', '/ui/accounts.js', '/ui/buckets.js', '/ui/bucket-dialog.js', '/ui/reorder.js', '/ui/register.js', '/ui/split-lines.js', '/ui/category-picker.js', '/ui/styles.css', '/client.js', '/core/money.js', '/core/types.js', '/core/colours.js']) {
       const response = await fetch('http://localhost:${port}' + path);
       assert.equal(response.status, 200, path);
       assert.ok((await response.text()).length > 0, path);
