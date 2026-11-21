@@ -71,7 +71,7 @@ export function readNewAccount(input: unknown): NewAccountInput {
     name: readName(fields.name),
     type: readType(fields.type),
     startingBalance: readCents(fields.startingBalance),
-    startingDate: readDate(fields.startingDate),
+    ...("startingDate" in fields && { startingDate: readDate(fields.startingDate) }),
   };
 }
 

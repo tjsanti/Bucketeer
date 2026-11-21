@@ -17,9 +17,9 @@ function household(start = "2026-11-20T12:00:00.000Z") {
 test("the month range runs from the creation month − 12 to the current month + 12, and grows as the clock moves", () => {
   const { core, budget, setNow } = household();
   try {
-    assert.deepEqual(core.monthRange(budget.id), { first: "2025-11", last: "2027-11" });
+    assert.deepEqual(core.monthRange(budget.id), { first: "2025-11", current: "2026-11", last: "2027-11" });
     setNow("2027-03-02T12:00:00.000Z");
-    assert.deepEqual(core.monthRange(budget.id), { first: "2025-11", last: "2028-03" });
+    assert.deepEqual(core.monthRange(budget.id), { first: "2025-11", current: "2027-03", last: "2028-03" });
     assert.throws(() => core.monthRange("missing"), code("not_found"));
   } finally {
     core.close();

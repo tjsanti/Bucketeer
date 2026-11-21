@@ -18,15 +18,11 @@ export interface AccountsContext {
   navigate(path: string): void;
   /** The month header; the table shows balances at the end of its month. */
   monthHeader: HTMLElement;
+  /** Today in the server's time zone (ADR-0007), the date a new account's balance defaults to. */
+  today: string;
 }
 
 const typeOptions = [["checking", "Checking"], ["savings", "Savings"], ["credit-card", "Credit card"], ["cash", "Cash"]] as const;
-
-/** Today as YYYY-MM-DD in the viewer's own time zone. */
-function today(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-}
 
 const closedDate = (iso: string | null) => iso
   ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
@@ -78,7 +74,7 @@ export function createAccountsPage(ctx: AccountsContext) {
   }
 
   function openAdd(): void {
-    const f = accountFields({ name: "", type: "checking", amount: "", date: today(), typeLocked: false });
+    const f = accountFields({ name: "", type: "checking", amount: "", date: ctx.today, typeLocked: false });
     openSheet({
       title: "Add account",
       submitLabel: "Add account",

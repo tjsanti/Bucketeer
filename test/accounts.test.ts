@@ -207,3 +207,15 @@ test("the database refuses invalid account rows and schema creation is idempoten
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("a new account without a starting date starts today in the server's time zone", () => {
+  // 03:00 UTC on the 20th is still the 19th in Los Angeles.
+  const core = openBucketeer(":memory:", { now: () => new Date("2026-11-20T03:00:00.000Z"), timeZone: "America/Los_Angeles" });
+  try {
+    const budget = core.createBudget({ name: "Household" });
+    const { startingDate: _, ...undated } = checking;
+    assert.equal(core.createAccount(budget.id, undated).startingDate, "2026-11-19");
+  } finally {
+    core.close();
+  }
+});

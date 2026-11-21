@@ -599,7 +599,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
         assertNameFree(budgetId, account.name);
         const now = timestamp();
         const id = randomUUID();
-        insertAccount.run(id, budgetId, account.name, account.type, account.startingBalance, account.startingDate, budgetId, now, now);
+        insertAccount.run(id, budgetId, account.name, account.type, account.startingBalance, account.startingDate ?? calendar.dateOf(clock()), budgetId, now, now);
         return openAccount(id);
       });
     },

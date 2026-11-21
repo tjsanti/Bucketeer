@@ -5,7 +5,6 @@ import type {
   Account, AccountType, Bucket, BucketColour, BucketGroup, BucketMonth, BucketTable, BucketType, Budget, CategoryInput, GroupMonth, NewBucketInput, RegisterTransaction,
   Rain, SplitLine, Transaction,
 } from "./core/index.js";
-import { addMonths } from "./core/months.js";
 import { formatMoney, parseMoney } from "./core/money.js";
 import { BudgetError } from "./core/types.js";
 
@@ -51,7 +50,7 @@ Options:
   --starting-balance <amount>
                  Dollars, signed: 1000, 1,000.50, -412.09 (a card's debt is negative; default 0)
   --account <id> Account for tx list and tx add
-  --date <date>  Balance date for a new account (default: today), or a transaction's date
+  --date <date>  Balance date for a new account, or a transaction's date
                  (default: today in the server's time zone)
   --income       File the transaction as Income, which adds to Ready to assign
   --bucket <id>  File the transaction to a bucket: money out is spent, money in is assigned to it
@@ -169,7 +168,7 @@ try {
         name: values.name,
         type: values.type as AccountType,
         startingBalance: parseMoney(values["starting-balance"] ?? "0"),
-        startingDate: values.date ?? today(),
+        ...(values.date !== undefined && { startingDate: values.date }),
       });
       result = account;
       if (!jsonOutput) console.log(formatAccount(account));
@@ -338,9 +337,9 @@ try {
       return formatTransaction(row, await categoryNames(transaction.budgetId));
     }
 
-    // The server's current month: its month range ends 12 months after it.
+    // The server's current month, which comes with its month range.
     async function currentMonth(budgetId: string): Promise<string> {
-      return addMonths((await client.monthRange(budgetId)).last, -12);
+      return (await client.monthRange(budgetId)).current;
     }
 
     // Bucket and account names by ID, for the category column.
@@ -444,8 +443,3 @@ function formatBucketMonth(bucket: BucketMonth, groups: readonly GroupMonth[]): 
   return (bucket.archived ? [...fields, "archived"] : fields).join("\t");
 }
 
-// Today in the CLI's own timezone, as YYYY-MM-DD.
-function today(): string {
-  const now = new Date();
-  return [now.getFullYear(), now.getMonth() + 1, now.getDate()].map((part, index) => String(part).padStart(index ? 2 : 4, "0")).join("-");
-}

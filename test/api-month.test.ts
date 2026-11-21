@@ -21,7 +21,7 @@ test("HTTP exposes the month range with today, account months and month-end bala
     core.addTransaction(checking.id, { date: "2026-11-02", amount: 5_000, category: { kind: "income" } });
 
     // With the range comes the server's today, which new transactions default to (ADR-0007).
-    assert.deepEqual(await client.monthRange(budget.id), { first: "2025-11", last: "2027-11", today: "2026-11-20" });
+    assert.deepEqual(await client.monthRange(budget.id), { first: "2025-11", current: "2026-11", last: "2027-11", today: "2026-11-20" });
     assert.deepEqual(await client.accountMonth(checking.id, "2026-10"), { balance: 120_000, transactions: [{ ...october, runningBalance: 120_000 }] });
     assert.deepEqual(await client.accountBalances(budget.id, "2026-10"), { [checking.id]: 120_000 });
 

@@ -6,7 +6,6 @@
 // The Accounts and Buckets pages take ?month=YYYY-MM (absent for the current month); in-app links keep the chosen month.
 import { createClient } from "../client.js";
 import type { Account, Budget, MonthRange } from "../core/index.js";
-import { addMonths } from "../core/months.js";
 import { createAccountsPage } from "./accounts.js";
 import { createBucketsPage } from "./buckets.js";
 import { byId, el, messageOf, setNote } from "./dom.js";
@@ -79,7 +78,7 @@ async function navigate(path: string): Promise<void> {
 
 /** The URL's month if it is inside the range, else the current month; a bad one is dropped from the URL. */
 function monthFromUrl(range: MonthRange): string {
-  const current = addMonths(range.last, -12);
+  const current = range.current;
   thisMonth = current;
   const requested = new URLSearchParams(window.location.search).get("month");
   const valid = requested !== null && /^\d{4}-(0[1-9]|1[0-2])$/.test(requested) && requested >= range.first && requested <= range.last;
@@ -237,7 +236,7 @@ async function route(): Promise<void> {
         snack: shell.showSnack,
         monthHeader: header.root,
         month,
-        past: month < addMonths(range.last, -12),
+        past: month < range.current,
         today: range.today,
         async refresh() {
           try {
@@ -273,7 +272,7 @@ async function route(): Promise<void> {
         client,
         budget,
         monthHeader: header.root,
-        thisMonth: addMonths(range.last, -12),
+        thisMonth: range.current,
         snack: shell.showSnack,
         announce: shell.announce,
         async reload() {
@@ -303,6 +302,7 @@ async function route(): Promise<void> {
       client,
       budget,
       monthHeader: header.root,
+      today: range.today,
       snack: shell.showSnack,
       navigate: (target) => void navigate(target),
       async refresh() {

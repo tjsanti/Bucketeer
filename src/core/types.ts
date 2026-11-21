@@ -39,7 +39,8 @@ export interface NewAccountInput {
   name: string;
   type: AccountType;
   startingBalance: number;
-  startingDate: string;
+  /** "YYYY-MM-DD"; left out, the core uses today in the server's time zone (ADR-0007). */
+  startingDate?: string;
 }
 
 export interface AccountEditInput {

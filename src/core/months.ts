@@ -6,6 +6,8 @@ import type { RegisterTransaction } from "./types.js";
 
 export interface MonthRange {
   first: string;
+  /** This month, in the server's time zone (ADR-0007). */
+  current: string;
   last: string;
 }
 
@@ -39,7 +41,7 @@ export function lastDayOf(month: string): string {
 }
 
 export function monthRangeOf(creationMonth: string, currentMonth: string): MonthRange {
-  return { first: addMonths(creationMonth, -12), last: addMonths(currentMonth, 12) };
+  return { first: addMonths(creationMonth, -12), current: currentMonth, last: addMonths(currentMonth, 12) };
 }
 
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];

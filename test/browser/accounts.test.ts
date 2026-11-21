@@ -390,3 +390,15 @@ for (const width of [390, 375]) {
     assert.deepEqual(app.pageErrors, []);
   });
 }
+
+test("a new account's balance date defaults to the server's today, not the browser's", { timeout: 60_000 }, async (t) => {
+  // Kiritimati (UTC+14) is always a day or more ahead of Pago Pago (UTC−11).
+  const serverZone = "Pacific/Pago_Pago";
+  const app = await openApp(t, { serverTimeZone: serverZone, browserTimeZone: "Pacific/Kiritimati" });
+  const { page } = app;
+  await openAccounts(app);
+  const serverToday = new Intl.DateTimeFormat("en-CA", { timeZone: serverZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  await page.getByRole("button", { name: "Add account" }).click();
+  assert.equal(await page.locator("dialog").getByLabel("Balance on").inputValue(), serverToday);
+  assert.deepEqual(app.pageErrors, []);
+});
