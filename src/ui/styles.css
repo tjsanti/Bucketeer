@@ -759,7 +759,7 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .reorder-btn { display: none; }
 .buckets-content { align-self: stretch; min-width: 0; }
 .btable { position: relative; overflow: hidden; }
-.btable [role="row"] { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr) 112px 132px; }
+.btable [role="row"] { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr) 112px 112px 132px; }
 .btable .c { display: flex; align-items: center; padding: 0 var(--s-4); min-width: 0; }
 .btable .c.num { justify-content: flex-end; }
 .btable .c.avail { background: var(--avail-col); font-weight: var(--fw-bold); }
@@ -814,6 +814,33 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .brow .tag { flex: none; font-size: var(--fs-xs); color: var(--text-muted); border: 1px solid var(--border); border-radius: var(--r-pill); padding: 0 6px; }
 .brow.is-over .c.avail { background: var(--over-soft); color: var(--over); box-shadow: inset 3px 0 0 var(--over); font-weight: var(--fw-heavy); }
 .bempty { min-height: var(--row-h); border-top: 1px solid var(--border); }
+/* Add / take: an 80×24 pill on every active row, empty at rest with a 3:1 outline; "+ / −" on row hover.
+   It sits above the row-wide Edit target. Errors float beside it and never push rows down. */
+.btable .c.take { justify-content: flex-end; padding: 0 var(--s-4) 0 var(--s-2); }
+.btable .pill { width: 80px; z-index: 2; }
+.btable .pill-in { height: 24px; padding: 0 8px; font-size: 13px; }
+.btable .pill-in::placeholder { color: transparent; opacity: 1; font-weight: var(--fw-medium); }
+.btable .brow:hover .pill-in { border-color: var(--border-control); background: var(--surface); }
+.btable .brow:hover .pill-in::placeholder, .btable .pill-in:focus::placeholder { color: var(--text-muted); }
+.btable .pill.has-draft .pill-in:not([aria-invalid="true"]) { border-style: dashed; border-color: var(--accent); background: var(--surface); }
+.btable .pill-in.applied::placeholder, .btable .brow:hover .pill-in.applied::placeholder { color: var(--ok); font-weight: var(--fw-semibold); }
+.pnote { position: absolute; z-index: 30; top: 50%; right: calc(100% + 8px); transform: translateY(-50%); display: flex; align-items: center; gap: 6px; width: max-content; max-width: 420px; padding: 5px 12px; border-radius: var(--r-md); background: var(--surface-raised); box-shadow: var(--shadow-pop); font-size: var(--fs-sm); font-weight: var(--fw-semibold); color: var(--text); white-space: nowrap; }
+.pnote .icon { flex: none; color: var(--text-muted); }
+/* The row panel under the focused pill: assigned this month and spent, or the before → after preview. */
+.rpanel { grid-column: 1 / -1; position: relative; z-index: 2; padding: 10px 16px; background: var(--surface-sunken); border-top: 1px solid var(--border); box-shadow: inset 3px 0 0 var(--focus); font-size: var(--fs-sm); cursor: default; }
+.rp-title { display: flex; align-items: center; gap: 6px; font-weight: var(--fw-bold); margin-bottom: 4px; }
+.rp-title.ok { color: var(--ok); }
+.rp-rows { margin: 0; display: flex; gap: 24px; }
+.rp-rows > div { display: flex; flex-direction: column; gap: 2px; }
+.rp-rows dt { color: var(--text-muted); white-space: nowrap; }
+.rp-rows dd { margin: 0; white-space: nowrap; }
+.rp-rows .arrow, .rp-rows .of { color: var(--text-muted); }
+.rp-rows .new { font-weight: var(--fw-bold); color: var(--accent-ink); }
+.avail .fig.is-preview { color: var(--accent-ink); text-decoration: underline dashed 1.5px; text-underline-offset: 4px; }
+.ready-figure.is-preview { text-decoration: underline dashed 2px; text-underline-offset: 6px; }
+@keyframes avail-flash { from { background: var(--accent-soft); } }
+.btable .c.avail.flash { animation: avail-flash 1.4s var(--ease); }
+.brow.is-over .c.avail.flash { animation: none; }
 .bempty .c:first-child { color: var(--text-muted); font-size: 14px; }
 /* Grip: its space is always reserved; it shows on row hover and focus-within.
    It sits above the row-wide Edit target, so pressing it never opens Edit. */
@@ -1048,7 +1075,7 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
   .btable [role="row"] { grid-template-columns: minmax(0, 1fr) 96px 26px; grid-template-areas: "name avail go" "det avail go"; }
   .btable .bhead, .btable .bgroup, .btable .bempty { grid-template-areas: "name avail go"; }
   .btable .bhead .det, .btable .bgroup .det, .btable .bempty .det { display: none; }
-  .btable .c.spent { display: none; }
+  .btable .c.spent, .btable .c.take, .btable .rpanel { display: none; }
   .btable .bhead .c:first-child, .btable .bgroup .c:first-child, .btable .bempty .c:first-child { grid-area: name; }
   .btable .c { padding: 0 var(--s-3); }
   .btable .bname, .btable .gcell { padding-left: 6px; }
@@ -1108,6 +1135,33 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
   .btable.reordering .bempty, .btable.reordering .bhead { display: none; }
   .btable.reordering .grip { opacity: 1; width: var(--touch); height: var(--touch); margin-right: -6px; }
   .btable.reordering .grip .icon { width: 18px; height: 18px; }
+}
+
+/* The bucket sheet's Add / take tab */
+.sheet-tabs { display: flex; border-bottom: 1px solid var(--border-strong); flex: none; }
+.sheet-tabs button { flex: 1; min-height: var(--touch); padding: 0 8px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-muted); font: inherit; font-weight: var(--fw-semibold); cursor: pointer; }
+.sheet-tabs button[aria-selected="true"] { color: var(--accent-ink); border-bottom-color: var(--accent); }
+.money-editor { display: flex; flex-direction: column; gap: var(--s-3); padding-top: var(--s-3); }
+.sheet-fig { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); padding: var(--s-3) var(--s-4); border-radius: var(--r-md); background: var(--avail-col); }
+.sheet-fig.is-over { background: var(--over-soft); box-shadow: inset 3px 0 0 var(--over); }
+.sheet-fig.is-over .big { color: var(--over); }
+.sheet-label { display: block; font-size: var(--fs-xs); color: var(--text-muted); margin-bottom: 2px; }
+.sheet-fig .big { font-size: 26px; font-weight: var(--fw-bold); line-height: 1.1; }
+.sheet-fig .ctx { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; text-align: right; font-size: var(--fs-xs); color: var(--text-muted); line-height: 1.45; }
+.seg.dir { grid-template-columns: 1fr 1fr; }
+.seg.dir > button { min-height: var(--touch); }
+.chips { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+.chips:empty { display: none; }
+.chip-btn { display: inline-flex; align-items: center; min-height: var(--touch); padding: 0 var(--s-3); border-radius: var(--r-pill); border: 1px solid var(--border-control); background: var(--surface); color: var(--text); font: inherit; font-size: var(--fs-sm); font-weight: var(--fw-semibold); cursor: pointer; }
+.preview { display: flex; flex-direction: column; gap: 2px; min-height: 40px; font-size: var(--fs-sm); color: var(--text-muted); }
+.preview > div { display: flex; justify-content: space-between; gap: var(--s-2); }
+.preview strong { color: var(--text); }
+.preview strong.neg { color: var(--over); }
+.preview .err { justify-content: flex-start; align-items: flex-start; gap: 6px; color: var(--text); font-weight: var(--fw-semibold); }
+.preview .err .icon { flex: none; margin-top: 2px; color: var(--text-muted); }
+@media (max-width: 760px) {
+  /* Lifted above the on-screen keyboard (--kb comes from the visual viewport). */
+  dialog.sheet.bucket-sheet { margin-bottom: var(--kb, 0px); max-height: calc(100dvh - 48px - var(--kb, 0px)); }
 }
 
 @media (prefers-reduced-motion: reduce) {

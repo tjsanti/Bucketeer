@@ -676,7 +676,7 @@ test("at 390px: no horizontal scroll, Reorder mode with 44px move buttons and gr
   assert.equal(await noHorizontalScroll(page), true);
   const grid = page.getByRole("table", { name: "Buckets" });
 
-  // No grips until Reorder is on; the row opens Edit.
+  // No grips until Reorder is on; the row opens the bucket sheet.
   assert.equal(await grid.locator("[data-grip]").first().isVisible(), false);
   const reorder = page.getByRole("button", { name: "Reorder" });
   assert.equal(await reorder.getAttribute("aria-pressed"), "false");
@@ -725,7 +725,7 @@ test("at 390px: no horizontal scroll, Reorder mode with 44px move buttons and gr
 
   await done.click();
   assert.equal(await page.getByRole("button", { name: "Reorder" }).getAttribute("aria-pressed"), "false");
-  assert.equal(await page.getByRole("button", { name: "Edit Rent" }).count(), 1);
+  assert.equal(await page.getByRole("button", { name: "Rent", exact: true }).count(), 1);
   assert.equal(await noHorizontalScroll(page), true);
   assert.deepEqual(app.pageErrors, []);
 });
@@ -1053,7 +1053,7 @@ test("on a touch phone, only the grip drags in Reorder mode; swipes on rows scro
   await waitForSnack(page, "Moved Groceries to Fixed.");
   assert.deepEqual(await order(app, budgetId), { ...seeded, Fixed: ["Groceries", "Rent", "Gym"], Everyday: ["Dining out", "Fuel"] });
 
-  // Out of Reorder mode there is no grip to drag; a swipe on a row scrolls, and a tap opens Edit.
+  // Out of Reorder mode there is no grip to drag; a swipe on a row scrolls, and a tap opens the bucket sheet.
   await page.getByRole("button", { name: "Done" }).tap();
   // The summary strip sits above the table; keep Gym on screen, low enough that the page can still scroll down.
   const showGym = () => grid.locator(".brow", { hasText: "Gym" }).evaluate((row) => row.scrollIntoView({ block: "end" }));
@@ -1069,6 +1069,6 @@ test("on a touch phone, only the grip drags in Reorder mode; swipes on rows scro
   assert.deepEqual(await order(app, budgetId), before);
   await grid.locator(".brow", { hasText: "Gym" }).evaluate((row) => row.scrollIntoView({ block: "center" }));
   await tap(grid.locator(".brow", { hasText: "Gym" }).locator(".name"));
-  assert.equal(await page.locator("dialog").getByRole("heading").textContent(), "Edit Gym");
+  assert.equal(await page.locator("dialog").getByRole("heading").textContent(), "Gym");
   assert.deepEqual(app.pageErrors, []);
 });

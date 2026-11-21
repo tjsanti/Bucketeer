@@ -5,9 +5,12 @@
 import type { createClient } from "../client.js";
 import type { Bucket, BucketGroup, BucketMonth, BucketMonthView, BucketTable, Budget, GroupMonth, MonthSummary } from "../core/index.js";
 import { formatMoney } from "../core/money.js";
+import { describeChange } from "./add-take.js";
+import { openBucketSheet } from "./bucket-sheet.js";
 import { monthLabel, openBucketDialog } from "./bucket-dialog.js";
 import { el, icon, messageOf, setNote, withVars } from "./dom.js";
 import { textInput, uid } from "./sheet.js";
+import { createPills } from "./pill.js";
 import { attachReorder, locate } from "./reorder.js";
 import type { Layout, MoveKey, MoveTarget } from "./reorder.js";
 
@@ -29,6 +32,8 @@ export interface BucketsContext {
 }
 
 const phone = window.matchMedia("(max-width: 600px)");
+// The compact table (no Spent, no pill): a row opens the bucket sheet instead of Edit.
+const compact = window.matchMedia("(max-width: 760px)");
 // Window and document listeners belong to the page on screen; a new page drops the old one's.
 let pageListeners: AbortController | undefined;
 const svgNs = "http://www.w3.org/2000/svg";
@@ -109,16 +114,21 @@ function target(bucket: BucketMonth): Node[] {
  * The month's summary strip (ADR-0003): Ready to assign, largest, with small cents, violet or the overspent red
  * when negative; a slot for Make it rain; then the month's Income, Assigned and Spent.
  */
-function renderSummary(summary: MonthSummary): HTMLElement {
-  const ready = formatMoney(summary.readyToAssign, { symbol: true });
+/** Ready to assign's figure, with small cents. */
+function readyParts(cents: number): (string | HTMLElement)[] {
+  const ready = formatMoney(cents, { symbol: true });
   const dot = ready.lastIndexOf(".");
+  return [ready.slice(0, dot), el("span", { class: "cents" }, ready.slice(dot))];
+}
+
+function renderSummary(summary: MonthSummary): HTMLElement {
   const stat = (name: string, label: string, cents: number) => el("div", { class: "stat" },
     el("span", { class: "label" }, icon(name, "sm"), label), el("span", { class: "figure num" }, formatMoney(cents, { symbol: true })));
   return el("section", { class: "card summary", "aria-label": "Month summary" },
     el("div", { class: `ready${summary.readyToAssign < 0 ? " neg" : ""}` },
       el("div", {},
         el("div", { class: "ready-label", id: "ready-label" }, icon("drop", "sm"), "Ready to assign"),
-        el("div", { class: "ready-figure num", "aria-labelledby": "ready-label" }, ready.slice(0, dot), el("span", { class: "cents" }, ready.slice(dot)))),
+        el("div", { class: "ready-figure num", "aria-labelledby": "ready-label" }, ...readyParts(summary.readyToAssign))),
       el("div", { class: "rain-slot" })),
     stat("in", "Income", summary.income),
     stat("assign", "Assigned", summary.assigned),
@@ -176,6 +186,80 @@ export function createBucketsPage(ctx: BucketsContext) {
     setNote(note, null);
     if (focusBucketId) focusKey({ kind: "bucket", id: focusBucketId });
     return true;
+  }
+
+  // ----- Add / take -----
+  // Changes made on this page, newest last, for Cmd/Ctrl+Z; each runs its Undo at most once.
+  const changes: { undo: () => Promise<void>; used: boolean }[] = [];
+  let flashId: string | null = null;
+
+  /** Assigns (+) or takes (−) for the month shown; resolves to the refusal's message, if any. */
+  async function changeMoney(bucket: BucketMonth, delta: number): Promise<string | null> {
+    const key = month.summary.month;
+    try {
+      await client.assign(bucket.id, { month: key, amount: delta });
+    } catch (error) {
+      return messageOf(error);
+    }
+    flashId = bucket.id;
+    await refresh();
+    const text = describeChange(bucket.name, delta);
+    const change = {
+      used: false,
+      async undo() {
+        if (change.used) return;
+        change.used = true;
+        try {
+          await client.assign(bucket.id, { month: key, amount: -delta });
+        } catch (error) {
+          change.used = false;
+          throw error;
+        }
+        flashId = bucket.id;
+        await refresh();
+        const now = month.buckets.find((candidate) => candidate.id === bucket.id);
+        ctx.announce(now ? `Undone. ${bucket.name} is back to ${formatMoney(now.available, { symbol: true })} available.` : `Undone. ${text}.`);
+      },
+    };
+    changes.push(change);
+    ctx.snack(`${text}.`, change.undo);
+    const after = month.buckets.find((candidate) => candidate.id === bucket.id);
+    if (after) ctx.announce(`${text}. ${bucket.name} now has ${formatMoney(after.available, { symbol: true })} available. Ready to assign ${formatMoney(month.summary.readyToAssign, { symbol: true })}.`);
+    return null;
+  }
+
+  const pills = createPills({
+    readyToAssign: () => month.summary.readyToAssign,
+    apply: changeMoney,
+    previewReady(cents) {
+      const figure = strip.querySelector<HTMLElement>(".ready-figure");
+      if (!figure) return;
+      figure.replaceChildren(...readyParts(cents ?? month.summary.readyToAssign));
+      figure.classList.toggle("is-preview", cents !== null);
+    },
+  });
+
+  // Cmd/Ctrl+Z undoes the latest add or take: outside fields (where it is the field's own undo), or in an empty pill.
+  document.addEventListener("keydown", (event) => {
+    if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey || event.key.toLowerCase() !== "z") return;
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    const emptyPill = target instanceof HTMLInputElement && target.classList.contains("pill-in") && target.value === "";
+    if (target?.closest("input, textarea, select, [contenteditable]") && !emptyPill) return;
+    if (document.querySelector("dialog[open]")) return;
+    const change = changes.findLast((candidate) => !candidate.used);
+    if (!change) return;
+    event.preventDefault();
+    change.undo().catch((error: unknown) => setNote(note, messageOf(error)));
+  }, { signal });
+
+  function openMoneySheet(bucket: BucketMonth, opener: HTMLElement): void {
+    openBucketSheet({
+      bucket,
+      readyToAssign: month.summary.readyToAssign,
+      apply: (delta) => changeMoney(bucket, delta),
+      edit: () => openEdit(bucket.id),
+      returnFocus: () => find(`.name-btn[data-bucket-id="${attr(bucket.id)}"]`) ?? (opener.isConnected ? opener : null),
+    });
   }
 
   const dialogContext = { client, budget, table: () => table, refresh, snack: ctx.snack };
@@ -456,18 +540,22 @@ export function createBucketsPage(ctx: BucketsContext) {
     appendAll(row,
       el("div", { class: "c det", role: "cell" }),
       el("div", { class: "c num spent", role: "cell" }, formatMoney(totals?.spent ?? 0)),
+      el("div", { class: "c take", role: "cell" }),
       el("div", { class: "c num avail", role: "cell" }, formatMoney(totals?.available ?? 0)),
       reordering ? moveButtons("group", group.id, `${group.name} group`, index === 0, index === table.groups.length - 1) : null,
       el("div", { class: "c go", "aria-hidden": "true" }));
     return row;
   }
 
-  function figures(bucket: BucketMonth): HTMLElement[] {
+  function figures(bucket: BucketMonth, take: HTMLElement): HTMLElement[] {
     const over = bucket.available < 0;
+    const available = el("div", { class: `c num avail${flashId === bucket.id ? " flash" : ""}`, role: "cell" },
+      el("span", { class: "fig" }, formatMoney(bucket.available)), over ? el("span", { class: "sr-only" }, " overspent") : null);
     return [
       el("div", { class: "c det", role: "cell" }, ...target(bucket)),
       el("div", { class: "c num spent", role: "cell" }, formatMoney(bucket.spent)),
-      el("div", { class: "c num avail", role: "cell" }, formatMoney(bucket.available), over ? el("span", { class: "sr-only" }, " overspent") : null),
+      take,
+      available,
     ];
   }
 
@@ -478,15 +566,20 @@ export function createBucketsPage(ctx: BucketsContext) {
     let label: HTMLElement;
     if (reordering) label = el("span", { class: "name" }, bucket.name);
     else {
+      // On the compact table the row opens the bucket sheet's Add / take tab (Edit is in its head).
+      const sheet = compact.matches;
       label = el("button", {
         class: "name-btn", type: "button", "data-bucket-id": bucket.id, "aria-haspopup": "dialog",
-        "aria-keyshortcuts": "Alt+ArrowUp Alt+ArrowDown", "aria-label": `Edit ${bucket.name}`,
+        "aria-keyshortcuts": "Alt+ArrowUp Alt+ArrowDown", "aria-label": sheet ? bucket.name : `Edit ${bucket.name}`,
       }, el("span", { class: "name" }, bucket.name));
-      label.addEventListener("click", () => openEdit(bucket.id));
+      label.addEventListener("click", () => {
+        if (compact.matches) openMoneySheet(bucket, label);
+        else openEdit(bucket.id);
+      });
     }
     appendAll(row,
       el("div", { class: "c bname", role: "rowheader" }, grip(), dot(bucket.colour), label),
-      ...figures(bucket),
+      ...figures(bucket, reordering ? el("div", { class: "c take", role: "cell" }) : pills.cell(bucket)),
       reordering ? moveButtons("bucket", bucket.id, bucket.name, first, last) : null,
       el("div", { class: "c go", "aria-hidden": "true" }, reordering ? null : icon("right", "sm")));
     return row;
@@ -498,7 +591,7 @@ export function createBucketsPage(ctx: BucketsContext) {
     appendAll(row,
       el("div", { class: "c bname", role: "rowheader" }, el("span", { class: "grip-space", "aria-hidden": "true" }), dot(bucket.colour),
         el("span", { class: "name" }, bucket.name), el("span", { class: "tag" }, "Archived")),
-      ...figures(bucket),
+      ...figures(bucket, el("div", { class: "c take", role: "cell" })),
       reordering ? el("div", { class: "c ctl", role: "cell" }) : null,
       el("div", { class: "c go", "aria-hidden": "true" }));
     return row;
@@ -510,6 +603,7 @@ export function createBucketsPage(ctx: BucketsContext) {
         el("div", { class: "c", role: "columnheader" }, "Bucket"),
         el("div", { class: "c det", role: "columnheader" }, "Target or goal"),
         el("div", { class: "c num spent", role: "columnheader" }, "Spent"),
+        el("div", { class: "c take", role: "columnheader" }, "Add / take"),
         el("div", { class: "c num avail", role: "columnheader" }, "Available"),
         reordering ? el("div", { class: "c ctl", role: "columnheader" }, el("span", { class: "sr-only" }, "Move")) : null,
         el("div", { class: "c go", "aria-hidden": "true" })));
@@ -525,6 +619,7 @@ export function createBucketsPage(ctx: BucketsContext) {
           el("div", { class: "c", role: "cell" }, "No buckets"),
           el("div", { class: "c det", role: "cell" }),
           el("div", { class: "c spent", role: "cell" }),
+          el("div", { class: "c take", role: "cell" }),
           el("div", { class: "c avail", role: "cell" }),
           reordering ? el("div", { class: "c ctl", role: "cell" }) : null,
           el("div", { class: "c go", "aria-hidden": "true" })));
@@ -587,6 +682,8 @@ export function createBucketsPage(ctx: BucketsContext) {
       render({ table, month });
     }
   }, { signal });
+  // The row's label and what a tap opens follow the layout.
+  compact.addEventListener("change", () => render({ table, month }), { signal });
 
   function render(next: BucketsData): void {
     table = next.table;
@@ -610,9 +707,12 @@ export function createBucketsPage(ctx: BucketsContext) {
     } else {
       main = renderTable();
     }
+    const focusedPill = pills.capture(root);
     strip.replaceChildren(renderSummary(month.summary));
     content.replaceChildren(main, ...(archived.length ? [renderArchived(archived)] : []));
+    pills.restore(root, focusedPill);
     movedKey = null;
+    flashId = null;
   }
 
   return {

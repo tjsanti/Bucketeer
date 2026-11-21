@@ -53,7 +53,7 @@ test("the Buckets page shows a month's Spent, Available, vessels and goal bars, 
   await ready(page);
 
   const table = page.getByRole("table", { name: "Buckets" });
-  assert.deepEqual((await table.getByRole("columnheader").allInnerTexts()).map(compact).filter(Boolean), ["Bucket", "Target or goal", "Spent", "Available"]);
+  assert.deepEqual((await table.getByRole("columnheader").allInnerTexts()).map(compact).filter(Boolean), ["Bucket", "Target or goal", "Spent", "Add / take", "Available"]);
 
   // This month: Groceries carries in −40.00 and gets 300.00, so it holds 260.00; Rent's vessel is full.
   assert.equal(compact(await page.locator(".month-head .month-label").innerText()), current.label);
