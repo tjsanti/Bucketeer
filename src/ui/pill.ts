@@ -26,6 +26,8 @@ const pillSelector = "input.pill-in[data-bucket-id]";
 export function createPills(ctx: PillContext) {
   const drafts = new Map<string, string>();
   const confirmations = new Map<string, Confirmation>();
+  // The server's last refusal per bucket, shown while the draft is unchanged. Editing the draft, a successful
+  // apply or a redraw (fresh figures) drops it, so the same amount can be tried again.
   const refused = new Map<string, { text: string; message: string }>();
   const panelId = uid("rpanel");
   const noteId = uid("pnote");
@@ -131,7 +133,10 @@ export function createPills(ctx: PillContext) {
     input.classList.add("applied");
     if (via === "enter") show(bucket, input, { kind: "empty" });
     void ctx.apply(bucket, draft.delta).then((message) => {
-      if (message === null) return;
+      if (message === null) {
+        refused.delete(bucket.id);
+        return;
+      }
       // Refused (the figures moved meanwhile): the draft comes back with the reason.
       const tracked = confirmations.get(bucket.id);
       if (tracked) window.clearTimeout(tracked.timer);
@@ -156,6 +161,7 @@ export function createPills(ctx: PillContext) {
 
   /** The add/take cell for an active bucket's row. */
   function cell(bucket: BucketMonth): HTMLElement {
+    refused.delete(bucket.id);
     const done = confirmations.get(bucket.id);
     const input = el("input", {
       class: `pill-in num${done ? " applied" : ""}`, type: "text", inputmode: "decimal", autocomplete: "off", spellcheck: "false",
@@ -181,6 +187,7 @@ export function createPills(ctx: PillContext) {
       }
       if (input.value) drafts.set(bucket.id, input.value);
       else drafts.delete(bucket.id);
+      refused.delete(bucket.id);
       if (confirmations.has(bucket.id)) {
         window.clearTimeout(confirmations.get(bucket.id)!.timer);
         confirmations.delete(bucket.id);

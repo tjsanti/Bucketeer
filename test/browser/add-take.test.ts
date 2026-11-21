@@ -27,7 +27,7 @@ async function household(url: string) {
   const gifts = await send(url, `/api/budgets/${budgetId}/buckets`, { name: "Gifts", newGroupName: "Everyday", type: "plain" });
   await send(url, `/api/budgets/${budgetId}/buckets`, { name: "Fuel", groupId: gifts.groupId, type: "recurring", amount: 16_000 });
   await send(url, `/api/buckets/${gifts.id}/assign`, { month: current, amount: 10_000 }, 200);
-  return { budgetId };
+  return { budgetId, gifts };
 }
 
 const rowOf = (page: Page, name: string) => page.locator(".brow", { has: page.locator(".name", { hasText: new RegExp(`^${name}$`) }) });
@@ -192,6 +192,32 @@ test("the pill's error notes float beside it, and Tab skips group rows and never
   await page.keyboard.press("Shift+Tab");
   assert.equal(await focusedLabel(page), "Add to or take from Gifts");
   assert.equal(await gifts.inputValue(), "900");
+  assert.deepEqual(app.pageErrors, []);
+});
+
+test("a refused amount is only refused until the draft changes", { timeout: 60_000 }, async (t) => {
+  const app = await openApp(t);
+  const { page } = app;
+  const { budgetId, gifts } = await household(app.url);
+  await openBuckets(page, app.url, budgetId);
+
+  // Elsewhere, all 400.00 goes to Gifts, so the server refuses the pill's 50.00 the page still thinks it has.
+  await send(app.url, `/api/buckets/${gifts.id}/assign`, { month: current, amount: 40_000 }, 200);
+  const fuel = pill(page, "Fuel");
+  await fuel.focus();
+  await fuel.pressSequentially("50");
+  await fuel.press("Enter");
+  const note = rowOf(page, "Fuel").getByRole("alert");
+  await note.locator("span", { hasText: "Nothing is ready to assign." }).waitFor();
+  assert.equal(await fuel.inputValue(), "50");
+
+  // The money comes back; editing the draft drops the old refusal, so the same amount applies.
+  await send(app.url, `/api/buckets/${gifts.id}/assign`, { month: current, amount: -40_000 }, 200);
+  await fuel.press("Backspace");
+  await fuel.pressSequentially("0");
+  assert.equal(await fuel.getAttribute("aria-invalid"), "false");
+  await fuel.press("Enter");
+  await eventually(async () => assert.equal(await avail(page, "Fuel"), "50.00"));
   assert.deepEqual(app.pageErrors, []);
 });
 
