@@ -64,7 +64,7 @@ export function openBucketSheet(options: BucketSheetOptions): void {
       preview.replaceChildren(el("div", {}, el("span", {}, "Ready to assign"), el("strong", {}, money(readyToAssign))));
     }
     if (submitButton) {
-      submitButton.textContent = state.kind === "ok" ? describeChange(bucket.name, state.delta).replace(/^Added/, "Add").replace(/^Took/, "Take")
+      submitButton.textContent = state.kind === "ok" ? describeChange(bucket.name, state.delta, "instruction")
         : mode === "add" ? `Add to ${bucket.name}` : `Take from ${bucket.name}`;
     }
   }

@@ -136,6 +136,8 @@ function bucketFromRow(row: Record<string, SQLOutputValue>): Bucket {
   };
 }
 
+/** A month bound past every real month, for activity in every month. */
+const ALL_MONTHS = "9999-12";
 const clamp = (index: number, length: number) => Math.min(Math.max(index, 0), length);
 
 // The core owns validation, identity, timestamps, and persistence. Clients only send intent.
@@ -229,14 +231,14 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   // and of split lines, by the month they are dated. Parameters: budget, month, three times.
   const activityOf = database.prepare(`
     SELECT bucket_id, month, SUM(ledger) AS ledger, SUM(money_in) AS money_in, SUM(money_out) AS money_out, COUNT(*) AS entries FROM (
-      SELECT bucket_id, month, amount AS ledger, 0 AS money_in, 0 AS money_out FROM assignments WHERE budget_id = ? AND month <= ?
+      SELECT bucket_id, month, amount AS ledger, 0 AS money_in, 0 AS money_out FROM assignments WHERE budget_id = ?
       UNION ALL
       SELECT bucket_id, substr(date, 1, 7), 0, MAX(amount, 0), MAX(-amount, 0) FROM transactions
-      WHERE budget_id = ? AND bucket_id IS NOT NULL AND substr(date, 1, 7) <= ?
+      WHERE budget_id = ? AND bucket_id IS NOT NULL
       UNION ALL
       SELECT lines.bucket_id, substr(parent.date, 1, 7), 0, MAX(lines.amount, 0), MAX(-lines.amount, 0)
       FROM transaction_lines AS lines JOIN transactions AS parent ON parent.id = lines.transaction_id
-      WHERE parent.budget_id = ? AND substr(parent.date, 1, 7) <= ?
+      WHERE parent.budget_id = ?
     ) GROUP BY bucket_id, month ORDER BY bucket_id, month`);
   const findBucket = { get: (id: string) => findBucketRow.get(thisMonth(), id) };
   const bucketsOf = { all: (budgetId: string) => bucketRows.all(thisMonth(), budgetId) };
@@ -498,10 +500,10 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
     return sumReadyToAssign(listAccounts(budgetId), Number(incomeOf.get(budgetId)?.total), Number(ledgerOf.get(budgetId)?.total));
   }
 
-  /** Each bucket's activity per month, up to and including `month`, oldest first. */
-  function activityByBucket(budgetId: string, month: string): Map<string, MonthActivity[]> {
+  /** Each bucket's activity per month, every month, oldest first. */
+  function activityByBucket(budgetId: string): Map<string, MonthActivity[]> {
     const byBucket = new Map<string, MonthActivity[]>();
-    for (const row of activityOf.all(budgetId, month, budgetId, month, budgetId, month)) {
+    for (const row of activityOf.all(budgetId, budgetId, budgetId)) {
       const id = String(row.bucket_id);
       const list = byBucket.get(id) ?? [];
       list.push({ month: String(row.month), ledger: Number(row.ledger), moneyIn: Number(row.money_in), moneyOut: Number(row.money_out), entries: Number(row.entries) });
@@ -510,18 +512,19 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
     return byBucket;
   }
 
+  /** `activity` runs past `month` so `takeable` can see later months; the month's figures ignore them. */
   function withFigures(bucket: Bucket, activity: readonly MonthActivity[], month: string): BucketMonth {
     const figures = monthFigures(activity, month);
-    return { ...bucket, month, ...figures, need: needOf(bucket, figures, month) };
+    return { ...bucket, month, ...figures, need: needOf(bucket, figures, month), takeable: Math.max(0, lowestAvailableFrom(activity, month)) };
   }
 
   /** The lowest Available the bucket has from `month` on, later months' ledger entries included. */
   function lowestAvailable(bucket: Bucket, month: string): number {
-    return lowestAvailableFrom(activityByBucket(bucket.budgetId, "9999-12").get(bucket.id) ?? [], month);
+    return lowestAvailableFrom(activityByBucket(bucket.budgetId).get(bucket.id) ?? [], month);
   }
 
   function bucketInMonth(bucket: Bucket, month: string): BucketMonth {
-    return withFigures(bucket, activityByBucket(bucket.budgetId, month).get(bucket.id) ?? [], month);
+    return withFigures(bucket, activityByBucket(bucket.budgetId).get(bucket.id) ?? [], month);
   }
 
   // Every bucket's activity counts, shown or not: an archived bucket with activity that month is shown anyway.
@@ -539,7 +542,7 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   }
 
   function bucketMonthOf(budgetId: string, month: string): BucketMonthView {
-    const activity = activityByBucket(budgetId, month);
+    const activity = activityByBucket(budgetId);
     const buckets = bucketsOf.all(budgetId).map(bucketFromRow)
       .filter((bucket) => shownIn(bucket, activity.get(bucket.id) ?? [], month))
       .map((bucket) => withFigures(bucket, activity.get(bucket.id) ?? [], month));

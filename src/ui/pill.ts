@@ -51,7 +51,7 @@ export function createPills(ctx: PillContext) {
     if (draft.kind === "ok") {
       const ready = ctx.readyToAssign();
       panel.replaceChildren(
-        el("div", { class: "rp-title" }, describeChange(bucket.name, draft.delta).replace(/^Added/, "Add").replace(/^Took/, "Take")),
+        el("div", { class: "rp-title" }, describeChange(bucket.name, draft.delta, "instruction")),
         el("dl", { class: "rp-rows num" },
           line("Available", formatMoney(bucket.available), formatMoney(bucket.available + draft.delta)),
           line("Ready to assign", money(ready), money(ready - draft.delta)),

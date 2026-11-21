@@ -83,7 +83,7 @@ test("CLI assign moves money into a bucket's month and month prints the Buckets 
 
     const refused = await cli("assign", rent.id, "--amount", "301", "--json");
     assert.notEqual(refused.code, 0);
-    assert.deepEqual(JSON.parse(refused.stdout).error, { code: "not_enough_ready", message: "Only $300.00 is ready to assign." });
+    assert.deepEqual(JSON.parse(refused.stdout).error, { code: "not_enough_ready", message: "Only $300.00 is ready to assign. You can add up to that." });
     const tooMuch = await cli("assign", gifts.id, "--amount", "-1");
     assert.deepEqual([tooMuch.code, tooMuch.stderr], [1, "Gifts has nothing available to take."]);
   } finally {

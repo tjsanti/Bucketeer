@@ -57,7 +57,7 @@ test("HTTP serves a month of buckets and assigns into a month", async () => {
     assert.deepEqual(await client.bucketMonth(budget.id, "2026-12"), core.bucketMonth(budget.id, "2026-12"));
     assert.equal((await client.bucketMonth(budget.id, "2026-11")).summary.readyToAssign, 35_000);
 
-    await assert.rejects(client.assign(rent.id, { month: "2026-12", amount: 35_001 }), { code: "not_enough_ready", message: "Only $350.00 is ready to assign.", field: "amount" });
+    await assert.rejects(client.assign(rent.id, { month: "2026-12", amount: 35_001 }), { code: "not_enough_ready", message: "Only $350.00 is ready to assign. You can add up to that.", field: "amount" });
     await assert.rejects(client.assign(rent.id, { month: "2026-11", amount: -1 }), { code: "not_enough_available" });
     await assert.rejects(client.assign(rent.id, { month: "2030-01", amount: 1 }), { code: "invalid_input", field: "month" });
     await assert.rejects(client.assign("missing", { month: "2026-11", amount: 1 }), { code: "not_found" });

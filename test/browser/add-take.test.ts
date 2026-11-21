@@ -195,6 +195,23 @@ test("the pill's error notes float beside it, and Tab skips group rows and never
   assert.deepEqual(app.pageErrors, []);
 });
 
+test("a take is limited by what a later month still needs, as the server says", { timeout: 60_000 }, async (t) => {
+  const app = await openApp(t);
+  const { page } = app;
+  const { budgetId, gifts } = await household(app.url);
+  // Next month takes 70.00 of Gifts' 100.00 back, so this month can only give up 30.00 more.
+  const next = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  await send(app.url, `/api/buckets/${gifts.id}/assign`, { month: `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}`, amount: -7_000 }, 200);
+  await openBuckets(page, app.url, budgetId);
+
+  const pillIn = pill(page, "Gifts");
+  await pillIn.focus();
+  await pillIn.pressSequentially("-50");
+  assert.equal(compact(await rowOf(page, "Gifts").getByRole("alert").innerText()), "Gifts has $30.00 available. You can take up to that.");
+  assert.equal(await avail(page, "Gifts"), "100.00");
+  assert.deepEqual(app.pageErrors, []);
+});
+
 test("a refused amount is only refused until the draft changes", { timeout: 60_000 }, async (t) => {
   const app = await openApp(t);
   const { page } = app;

@@ -150,6 +150,7 @@ test("HTTP exposes accounts with status codes for every error and serves the sha
     assert.match(money.headers.get("content-type") ?? "", /^text\/javascript/);
     assert.match(await money.text(), /export function parseMoney/);
     assert.equal((await fetch(`${url}/core/types.js`)).status, 200);
+    assert.equal((await fetch(`${url}/core/refusals.js`)).status, 200);
     assert.equal((await fetch(`${url}/core/index.js`)).status, 404);
     assert.equal((await fetch(`${url}/core/database.js`)).status, 404);
   } finally {

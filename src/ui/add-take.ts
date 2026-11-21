@@ -1,5 +1,7 @@
 // The add/take rules shared by the desktop pill and the phone sheet: what a typed draft means for one bucket.
-// Pure and DOM-free. A positive change adds from Ready to assign; a negative one takes back to it.
+// Pure and DOM-free. A positive change adds from Ready to assign; a negative one takes back to it. The limits are
+// the server's figures (Ready to assign, and each bucket's takeable) and the refusals are core's own wording.
+import { addRefusal, takeRefusal } from "../core/refusals.js";
 import { formatMoney } from "../core/money.js";
 
 export const MINUS = "−";
@@ -11,8 +13,8 @@ export type Draft =
   | { kind: "error"; message: string }
   | { kind: "ok"; delta: number };
 
-/** Reads a draft such as "20", "+20.50", "-20" or "−20" against the bucket's Available and Ready to assign (cents). */
-export function readDraft(text: string, bucket: { name: string; available: number }, readyToAssign: number): Draft {
+/** Reads a draft such as "20", "+20.50", "-20" or "−20" against the bucket's takeable and Ready to assign (cents). */
+export function readDraft(text: string, bucket: { name: string; takeable: number }, readyToAssign: number): Draft {
   let rest = text.trim();
   if (!rest) return { kind: "empty" };
   let sign = 1;
@@ -26,19 +28,15 @@ export function readDraft(text: string, bucket: { name: string; available: numbe
   if (!Number.isSafeInteger(cents)) return { kind: "error", message: "That amount is too large. Enter a smaller amount." };
   if (cents === 0) return { kind: "error", message: "Type an amount greater than zero." };
   const delta = sign * cents;
-  const money = (value: number) => formatMoney(value, { symbol: true });
-  if (delta > readyToAssign) {
-    return { kind: "error", message: readyToAssign <= 0 ? "Nothing is ready to assign right now." : `Only ${money(readyToAssign)} is ready to assign. You can add up to that.` };
-  }
-  if (-delta > Math.max(0, bucket.available)) {
-    return { kind: "error", message: bucket.available <= 0 ? `${bucket.name} has no money available to take.` : `${bucket.name} has ${money(bucket.available)} available. You can take up to that.` };
-  }
+  if (delta > readyToAssign) return { kind: "error", message: addRefusal(readyToAssign) };
+  if (-delta > bucket.takeable) return { kind: "error", message: takeRefusal(bucket.name, bucket.takeable) };
   return { kind: "ok", delta };
 }
 
-/** "Added $20.00 to Fuel" / "Took $20.00 from Fuel". */
-export function describeChange(name: string, delta: number): string {
+/** "Added $20.00 to Fuel" / "Took $20.00 from Fuel" once done; "Add …" / "Take …" as an instruction (a button, a preview). */
+export function describeChange(name: string, delta: number, form: "done" | "instruction" = "done"): string {
   const amount = formatMoney(Math.abs(delta), { symbol: true });
+  if (form === "instruction") return delta > 0 ? `Add ${amount} to ${name}` : `Take ${amount} from ${name}`;
   return delta > 0 ? `Added ${amount} to ${name}` : `Took ${amount} from ${name}`;
 }
 

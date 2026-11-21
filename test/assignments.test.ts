@@ -44,7 +44,7 @@ test("assigning beyond Ready to assign, taking beyond the month's positive Avail
   const { core, budget, rent, groceries, spend, row } = household();
   try {
     assert.throws(() => core.assign(rent.id, { month: "2026-11", amount: 500_001 }),
-      (error: unknown) => code("not_enough_ready")(error) && (error as BudgetError).message === "Only $5,000.00 is ready to assign.");
+      (error: unknown) => code("not_enough_ready")(error) && (error as BudgetError).message === "Only $5,000.00 is ready to assign. You can add up to that.");
     core.assign(rent.id, { month: "2026-11", amount: 500_000 });
     assert.throws(() => core.assign(groceries.id, { month: "2026-11", amount: 1 }), code("not_enough_ready"));
     assert.equal(core.readyToAssign(budget.id), 0);
@@ -270,14 +270,18 @@ test("a take is refused when a later month carrying the money would be left over
     spend(groceries.id, "2026-11-05", -8_000);
     assert.equal(row("2026-10", groceries.id).available, 10_000);
     assert.equal(row("2026-11", groceries.id).available, 2_000);
+    // The month view says how much a take can be: the lowest Available from that month on.
+    assert.deepEqual([row("2026-10", groceries.id).takeable, row("2026-11", groceries.id).takeable], [2_000, 2_000]);
     assert.throws(() => core.assign(groceries.id, { month: "2026-10", amount: -2_001 }),
-      (error: unknown) => code("not_enough_available")(error) && (error as BudgetError).message === "Only $20.00 is available in Groceries.");
+      (error: unknown) => code("not_enough_available")(error) && (error as BudgetError).message === "Groceries has $20.00 available. You can take up to that.");
     assert.equal(core.assign(groceries.id, { month: "2026-10", amount: -2_000 }).available, 8_000);
     assert.equal(row("2026-11", groceries.id).available, 0);
+    assert.equal(row("2026-10", groceries.id).takeable, 0);
 
     // A take in this month also answers to a future month's entries.
     core.assign(groceries.id, { month: "2026-11", amount: 5_000 });
     core.assign(groceries.id, { month: "2027-01", amount: -3_000 });
+    assert.deepEqual([row("2026-11", groceries.id).available, row("2026-11", groceries.id).takeable], [5_000, 2_000]);
     assert.throws(() => core.assign(groceries.id, { month: "2026-11", amount: -2_001 }), code("not_enough_available"));
     assert.equal(core.assign(groceries.id, { month: "2026-11", amount: -2_000 }).available, 3_000);
     assert.equal(core.readyToAssign(budget.id), 500_000 - 10_000 + 2_000 - 5_000 + 3_000 + 2_000);

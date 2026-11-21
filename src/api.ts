@@ -18,6 +18,8 @@ const assets = new Map<string, Asset>([
   // Shared with the browser: money.js imports types.js at runtime.
   ["/core/money.js", { file: "./core/money.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
   ["/core/types.js", { file: "./core/types.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
+  // Core's wording for a refused add or take, shown by the pill and the phone sheet while typing.
+  ["/core/refusals.js", { file: "./core/refusals.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
   // Month arithmetic for the month header, shared like money.js.
   ["/core/months.js", { file: "./core/months.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
   // Palette order and the least-used colour rule, shared with the browser like money.js.

@@ -97,6 +97,8 @@ export interface BucketMonth extends Bucket {
   available: number;
   /** What rain would give the bucket this month (ADR-0005); 0 for plain and archived buckets. */
   need: number;
+  /** ≥ 0: the most a take in this month can be, the lowest Available from this month on (later months included). */
+  takeable: number;
 }
 
 export interface GroupTotals {

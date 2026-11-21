@@ -2,7 +2,7 @@
 // one signed entry for a bucket and month; money paid directly into a bucket counts as assigned to it in
 // the month it is dated, and money out is Spent, gross.
 import { MAX_CENTS } from "./accounts.js";
-import { formatMoney } from "./money.js";
+import { addRefusal, takeRefusal } from "./refusals.js";
 import { readMonth } from "./months.js";
 import type { MonthRange } from "./months.js";
 import { BudgetError } from "./types.js";
@@ -84,12 +84,10 @@ export function shownIn(bucket: Bucket, activity: readonly MonthActivity[], mont
 export function assertAssignable(bucket: Bucket, entry: AssignInput, readyToAssign: number, available: number): void {
   if (bucket.archived) throw new BudgetError("bucket_archived", `${bucket.name} is archived. Restore it to assign money to it.`);
   if (entry.amount > 0 && entry.amount > readyToAssign) {
-    throw new BudgetError("not_enough_ready", readyToAssign > 0 ? `Only ${formatMoney(readyToAssign, { symbol: true })} is ready to assign.` : "Nothing is ready to assign.", "amount");
+    throw new BudgetError("not_enough_ready", addRefusal(readyToAssign), "amount");
   }
   if (entry.amount < 0 && -entry.amount > Math.max(0, available)) {
-    throw new BudgetError("not_enough_available", available > 0
-      ? `Only ${formatMoney(available, { symbol: true })} is available in ${bucket.name}.`
-      : `${bucket.name} has nothing available to take.`, "amount");
+    throw new BudgetError("not_enough_available", takeRefusal(bucket.name, Math.max(0, available)), "amount");
   }
 }
 
