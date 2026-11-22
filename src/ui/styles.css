@@ -544,6 +544,8 @@ main { padding: var(--s-8) var(--s-10) var(--s-16); min-width: 0; max-width: 110
 .pick-month:hover:not(:disabled) { background: var(--surface-sunken); }
 .pick-month[aria-current="true"] { background: var(--accent-soft); color: var(--accent-ink); font-weight: var(--fw-bold); }
 .pick-month:disabled { color: var(--text-faint); cursor: not-allowed; }
+/* Floating over a dialog (the goal's By month): placed by the script, so the dialog's scrolling body can't clip it. */
+.month-pick.floating { position: fixed; right: auto; z-index: 70; }
 .page > .note { align-self: stretch; }
 .empty { color: var(--text-muted); padding: var(--s-4) 0; }
 
