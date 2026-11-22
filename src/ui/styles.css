@@ -89,6 +89,7 @@
   --row-h-phone: 54px;  /* one bucket row on phone: name over target */
   --touch: 44px;        /* minimum touch target */
   --group-h: 46px;      /* one group header row */
+  --group-gap: 12px;    /* open card above every group row but the first */
   --sidebar-w: 252px;
 
   /* --- Shape --- */
@@ -112,6 +113,8 @@
   --surface: #FFFFFF;         /* cards */
   --surface-sunken: #F5F8FA;  /* table heads, inputs at rest */
   --avail-col: #EFF4F7;       /* the one emphasised column */
+  --group-row: #EBF1F5;       /* group header rows, tinted apart from the cards */
+  --group-avail: #E2EAEF;     /* a group row's cell in the emphasised column */
   --track: #E1E9EE;           /* empty part of a goal bar */
   --border: #E1E8EC;          /* hairlines between rows */
   --border-strong: #C9D5DC;   /* group rules, input outlines */
@@ -214,6 +217,8 @@
   --surface: #16212A;
   --surface-sunken: #121C24;
   --avail-col: #1B2833;
+  --group-row: #1D2A35;
+  --group-avail: #233340;
   --track: #617782;          /* lifted so goal tracks stay visible */
   --border: #22303B;
   --border-strong: #33444F;
@@ -797,11 +802,13 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .bhead { min-height: 40px; border-bottom: 1px solid var(--border-strong); }
 .bhead .c { font-size: var(--fs-xs); font-weight: var(--fw-semibold); color: var(--text-muted); letter-spacing: .02em; }
 .bhead .c.avail { color: var(--text); }
-.bgroup { min-height: var(--group-h); border-top: 1px solid var(--border-strong); }
+.bgroup { min-height: var(--group-h); border-top: 1px solid var(--border-strong); background: var(--group-row); }
 .bhead + .bgroup { border-top: 0; }
+/* Open card between the last bucket of one group and the next group's row */
+.btable > :not(.bhead) + .bgroup { margin-top: var(--group-gap); }
 .bgroup .gname { font-family: var(--font-display); font-weight: var(--fw-heavy); font-size: var(--fs-md); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .bgroup .gcount { font-size: var(--fs-sm); color: var(--text-muted); font-weight: var(--fw-medium); }
-.bgroup .c.avail { color: var(--text); font-size: 14px; }
+.bgroup .c.avail { color: var(--text); font-size: 14px; background: var(--group-avail); }
 .more-btn { flex: none; width: 32px; height: 32px; margin-left: 2px; padding: 0; border-radius: var(--r-pill); border: 0; background: transparent; color: var(--text-muted); display: inline-grid; place-items: center; cursor: pointer; }
 .more-btn:hover, .more-btn[aria-expanded="true"] { background: var(--surface-sunken); color: var(--text); box-shadow: inset 0 0 0 1px var(--border-control); }
 .brow { min-height: var(--row-h); border-top: 1px solid var(--border); }
@@ -881,15 +888,17 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .drag-ghost .grip { opacity: 1; color: var(--text); }
 .drop-line { position: fixed; z-index: 91; height: 3px; margin-top: -1.5px; border-radius: 2px; background: var(--accent); pointer-events: none; }
 .drop-line::before { content: ""; position: absolute; left: -2px; top: -3.5px; width: 10px; height: 10px; border-radius: 50%; background: var(--surface); box-shadow: inset 0 0 0 2.5px var(--accent); }
-.bgroup.drop-into > .c:not(.avail) { background: color-mix(in srgb, var(--accent-soft) 70%, transparent); }
+/* Group rows are tinted at rest, so their drop and moved states take the accent tint solid. */
+.bgroup.drop-into > .c:not(.avail):not(.go) { background: var(--accent-soft); }
 .bgroup.drop-into .gname { color: var(--accent-ink); }
-.bempty.drop-into > .c:not(.avail) { background: color-mix(in srgb, var(--accent-soft) 45%, transparent); }
+.bempty.drop-into > .c:not(.avail):not(.go) { background: color-mix(in srgb, var(--accent-soft) 45%, transparent); }
 body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select: none; }
 .mv { width: 32px; height: 32px; border-radius: var(--r-sm); border: 1px solid var(--border-control); background: var(--surface); color: var(--text); display: inline-grid; place-items: center; cursor: pointer; padding: 0; flex: none; }
 .mv:hover { border-color: var(--accent); color: var(--accent-ink); }
 .mv[aria-disabled="true"] { opacity: .38; cursor: default; border-color: var(--border-strong); }
 .mv .icon { width: 16px; height: 16px; stroke-width: 2.1; }
-.brow.moved > .c:not(.avail), .bgroup.moved > .c:not(.avail) { background: color-mix(in srgb, var(--accent-soft) 70%, transparent); }
+.brow.moved > .c:not(.avail):not(.go) { background: color-mix(in srgb, var(--accent-soft) 70%, transparent); }
+.bgroup.moved > .c:not(.avail):not(.go) { background: var(--accent-soft); }
 .brow.moved > .c:first-child, .bgroup.moved > .c:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 /* Rename a group in its row */
 .rn { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px 0; min-width: 0; width: 100%; }
@@ -1108,6 +1117,7 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
   .btable .c.avail { grid-area: avail; padding: 0 10px 0 6px; }
   .btable .c.go { grid-area: go; display: flex; padding: 0; justify-content: center; color: var(--text-muted); background: var(--avail-col); }
   .brow.is-over .c.go { background: var(--over-soft); }
+  .btable .bgroup .c.go { background: var(--group-avail); }
   .btable .bname { grid-area: name; align-self: end; padding-top: 7px; line-height: 1.3; }
   .btable .det { grid-area: det; align-self: start; padding: 1px var(--s-2) 7px 56px; font-size: var(--fs-xs); line-height: 1.35; gap: 6px; }
   .btable .det .vessel { width: 14px; height: 17px; }

@@ -482,6 +482,130 @@ test("groups render with No buckets, rename inline with Undo, and delete only wh
   assert.deepEqual(app.pageErrors, []);
 });
 
+interface GroupLook {
+  /** Each group row's background behind its name as [r, g, b], with its hue in degrees. */
+  groupBackgrounds: Record<string, { rgb: number[]; hue: number }>;
+  bucketBackground: number[];
+  inkContrast: number[];
+  firstGroupGap: number;
+  bucketGaps: number[];
+  groupGaps: { name: string; gap: number; gapIsEmpty: boolean }[];
+}
+
+/** How the group rows look: their background against a bucket row's, their text contrast, and the gaps between rows. */
+const groupLook = (page: Page): Promise<GroupLook> => page.evaluate(() => {
+  // Computed colours come as rgb(), rgba(), or color(srgb r g b / a) with 0-1 channels (from color-mix).
+  const rgba = (value: string) => {
+    const parts = (value.match(/[\d.]+/g) ?? []).map(Number);
+    const scale = value.startsWith("color(srgb") ? 255 : 1;
+    const [r = 0, g = 0, b = 0] = parts.map((part) => part * scale);
+    return { r, g, b, a: value.startsWith("rgba") || value.includes("/") ? parts[3] ?? 1 : 1 };
+  };
+  // The colour behind an element: its own background over its ancestors' until one is opaque.
+  const backgroundOf = (node: Element) => {
+    const layers = [];
+    for (let at: Element | null = node; at; at = at.parentElement) {
+      const layer = rgba(getComputedStyle(at).backgroundColor);
+      if (layer.a > 0) layers.push(layer);
+      if (layer.a >= 1) break;
+    }
+    return layers.reverse().reduce((under, over) => ({
+      r: over.r * over.a + under.r * (1 - over.a), g: over.g * over.a + under.g * (1 - over.a), b: over.b * over.a + under.b * (1 - over.a), a: 1,
+    }), { r: 255, g: 255, b: 255, a: 1 });
+  };
+  const luminance = ({ r, g, b }: { r: number; g: number; b: number }) => {
+    const channel = (c: number) => { const s = c / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; };
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+  };
+  const contrast = (text: Element) => {
+    const [a, b] = [luminance(rgba(getComputedStyle(text).color)), luminance(backgroundOf(text))].sort((x, y) => y - x);
+    return (a! + 0.05) / (b! + 0.05);
+  };
+  const triple = (c: { r: number; g: number; b: number }) => [c.r, c.g, c.b];
+  const hue = ({ r, g, b }: { r: number; g: number; b: number }) => {
+    const max = Math.max(r, g, b);
+    const d = max - Math.min(r, g, b);
+    if (!d) return 0;
+    const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return (h * 60 + 360) % 360;
+  };
+  const table = document.querySelector(".btable")!;
+  const rows = [...table.querySelectorAll<HTMLElement>(':scope > [role="row"]')].filter((row) => row.offsetParent !== null);
+  const box = (row: Element) => row.getBoundingClientRect();
+  const gapBefore = (row: HTMLElement) => box(row).top - box(rows[rows.indexOf(row) - 1]!).bottom;
+  const groups = rows.filter((row) => row.classList.contains("bgroup"));
+  const firstGroup = groups[0]!;
+  return {
+    groupBackgrounds: Object.fromEntries(groups.map((group) => {
+      const background = backgroundOf(group.querySelector(".gcell")!);
+      return [group.querySelector(".gname")!.textContent ?? "", { rgb: triple(background), hue: hue(background) }];
+    })),
+    bucketBackground: triple(backgroundOf(table.querySelector(".brow .bname")!)),
+    inkContrast: [...firstGroup.querySelectorAll(".gname, .gcount, .c.avail")].map(contrast),
+    firstGroupGap: gapBefore(firstGroup),
+    bucketGaps: rows.filter((row, index) => index > 0 && row.classList.contains("brow") && rows[index - 1]!.classList.contains("brow")).map(gapBefore),
+    groupGaps: groups.slice(1).map((group) => {
+      const above = box(rows[rows.indexOf(group) - 1]!).bottom;
+      const middle = document.elementFromPoint(box(group).left + box(group).width / 2, (above + box(group).top) / 2);
+      return { name: group.querySelector(".gname")!.textContent ?? "", gap: gapBefore(group), gapIsEmpty: middle === table };
+    }),
+  };
+});
+
+/** How far apart two colours are, as a straight line through RGB. */
+const distance = (a: number[], b: number[]) => Math.hypot(...a.map((channel, i) => channel - b[i]!));
+
+test("group rows stand apart from bucket rows by tint, with a gap before every group but the first, in both themes and at 390px", { timeout: 45_000 }, async (t) => {
+  const app = await openApp(t, { height: 1400 });
+  const { page } = app;
+  const { budgetId } = await seed(app, { kids: true });
+  await openBuckets(app, budgetId);
+
+  const cases = [
+    { scheme: "light", width: 1280 }, { scheme: "dark", width: 1280 },
+    { scheme: "light", width: 390 }, { scheme: "dark", width: 390 },
+  ] as const;
+  for (const { scheme, width } of cases) {
+    const where = `${scheme} at ${width}px`;
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.setViewportSize({ width, height: 1400 });
+    const look = await groupLook(page);
+
+    const tint = look.groupBackgrounds.Fixed!;
+    const apart = distance(tint.rgb, look.bucketBackground);
+    assert.ok(apart >= 8, `${where}: a group row is tinted apart from a bucket row (${apart.toFixed(1)})`);
+    // Not the violet of Ready to assign (254°) or the overspent red (350°): the same 25° floor the bucket hues keep.
+    const hueGap = (a: number, b: number) => Math.min(Math.abs(a - b), 360 - Math.abs(a - b));
+    assert.ok(hueGap(tint.hue, 254) >= 25 && hueGap(tint.hue, 350) >= 25, `${where}: the tint stays clear of violet and red (${tint.hue.toFixed(0)}°)`);
+    for (const ratio of look.inkContrast) assert.ok(ratio >= 4.5, `${where}: group row text keeps 4.5:1 on the tint (${ratio.toFixed(2)})`);
+
+    assert.ok(Math.abs(look.firstGroupGap) <= 0.5, `${where}: no space above the first group (${look.firstGroupGap})`);
+    for (const gap of look.bucketGaps) assert.ok(Math.abs(gap) <= 0.5, `${where}: bucket rows within a group touch (${gap})`);
+    // Everyday follows Gym, Goals follows Fuel and Kids follows Vacation: open card, less than a row.
+    assert.deepEqual(look.groupGaps.map((group) => group.name), ["Everyday", "Goals", "Kids"]);
+    for (const { name, gap, gapIsEmpty } of look.groupGaps) {
+      assert.ok(gap >= 8 && gap < 40, `${where}: a little space before ${name} (${gap})`);
+      assert.ok(gapIsEmpty, `${where}: the space before ${name} is empty`);
+    }
+    if (width === 390) assert.equal(await noHorizontalScroll(page), true, where);
+    else {
+      // The drop target's highlight still shows on a tinted header (the tint is not the accent).
+      const fuel = page.locator(".brow", { hasText: "Fuel" });
+      await fuel.hover();
+      const grip = (await fuel.locator("[data-grip]").boundingBox())!;
+      await page.mouse.move(grip.x + 5, grip.y + 5);
+      await page.mouse.down();
+      await page.mouse.move(grip.x + 20, (await page.locator(".bgroup", { hasText: "Goals" }).boundingBox())!.y + 60, { steps: 8 });
+      assert.deepEqual(await page.locator(".bgroup.drop-into .gname").allTextContents(), ["Goals"]);
+      const lit = distance((await groupLook(page)).groupBackgrounds.Goals!.rgb, look.groupBackgrounds.Goals!.rgb);
+      assert.ok(lit >= 12, `${where}: the drop target is lit clearly over the tint (${lit.toFixed(1)})`);
+      await page.keyboard.press("Escape");
+      await page.mouse.up();
+    }
+  }
+  assert.deepEqual(app.pageErrors, []);
+});
+
 test("drag reorders within and across groups and into an empty group; Escape cancels; a group carries its buckets", { timeout: 60_000 }, async (t) => {
   const app = await openApp(t);
   const { page } = app;
