@@ -1039,7 +1039,8 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
   .budget-switch { width: auto; max-width: 100%; padding: 0 var(--s-3); }
   .budget-switch small { display: none; }
   .budget-switch .icon { margin-left: 2px; }
-  .menu { left: auto; right: 0; width: min(300px, calc(100vw - 32px)); }
+  /* Right-aligned under the picker, which ends before the theme toggle: narrow enough to keep the left gutter. */
+  .menu { left: auto; right: 0; width: min(300px, calc(100vw - 2 * var(--s-4) - var(--touch) - var(--s-2))); }
   .nav { flex-direction: row; background: color-mix(in srgb, var(--surface) 50%, transparent); padding: 3px; border-radius: var(--r-md); }
   .nav a { flex: 1 1 auto; justify-content: center; padding: 0 8px; font-size: 14px; }
   .nav a .icon { display: none; }

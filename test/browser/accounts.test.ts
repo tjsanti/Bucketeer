@@ -324,7 +324,7 @@ test("the dark theme renders the page and its dialogs", { timeout: 30_000 }, asy
   assert.deepEqual(app.pageErrors, []);
 });
 
-for (const width of [390, 375]) {
+for (const width of [390, 375, 360]) {
   test(`at ${width}px nothing overflows, targets are touchable and dialogs are bottom sheets`, { timeout: 45_000 }, async (t) => {
     const app = await openApp(t, { width, height: 780 });
     const { page } = app;
@@ -385,7 +385,7 @@ for (const width of [390, 375]) {
     // The picker menu fits inside the viewport.
     await page.locator("#budget-button").click();
     const menu = await box(page.locator("#budget-menu"));
-    assert.ok(menu.x >= 0 && menu.x + menu.width <= width);
+    assert.ok(menu.x >= 0 && menu.x + menu.width <= width, JSON.stringify(menu));
     assert.equal(await noOverflow(), true);
     assert.deepEqual(app.pageErrors, []);
   });
