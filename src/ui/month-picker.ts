@@ -99,7 +99,9 @@ export function attachMonthPicker(options: MonthPickerOptions): void {
     const previousYear = el("button", { class: "icon-btn", type: "button", "aria-label": "Previous year" }, icon("left"));
     const nextYear = el("button", { class: "icon-btn", type: "button", "aria-label": "Next year" }, icon("right"));
     const grid = el("div", { class: "pick-grid" });
-    const dialog = el("div", { class: options.float ? "month-pick floating" : "month-pick", role: "dialog", "aria-label": "Choose month" },
+    // Safari doesn't focus a pressed button: focus falls back to its nearest focusable ancestor. Being focusable, the
+    // picker takes it for a press inside it, so Escape and Tab still reach the picker.
+    const dialog = el("div", { class: options.float ? "month-pick floating" : "month-pick", role: "dialog", "aria-label": "Choose month", tabindex: "-1" },
       el("div", { class: "pick-head" }, previousYear, yearText, nextYear), grid);
 
     function draw(): void {
@@ -133,8 +135,11 @@ export function attachMonthPicker(options: MonthPickerOptions): void {
     dialog.addEventListener("keydown", (event) => {
       if (event.key === "Escape") escape(event);
     });
+    // Focus falling back to an element around `root`, such as the <dialog> holding it, is Safari pressing something
+    // in `root` it won't focus (the trigger), not focus leaving. A press outside `root` closes the picker in `outside`.
     dialog.addEventListener("focusout", (event) => {
-      if (event.relatedTarget instanceof Node && !root.contains(event.relatedTarget)) close(false);
+      const to = event.relatedTarget;
+      if (to instanceof Node && !root.contains(to) && !to.contains(root)) close(false);
     });
     draw();
     picker = dialog;

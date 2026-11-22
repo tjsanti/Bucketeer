@@ -4,7 +4,7 @@ import { once } from "node:events";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import type { TestContext } from "node:test";
-import { chromium } from "playwright-core";
+import { chromium, webkit } from "playwright-core";
 import type { Browser, Page } from "playwright-core";
 
 /**
@@ -34,10 +34,15 @@ export async function startServer(t: TestContext, timeZone?: string): Promise<st
   return `http://127.0.0.1:${port}`;
 }
 
-/** Launches headless Chromium (or BUCKETEER_BROWSER_PATH); closes it when the test ends. */
-export async function launchBrowser(t: TestContext): Promise<Browser> {
+/**
+ * Launches headless Chromium (or BUCKETEER_BROWSER_PATH), or Playwright's WebKit for Safari's behaviour; closes it
+ * when the test ends.
+ */
+export async function launchBrowser(t: TestContext, engine: "chromium" | "webkit" = "chromium"): Promise<Browser> {
   const browserPath = process.env.BUCKETEER_BROWSER_PATH;
-  const browser = await chromium.launch({ headless: true, ...(browserPath ? { executablePath: browserPath } : {}) });
+  const browser = engine === "webkit"
+    ? await webkit.launch({ headless: true })
+    : await chromium.launch({ headless: true, ...(browserPath ? { executablePath: browserPath } : {}) });
   t.after(() => browser.close());
   return browser;
 }
@@ -51,14 +56,15 @@ export interface App {
 
 /**
  * A fresh server and browser page; tracks page errors and requests that leave the app's origin. `serverTimeZone`
- * and `browserTimeZone` put the two in different zones; both share the test machine's otherwise.
+ * and `browserTimeZone` put the two in different zones; both share the test machine's otherwise. `browser` picks
+ * WebKit over Chromium.
  */
 export async function openApp(t: TestContext, options: {
   colorScheme?: "light" | "dark"; width?: number; height?: number; touch?: boolean; reducedMotion?: "reduce" | "no-preference";
-  serverTimeZone?: string; browserTimeZone?: string;
+  serverTimeZone?: string; browserTimeZone?: string; browser?: "chromium" | "webkit";
 } = {}): Promise<App> {
   const url = await startServer(t, options.serverTimeZone);
-  const browser = await launchBrowser(t);
+  const browser = await launchBrowser(t, options.browser);
   const context = await browser.newContext({
     colorScheme: options.colorScheme ?? "light",
     viewport: { width: options.width ?? 1280, height: options.height ?? 900 },

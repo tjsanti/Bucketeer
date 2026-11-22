@@ -175,14 +175,16 @@ npm test
 npm run acceptance
 ```
 
-Browser tests cover the budget picker, accounts, the account register (income, spending and transfer entry, the category picker and its transfer preview, the sign control, editing in place, the phone entry sheet, and Undo for add, edit and delete), Ready to assign, Recent activity, and buckets (add, edit, archive, restore, undo, drag and keyboard reordering), failed saves and failed refreshes, mobile layouts, the light/dark theme and its saved override, and bundled fonts loading with no external requests. Install Chromium once, then run them:
+Browser tests cover the budget picker, accounts, the account register (income, spending and transfer entry, the category picker and its transfer preview, the sign control, editing in place, the phone entry sheet, and Undo for add, edit and delete), Ready to assign, Recent activity, and buckets (add, edit, archive, restore, undo, drag and keyboard reordering), failed saves and failed refreshes, mobile layouts, the light/dark theme and its saved override, and bundled fonts loading with no external requests. They run in Chromium, and the goal month's phone test also runs in WebKit, for Safari's handling of taps. Install both once, then run them:
 
 ```sh
-npx playwright-core install chromium
+npx playwright-core install chromium webkit
 npm run test:ui
 ```
 
-To use an existing Chrome or Chromium executable instead, set `BUCKETEER_BROWSER_PATH` to its full path.
+On Linux, `npx playwright-core install-deps webkit` adds the system libraries WebKit needs.
+
+To use an existing Chrome or Chromium executable in place of Playwright's Chromium, set `BUCKETEER_BROWSER_PATH` to its full path.
 
 `npm run acceptance` builds an isolated Docker Compose project, saves and updates a budget, its accounts, income and buckets through the CLI, recreates the container on a non-default port, and verifies the same budget reopens from its SQLite volume. It also starts the image built from `main` on a separate volume, then upgrades that volume in place with the current build. It checks health, errors, and UI assets, then removes only its own containers, volume, and image.
 
