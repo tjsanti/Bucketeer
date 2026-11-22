@@ -603,25 +603,29 @@ export function createBucketsPage(ctx: BucketsContext) {
     return row;
   }
 
+  /**
+   * One table whose groups each sit on a card of their own, with the page showing between them. Each group is a
+   * row group (its row, its buckets, its archived rows); the column headers are a row group atop the first card.
+   */
   function renderTable(): HTMLElement {
-    const grid = el("div", { class: `card btable${reordering ? " reordering" : ""}`, role: "table", "aria-label": "Buckets" },
-      el("div", { class: "bhead", role: "row" },
-        el("div", { class: "c", role: "columnheader" }, "Bucket"),
-        el("div", { class: "c det", role: "columnheader" }, "Target or goal"),
-        el("div", { class: "c num spent", role: "columnheader" }, "Spent"),
-        el("div", { class: "c take", role: "columnheader" }, "Add / take"),
-        el("div", { class: "c num avail", role: "columnheader" }, "Available"),
-        reordering ? el("div", { class: "c ctl", role: "columnheader" }, el("span", { class: "sr-only" }, "Move")) : null,
-        el("div", { class: "c go", "aria-hidden": "true" })));
+    const head = el("div", { class: "bhead", role: "row" },
+      el("div", { class: "c", role: "columnheader" }, "Bucket"),
+      el("div", { class: "c det", role: "columnheader" }, "Target or goal"),
+      el("div", { class: "c num spent", role: "columnheader" }, "Spent"),
+      el("div", { class: "c take", role: "columnheader" }, "Add / take"),
+      el("div", { class: "c num avail", role: "columnheader" }, "Available"),
+      reordering ? el("div", { class: "c ctl", role: "columnheader" }, el("span", { class: "sr-only" }, "Move")) : null,
+      el("div", { class: "c go", "aria-hidden": "true" }));
+    const section = (...rows: HTMLElement[]) => el("div", { class: "bsection", role: "rowgroup" }, ...rows);
     const groups = table.groups;
     const shown = new Map(month.buckets.map((bucket) => [bucket.id, bucket]));
     const archivedIn = (groupId: string | null) => month.buckets.filter((bucket) => bucket.archived && bucket.groupId === groupId);
-    groups.forEach((group, groupIndex) => {
-      grid.append(groupRow(group, month.groups.find((totals) => totals.id === group.id), groupIndex));
+    const cards = groups.map((group, groupIndex) => {
+      const rows = [groupRow(group, month.groups.find((totals) => totals.id === group.id), groupIndex)];
       const buckets = activeIn(group.id).map((bucket) => shown.get(bucket.id)).filter((bucket): bucket is BucketMonth => bucket !== undefined);
       const archived = archivedIn(group.id);
       if (!buckets.length && !archived.length) {
-        grid.append(el("div", { class: "bempty", role: "row", "data-group-id": group.id },
+        rows.push(el("div", { class: "bempty", role: "row", "data-group-id": group.id },
           el("div", { class: "c", role: "cell" }, "No buckets"),
           el("div", { class: "c det", role: "cell" }),
           el("div", { class: "c spent", role: "cell" }),
@@ -630,14 +634,19 @@ export function createBucketsPage(ctx: BucketsContext) {
           reordering ? el("div", { class: "c ctl", role: "cell" }) : null,
           el("div", { class: "c go", "aria-hidden": "true" })));
       }
-      buckets.forEach((bucket, index) => grid.append(bucketRow(bucket,
+      rows.push(...buckets.map((bucket, index) => bucketRow(bucket,
         groupIndex === 0 && index === 0,
         groupIndex === groups.length - 1 && index === buckets.length - 1)));
-      grid.append(...archived.map(archivedRow));
+      rows.push(...archived.map(archivedRow));
+      return [section(...rows)];
     });
-    // An archived bucket whose group was deleted still shows its month, after every group.
-    grid.append(...archivedIn(null).map(archivedRow));
-    return grid;
+    // An archived bucket whose group was deleted still shows its month, on a card after every group. Reorder
+    // hides archived rows, so it leaves that card out.
+    const orphans = reordering ? [] : archivedIn(null);
+    if (orphans.length) cards.push([section(...orphans.map(archivedRow))]);
+    const [first = [], ...rest] = cards;
+    return el("div", { class: `btable${reordering ? " reordering" : ""}`, role: "table", "aria-label": "Buckets" },
+      ...[[section(head), ...first], ...rest].map((sections) => el("div", { class: "card bcard" }, ...sections)));
   }
 
   function renderArchived(archived: Bucket[]): HTMLElement {

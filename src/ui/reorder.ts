@@ -1,7 +1,8 @@
 // Reordering the bucket table: pointer drag from a row's grip, Alt+Up/Down on a row's button, and the
 // phone Reorder state's up and down buttons. This module only finds the target; the page saves the move.
 //
-// The table it works on marks its rows with data attributes:
+// The table it works on (.btable) has [role="row"] rows, a group's rows following its group row; groups may
+// sit apart, with space between them. It marks its rows with data attributes:
 //   group row         .bgroup[data-group-id]      its grip [data-grip]; its button .more-btn[data-group-id]
 //   bucket row        .brow[data-bucket-id]       its grip [data-grip]; its button .name-btn[data-bucket-id]
 //   empty group row   .bempty[data-group-id]      a drop target
@@ -90,6 +91,14 @@ interface Drag {
 }
 
 const sameTarget = (a: MoveTarget, b: { groupId?: string; index: number }) => a.groupId === b.groupId && a.index === b.index;
+const shows = (row: Element) => row.getClientRects().length > 0;
+
+/** A group row and the rows that follow it up to the next group row: its buckets, archived rows, or No buckets. */
+function blockOf(groupRow: HTMLElement): HTMLElement[] {
+  const block = [groupRow];
+  for (let next = groupRow.nextElementSibling; next instanceof HTMLElement && !next.classList.contains("bgroup"); next = next.nextElementSibling) block.push(next);
+  return block;
+}
 
 /** Wires drag, keyboard and move buttons into a container whose table is re-rendered freely. */
 export function attachReorder(container: HTMLElement, config: ReorderConfig): { cancel(): void } {
@@ -128,10 +137,18 @@ export function attachReorder(container: HTMLElement, config: ReorderConfig): { 
     const { table } = current;
     const out: Slot[] = [];
     if (current.key.kind === "group") {
+      // A group lands between two groups' cards, so its line sits in the middle of the gap above a group row.
+      const shown = [...table.querySelectorAll<HTMLElement>('[role="row"]')].filter(shows);
+      const lineAbove = (row: HTMLElement) => {
+        const top = row.getBoundingClientRect().top;
+        const above = shown[shown.indexOf(row) - 1];
+        return above ? (above.getBoundingClientRect().bottom + top) / 2 : top;
+      };
       const groups = [...table.querySelectorAll<HTMLElement>(".bgroup")].filter((row) => row !== current.row);
-      groups.forEach((row, index) => out.push({ y: row.getBoundingClientRect().top, target: { index } }));
-      const rest = [...table.querySelectorAll<HTMLElement>(".bgroup, .brow, .bempty")].filter((row) => !current.block.includes(row));
-      const last = rest.at(-1);
+      groups.forEach((row, index) => out.push({ y: row.getBoundingClientRect().top, lineY: lineAbove(row), target: { index } }));
+      // The end is the last other group's last row on screen, not rows after every group or ones Reorder hides.
+      const lastGroup = groups.at(-1);
+      const last = lastGroup && blockOf(lastGroup).filter(shows).at(-1);
       out.push({ y: last ? last.getBoundingClientRect().bottom : current.row.getBoundingClientRect().top, target: { index: groups.length } });
       return out;
     }
@@ -192,10 +209,7 @@ export function attachReorder(container: HTMLElement, config: ReorderConfig): { 
     if (!table) return null;
     config.dragStarted?.();
     const key = keyOf(row);
-    const block = [row];
-    if (key.kind === "group") {
-      for (let next = row.nextElementSibling; next instanceof HTMLElement && !next.classList.contains("bgroup"); next = next.nextElementSibling) block.push(next);
-    }
+    const block = key.kind === "group" ? blockOf(row) : [row];
     const tableBox = table.getBoundingClientRect();
     const rowBox = row.getBoundingClientRect();
     const ghost = document.createElement("div");

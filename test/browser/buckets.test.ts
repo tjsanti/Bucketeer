@@ -487,18 +487,31 @@ test("groups render with No buckets, rename inline with Undo, and delete only wh
   assert.deepEqual(app.pageErrors, []);
 });
 
-interface GroupLook {
+interface CardLook {
+  /** The page's own background, as [r, g, b]. */
+  pageBackground: number[];
+  /** The month summary card's corners and shadow, which every card shares. */
+  summaryCard: { radius: string; shadow: string };
+  /** How many rows of column headers show, whether they sit on the first group's card, and the space between them and that group. */
+  headerRows: number;
+  headerOnFirstCard: boolean;
+  headerToFirstGroup: number;
+  /** Per group, in order: whether the surface under its row is its own, and that surface's corners and shadow. */
+  cards: { name: string; own: boolean; radius: string; shadow: string }[];
+  /** Between one group's card and the next: the space, and what shows in its middle across the card and under the Available column. */
+  gaps: { above: string; gap: number; middle: number[]; availColumn: number[] }[];
+  bucketGaps: number[];
+  /** Rows whose Available cell (or Spent, where it shows) is not under the column's header. */
+  misaligned: string[];
   /** Each group row's background behind its name as [r, g, b], with its hue in degrees. */
   groupBackgrounds: Record<string, { rgb: number[]; hue: number }>;
+  groupAvail: number[];
   bucketBackground: number[];
   inkContrast: number[];
-  firstGroupGap: number;
-  bucketGaps: number[];
-  groupGaps: { name: string; gap: number; gapIsEmpty: boolean }[];
 }
 
-/** How the group rows look: their background against a bucket row's, their text contrast, and the gaps between rows. */
-const groupLook = (page: Page): Promise<GroupLook> => page.evaluate(() => {
+/** How the groups look: each on its own card with the page between, their tint against the page and a bucket row, and their text contrast. */
+const cardLook = (page: Page): Promise<CardLook> => page.evaluate(() => {
   // Computed colours come as rgb(), rgba(), or color(srgb r g b / a) with 0-1 channels (from color-mix).
   const rgba = (value: string) => {
     const parts = (value.match(/[\d.]+/g) ?? []).map(Number);
@@ -518,6 +531,12 @@ const groupLook = (page: Page): Promise<GroupLook> => page.evaluate(() => {
       r: over.r * over.a + under.r * (1 - over.a), g: over.g * over.a + under.g * (1 - over.a), b: over.b * over.a + under.b * (1 - over.a), a: 1,
     }), { r: 255, g: 255, b: 255, a: 1 });
   };
+  // The surface a row sits on: its nearest ancestor with a background of its own.
+  const surfaceOf = (row: Element) => {
+    let at = row.parentElement;
+    while (at && rgba(getComputedStyle(at).backgroundColor).a === 0) at = at.parentElement;
+    return at!;
+  };
   const luminance = ({ r, g, b }: { r: number; g: number; b: number }) => {
     const channel = (c: number) => { const s = c / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; };
     return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
@@ -534,37 +553,67 @@ const groupLook = (page: Page): Promise<GroupLook> => page.evaluate(() => {
     const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
     return (h * 60 + 360) % 360;
   };
-  const table = document.querySelector(".btable")!;
-  const rows = [...table.querySelectorAll<HTMLElement>(':scope > [role="row"]')].filter((row) => row.offsetParent !== null);
-  const box = (row: Element) => row.getBoundingClientRect();
-  const gapBefore = (row: HTMLElement) => box(row).top - box(rows[rows.indexOf(row) - 1]!).bottom;
+  const shows = (node: Element) => node.getClientRects().length > 0;
+  const box = (node: Element) => node.getBoundingClientRect();
+  const table = document.querySelector('[role="table"][aria-label="Buckets"]')!;
+  const rows = [...table.querySelectorAll<HTMLElement>('[role="row"]')].filter(shows);
+  const headers = rows.filter((row) => row.querySelector('[role="columnheader"]'));
+  const header = headers[0]!;
   const groups = rows.filter((row) => row.classList.contains("bgroup"));
+  const nameOf = (group: Element) => group.querySelector(".gname")!.textContent ?? "";
+  const surfaces = groups.map(surfaceOf);
+  const summary = getComputedStyle(document.querySelector(".summary")!);
+  const page = triple(backgroundOf(document.body));
+  const columnX = (cell: Element) => box(cell).left + box(cell).width / 2;
+  const behind = (x: number, y: number) => triple(backgroundOf(document.elementFromPoint(x, y)!));
+  const columns = [".c.avail", ".c.spent"].map((selector) => ({ selector, head: header.querySelector(selector)! })).filter(({ head }) => shows(head));
   const firstGroup = groups[0]!;
   return {
+    pageBackground: page,
+    summaryCard: { radius: summary.borderRadius, shadow: summary.boxShadow },
+    headerRows: headers.length,
+    headerOnFirstCard: surfaceOf(header) === surfaces[0],
+    headerToFirstGroup: box(firstGroup).top - box(header).bottom,
+    cards: groups.map((group, index) => {
+      const style = getComputedStyle(surfaces[index]!);
+      return { name: nameOf(group), own: surfaces.indexOf(surfaces[index]!) === index, radius: style.borderRadius, shadow: style.boxShadow };
+    }),
+    gaps: surfaces.slice(1).map((card, index) => {
+      const above = box(surfaces[index]!).bottom;
+      const y = (above + box(card).top) / 2;
+      return { above: nameOf(groups[index + 1]!), gap: box(card).top - above, middle: behind(box(card).left + box(card).width / 2, y), availColumn: behind(columnX(columns[0]!.head), y) };
+    }),
+    bucketGaps: rows.filter((row, index) => index > 0 && row.classList.contains("brow") && rows[index - 1]!.classList.contains("brow")).map((row) => box(row).top - box(rows[rows.indexOf(row) - 1]!).bottom),
+    misaligned: rows.filter((row) => row !== header && columns.some(({ selector, head }) => {
+      const cell = row.querySelector(`:scope > ${selector}`);
+      return cell && shows(cell) && (Math.abs(box(cell).left - box(head).left) > 0.5 || Math.abs(box(cell).right - box(head).right) > 0.5);
+    })).map((row) => row.textContent ?? ""),
     groupBackgrounds: Object.fromEntries(groups.map((group) => {
       const background = backgroundOf(group.querySelector(".gcell")!);
-      return [group.querySelector(".gname")!.textContent ?? "", { rgb: triple(background), hue: hue(background) }];
+      return [nameOf(group), { rgb: triple(background), hue: hue(background) }];
     })),
+    groupAvail: triple(backgroundOf(firstGroup.querySelector(".c.avail")!)),
     bucketBackground: triple(backgroundOf(table.querySelector(".brow .bname")!)),
-    inkContrast: [...firstGroup.querySelectorAll(".gname, .gcount, .c.avail")].map(contrast),
-    firstGroupGap: gapBefore(firstGroup),
-    bucketGaps: rows.filter((row, index) => index > 0 && row.classList.contains("brow") && rows[index - 1]!.classList.contains("brow")).map(gapBefore),
-    groupGaps: groups.slice(1).map((group) => {
-      const above = box(rows[rows.indexOf(group) - 1]!).bottom;
-      const middle = document.elementFromPoint(box(group).left + box(group).width / 2, (above + box(group).top) / 2);
-      return { name: group.querySelector(".gname")!.textContent ?? "", gap: gapBefore(group), gapIsEmpty: middle === table };
-    }),
+    inkContrast: [...firstGroup.querySelectorAll(".gname, .gcount, .c.spent, .c.avail")].filter(shows).map(contrast),
   };
 });
 
 /** How far apart two colours are, as a straight line through RGB. */
 const distance = (a: number[], b: number[]) => Math.hypot(...a.map((channel, i) => channel - b[i]!));
 
-test("group rows stand apart from bucket rows by tint, with a gap before every group but the first, in both themes and at 390px", { timeout: 45_000 }, async (t) => {
+test("each group is its own card with the page showing between, under one header, its row tinted apart from page and buckets, in both themes and at 390px", { timeout: 45_000 }, async (t) => {
   const app = await openApp(t, { height: 1400 });
   const { page } = app;
   const { budgetId } = await seed(app, { kids: true });
   await openBuckets(app, budgetId);
+
+  // One table, one header row, and each group a row group of its own row and buckets.
+  const grid = page.getByRole("table", { name: "Buckets" });
+  assert.equal(await grid.count(), 1);
+  assert.deepEqual(await grid.getByRole("columnheader").allInnerTexts(), ["Bucket", "Target or goal", "Spent", "Add / take", "Available"]);
+  assert.deepEqual(await grid.getByRole("rowgroup").evaluateAll((sections) => sections.map((section) => [...section.querySelectorAll('[role="row"]')]
+    .map((row) => (row.querySelector(".gname, .name") ?? row.querySelector('[role="columnheader"], [role="cell"]'))?.textContent))),
+  [["Bucket"], ["Fixed", "Rent", "Gym"], ["Everyday", "Groceries", "Dining out", "Fuel"], ["Goals", "Vacation"], ["Kids", "No buckets"]]);
 
   const cases = [
     { scheme: "light", width: 1280 }, { scheme: "dark", width: 1280 },
@@ -574,24 +623,41 @@ test("group rows stand apart from bucket rows by tint, with a gap before every g
     const where = `${scheme} at ${width}px`;
     await page.emulateMedia({ colorScheme: scheme });
     await page.setViewportSize({ width, height: 1400 });
-    const look = await groupLook(page);
+    const look = await cardLook(page);
 
+    // Cards: one per group, shaped like the summary card, the header atop the first.
+    assert.equal(look.headerRows, 1, `${where}: the column headers show once`);
+    assert.ok(look.headerOnFirstCard, `${where}: the header sits atop the first group's card`);
+    assert.ok(Math.abs(look.headerToFirstGroup) <= 0.5, `${where}: the first group follows the header (${look.headerToFirstGroup})`);
+    assert.deepEqual(look.cards.map((card) => card.name), ["Fixed", "Everyday", "Goals", "Kids"]);
+    for (const card of look.cards) {
+      assert.ok(card.own, `${where}: ${card.name} has a card of its own`);
+      assert.deepEqual({ radius: card.radius, shadow: card.shadow }, look.summaryCard, `${where}: ${card.name}'s card has the card radius and shadow`);
+    }
+    // Between cards, a real gap (about 20–24px) where the page shows, across the card and under the Available column.
+    assert.deepEqual(look.gaps.map((gap) => gap.above), ["Everyday", "Goals", "Kids"]);
+    for (const { above, gap, middle, availColumn } of look.gaps) {
+      assert.ok(gap >= 20 && gap <= 24, `${where}: a 20–24px gap above ${above} (${gap})`);
+      assert.ok(distance(middle, look.pageBackground) < 1, `${where}: the page shows in the gap above ${above} (${middle})`);
+      assert.ok(distance(availColumn, look.pageBackground) < 1, `${where}: the Available tint stops at the card above ${above} (${availColumn})`);
+    }
+    for (const gap of look.bucketGaps) assert.ok(Math.abs(gap) <= 0.5, `${where}: bucket rows within a group touch (${gap})`);
+    assert.deepEqual(look.misaligned, [], `${where}: every card's columns line up under the header`);
+
+    // The group row's tint: clearly apart from the page (as far as dark's) and from a bucket row, in the cool family.
     const tint = look.groupBackgrounds.Fixed!;
-    const apart = distance(tint.rgb, look.bucketBackground);
-    assert.ok(apart >= 8, `${where}: a group row is tinted apart from a bucket row (${apart.toFixed(1)})`);
+    const fromPage = distance(tint.rgb, look.pageBackground);
+    const fromBuckets = distance(tint.rgb, look.bucketBackground);
+    assert.ok(fromPage >= 30, `${where}: a group row is tinted clearly apart from the page (${fromPage.toFixed(1)})`);
+    assert.ok(fromBuckets >= 15, `${where}: a group row is tinted apart from a bucket row (${fromBuckets.toFixed(1)})`);
+    // Its Available cell a shade deeper: apart from the row, and further from the page.
+    assert.ok(distance(look.groupAvail, tint.rgb) >= 10, `${where}: the group's Available cell is a shade apart (${distance(look.groupAvail, tint.rgb).toFixed(1)})`);
+    assert.ok(distance(look.groupAvail, look.pageBackground) > fromPage, `${where}: the group's Available cell is deeper than its row`);
     // Not the violet of Ready to assign (254°) or the overspent red (350°): the same 25° floor the bucket hues keep.
     const hueGap = (a: number, b: number) => Math.min(Math.abs(a - b), 360 - Math.abs(a - b));
     assert.ok(hueGap(tint.hue, 254) >= 25 && hueGap(tint.hue, 350) >= 25, `${where}: the tint stays clear of violet and red (${tint.hue.toFixed(0)}°)`);
     for (const ratio of look.inkContrast) assert.ok(ratio >= 4.5, `${where}: group row text keeps 4.5:1 on the tint (${ratio.toFixed(2)})`);
 
-    assert.ok(Math.abs(look.firstGroupGap) <= 0.5, `${where}: no space above the first group (${look.firstGroupGap})`);
-    for (const gap of look.bucketGaps) assert.ok(Math.abs(gap) <= 0.5, `${where}: bucket rows within a group touch (${gap})`);
-    // Everyday follows Gym, Goals follows Fuel and Kids follows Vacation: open card, less than a row.
-    assert.deepEqual(look.groupGaps.map((group) => group.name), ["Everyday", "Goals", "Kids"]);
-    for (const { name, gap, gapIsEmpty } of look.groupGaps) {
-      assert.ok(gap >= 8 && gap < 40, `${where}: a little space before ${name} (${gap})`);
-      assert.ok(gapIsEmpty, `${where}: the space before ${name} is empty`);
-    }
     if (width === 390) assert.equal(await noHorizontalScroll(page), true, where);
     else {
       // The drop target's highlight still shows on a tinted header (the tint is not the accent).
@@ -602,12 +668,87 @@ test("group rows stand apart from bucket rows by tint, with a gap before every g
       await page.mouse.down();
       await page.mouse.move(grip.x + 20, (await page.locator(".bgroup", { hasText: "Goals" }).boundingBox())!.y + 60, { steps: 8 });
       assert.deepEqual(await page.locator(".bgroup.drop-into .gname").allTextContents(), ["Goals"]);
-      const lit = distance((await groupLook(page)).groupBackgrounds.Goals!.rgb, look.groupBackgrounds.Goals!.rgb);
+      const lit = distance((await cardLook(page)).groupBackgrounds.Goals!.rgb, look.groupBackgrounds.Goals!.rgb);
       assert.ok(lit >= 12, `${where}: the drop target is lit clearly over the tint (${lit.toFixed(1)})`);
+      await page.keyboard.press("Escape");
+      await page.mouse.up();
+
+      // A group's drop line sits in the gap between two cards, not on a card's edge.
+      const kids = page.locator(".bgroup", { hasText: "Kids" });
+      await kids.hover();
+      const kidsGrip = (await kids.locator("[data-grip]").boundingBox())!;
+      await page.mouse.move(kidsGrip.x + 5, kidsGrip.y + 5);
+      await page.mouse.down();
+      const everyday = (await page.locator(".bgroup", { hasText: "Everyday" }).boundingBox())!;
+      await page.mouse.move(kidsGrip.x + 20, everyday.y + 2, { steps: 8 });
+      const line = (await page.locator(".drop-line").boundingBox())!;
+      const gym = (await page.locator(".brow", { hasText: "Gym" }).boundingBox())!;
+      const lineY = line.y + line.height / 2;
+      assert.ok(lineY > gym.y + gym.height + 4 && lineY < everyday.y - 4, `${where}: a group's drop line sits in the gap above Everyday (${lineY}, between ${gym.y + gym.height} and ${everyday.y})`);
       await page.keyboard.press("Escape");
       await page.mouse.up();
     }
   }
+  assert.deepEqual(app.pageErrors, []);
+});
+
+/** Spends a bucket's whole month (10.00) and archives it, so it shows that month as an archived row. */
+async function archiveWithActivity(app: App, budgetId: string, bucketId: string): Promise<void> {
+  const thisMonth = new Date().toLocaleDateString("en-CA").slice(0, 7);
+  const accounts = await api<{ id: string }[]>(app, "GET", `/api/budgets/${budgetId}/accounts`);
+  const account = accounts[0] ?? await api<{ id: string }>(app, "POST", `/api/budgets/${budgetId}/accounts`, { name: "Checking", type: "checking", startingBalance: 100_000, startingDate: `${thisMonth}-01` });
+  await api(app, "POST", `/api/buckets/${bucketId}/assign`, { month: thisMonth, amount: 1_000 });
+  await api(app, "POST", `/api/accounts/${account.id}/transactions`, { amount: -1_000, category: { kind: "bucket", bucketId } });
+  await api(app, "POST", `/api/buckets/${bucketId}/archive`);
+}
+
+test("archived buckets whose group was deleted sit on a card of their own after the groups, which group drags pass over", { timeout: 60_000 }, async (t) => {
+  const app = await openApp(t, { height: 1000 });
+  const { page } = app;
+  const { budgetId, groups } = await seed(app);
+  // Magazine: archived, still in Fixed. Club: archived, its group Old deleted since.
+  const magazine = await api<Bucket>(app, "POST", `/api/budgets/${budgetId}/buckets`, { name: "Magazine", groupId: groups.Fixed, colour: "olive", type: "plain" });
+  const old = await api<Group>(app, "POST", `/api/budgets/${budgetId}/groups`, { name: "Old" });
+  const club = await api<Bucket>(app, "POST", `/api/budgets/${budgetId}/buckets`, { name: "Club", groupId: old.id, colour: "cocoa", type: "plain" });
+  await archiveWithActivity(app, budgetId, magazine.id);
+  await archiveWithActivity(app, budgetId, club.id);
+  await api(app, "DELETE", `/api/groups/${old.id}`);
+  await openBuckets(app, budgetId);
+  const grid = page.getByRole("table", { name: "Buckets" });
+
+  assert.deepEqual(await grid.getByRole("rowgroup").evaluateAll((sections) => sections.map((section) => [...section.querySelectorAll('[role="row"]')]
+    .map((row) => (row.querySelector(".gname, .name") ?? row.querySelector('[role="columnheader"]'))?.textContent))),
+  [["Bucket"], ["Fixed", "Rent", "Gym", "Magazine"], ["Everyday", "Groceries", "Dining out", "Fuel"], ["Goals", "Vacation"], ["Club"]]);
+  const look = await cardLook(page);
+  assert.equal(look.gaps.length, 2, "Fixed, Everyday and Goals are three cards");
+  const clubRow = grid.locator(".brow", { hasText: "Club" });
+  const goalsBottom = await grid.locator(".brow", { hasText: "Vacation" }).evaluate((row) => row.getBoundingClientRect().bottom);
+  const clubBox = (await clubRow.boundingBox())!;
+  assert.ok(clubBox.y - goalsBottom >= 20, `Club's card stands apart from Goals' (${clubBox.y - goalsBottom})`);
+  assert.equal(await clubRow.evaluate((row) => getComputedStyle(row).borderTopWidth), "0px", "No line at the top of Club's card");
+
+  // A group dragged past the end lands after the last group, with its line at that group's card.
+  const fixed = grid.locator(".bgroup", { hasText: "Fixed" });
+  await fixed.hover();
+  const grip = (await fixed.locator("[data-grip]").boundingBox())!;
+  await page.mouse.move(grip.x + 5, grip.y + 5);
+  await page.mouse.down();
+  await page.mouse.move(grip.x + 20, clubBox.y + clubBox.height + 10, { steps: 8 });
+  const line = (await page.locator(".drop-line").boundingBox())!;
+  assert.ok(Math.abs(line.y + line.height / 2 - goalsBottom) <= 2, `The line marks the end of Goals' card (${line.y + line.height / 2} vs ${goalsBottom})`);
+  await page.mouse.up();
+  await waitForSnack(page, "Moved the Fixed group down.");
+  assert.deepEqual((await tableOf(app, budgetId)).groups.map((g) => g.name), ["Everyday", "Goals", "Fixed"]);
+
+  // Phone Reorder hides archived rows, and with them Club's card. A group dragged high goes to the top, though
+  // the last group (Fixed) ends in a hidden row.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Reorder" }).click();
+  assert.equal(await clubRow.isVisible(), false);
+  assert.equal(await grid.locator(".bcard").evaluateAll((cards) => cards.filter((card) => card.getClientRects().length > 0 && card.getBoundingClientRect().height === 0).length), 0, "No empty card shows");
+  await drag(page, grid.locator(".bgroup", { hasText: "Goals" }), 20);
+  await waitForSnack(page, "Moved the Goals group up.");
+  assert.deepEqual((await tableOf(app, budgetId)).groups.map((g) => g.name), ["Goals", "Everyday", "Fixed"]);
   assert.deepEqual(app.pageErrors, []);
 });
 

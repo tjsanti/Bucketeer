@@ -89,7 +89,7 @@
   --row-h-phone: 54px;  /* one bucket row on phone: name over target */
   --touch: 44px;        /* minimum touch target */
   --group-h: 46px;      /* one group header row */
-  --group-gap: 12px;    /* open card above every group row but the first */
+  --group-gap: 20px;    /* the page showing between one group's card and the next */
   --sidebar-w: 252px;
 
   /* --- Shape --- */
@@ -113,8 +113,8 @@
   --surface: #FFFFFF;         /* cards */
   --surface-sunken: #F5F8FA;  /* table heads, inputs at rest */
   --avail-col: #EFF4F7;       /* the one emphasised column */
-  --group-row: #EBF1F5;       /* group header rows, tinted apart from the cards */
-  --group-avail: #E2EAEF;     /* a group row's cell in the emphasised column */
+  --group-row: #D9E3EC;       /* group header rows: as far from the page as dark's, muted text 4.5:1 */
+  --group-avail: #CDD9E4;     /* a group row's cell in the emphasised column, a shade deeper */
   --track: #E1E9EE;           /* empty part of a goal bar */
   --border: #E1E8EC;          /* hairlines between rows */
   --border-strong: #C9D5DC;   /* group rules, input outlines */
@@ -788,7 +788,11 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .head-actions { display: flex; gap: var(--s-2); flex-wrap: wrap; }
 .reorder-btn { display: none; }
 .buckets-content { align-self: stretch; min-width: 0; }
-.btable { position: relative; overflow: hidden; }
+/* One table, one card per group: the page shows in the gap between them. */
+.btable { position: relative; display: flex; flex-direction: column; gap: var(--group-gap); }
+.bcard { overflow: hidden; }
+/* A card's first row draws no line at its top edge (a group row has none; an archived row's card may start with one). */
+.bsection:first-child > [role="row"]:first-child { border-top: 0; }
 .btable [role="row"] { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr) 112px 112px 132px; }
 .btable .c { display: flex; align-items: center; padding: 0 var(--s-4); min-width: 0; }
 .btable .c.num { justify-content: flex-end; }
@@ -804,10 +808,7 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .bhead { min-height: 40px; border-bottom: 1px solid var(--border-strong); }
 .bhead .c { font-size: var(--fs-xs); font-weight: var(--fw-semibold); color: var(--text-muted); letter-spacing: .02em; }
 .bhead .c.avail { color: var(--text); }
-.bgroup { min-height: var(--group-h); border-top: 1px solid var(--border-strong); background: var(--group-row); }
-.bhead + .bgroup { border-top: 0; }
-/* Open card between the last bucket of one group and the next group's row */
-.btable > :not(.bhead) + .bgroup { margin-top: var(--group-gap); }
+.bgroup { min-height: var(--group-h); background: var(--group-row); }
 .bgroup .gname { font-family: var(--font-display); font-weight: var(--fw-heavy); font-size: var(--fs-md); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .bgroup .gcount { font-size: var(--fs-sm); color: var(--text-muted); font-weight: var(--fw-medium); }
 .bgroup .c.avail { color: var(--text); font-size: 14px; background: var(--group-avail); }
@@ -823,6 +824,8 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .name-btn::after { content: ""; position: absolute; inset: 0; z-index: 1; }
 .name-btn:focus-visible { outline: none; }
 .name-btn:focus-visible::after { outline: 2px solid var(--focus); outline-offset: -2px; border-radius: 4px; }
+/* On a card's last row the ring follows the card's corners, which would otherwise cut it off. */
+.bsection:last-child > .brow:last-child .name-btn:focus-visible::after { border-radius: 4px 4px var(--r-lg) var(--r-lg); }
 .dot { width: var(--dot); height: var(--dot); border-radius: 50%; background: var(--c); flex: none; box-shadow: inset 0 0 0 1px var(--dot-edge); }
 .dot.ring { background: transparent; box-shadow: inset 0 0 0 2.5px var(--c); }
 .det { gap: var(--s-2); font-size: var(--fs-sm); color: var(--text-muted); white-space: nowrap; overflow: hidden; }
@@ -884,7 +887,7 @@ dialog.sheet::backdrop { background: var(--scrim); }
 @media (hover: none) { .grip { opacity: 1; } }
 /* Drag: the source row fades, a lifted copy follows the pointer, a line marks the drop */
 .drag-src { opacity: .35; }
-.drag-ghost { position: fixed; z-index: 90; margin: 0; pointer-events: none; border-radius: 10px; overflow: hidden; box-shadow: var(--shadow-lift); transform: scale(1.012); background: var(--surface); opacity: .96; }
+.drag-ghost { position: fixed; z-index: 90; display: block; margin: 0; pointer-events: none; border-radius: 10px; overflow: hidden; box-shadow: var(--shadow-lift); transform: scale(1.012); background: var(--surface); opacity: .96; }
 .drag-ghost [role="row"] { border-top: 0; }
 .drag-ghost [role="row"] + [role="row"] { border-top: 1px solid var(--border); }
 .drag-ghost .grip { opacity: 1; color: var(--text); }
