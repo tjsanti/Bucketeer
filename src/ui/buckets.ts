@@ -268,7 +268,7 @@ export function createBucketsPage(ctx: BucketsContext) {
     });
   }
 
-  const dialogContext = { client, budget, table: () => table, refresh, snack: ctx.snack };
+  const dialogContext = { client, budget, thisMonth: ctx.thisMonth, table: () => table, refresh, snack: ctx.snack };
   const addButtonFocus = () => find("[data-add]") ?? find("h1");
 
   function openAdd(groupId?: string, opener?: HTMLElement): void {

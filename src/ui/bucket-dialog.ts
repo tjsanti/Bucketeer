@@ -1,19 +1,24 @@
 // The Add and Edit bucket dialog: name, group, colour, type and its amounts, and (in Edit) Archive.
 // Rules (type shapes, goal months, name clashes, archiving) are checked by the server; this module only
-// turns what was typed into cents and "YYYY-MM", and shows the server's message beside the right field.
+// turns what was typed into cents, offers goal months from this month on, and shows the server's message
+// beside the right field.
 import { ApiError } from "../client.js";
 import type { createClient } from "../client.js";
 import { BUCKET_COLOURS, leastUsedColour } from "../core/colours.js";
 import type { BucketColour } from "../core/colours.js";
 import type { Bucket, BucketEditInput, BucketTable, BucketType, Budget, NewBucketInput } from "../core/index.js";
+import { addMonths } from "../core/months.js";
 import { formatMoney, parseMoney } from "../core/money.js";
-import { el, withVars } from "./dom.js";
+import { el, icon, withVars } from "./dom.js";
+import { attachMonthPicker, shortMonthLabel } from "./month-picker.js";
 import { dropdown, field, FieldError, moneyInput, openSheet, segmented, swatches, textInput, uid } from "./sheet.js";
 import type { Sheet } from "./sheet.js";
 
 export interface BucketDialogContext {
   client: ReturnType<typeof createClient>;
   budget: Budget;
+  /** The server's current month, "YYYY-MM": the earliest goal month on offer. */
+  thisMonth: string;
   /** The table as last loaded. */
   table(): BucketTable;
   /**
@@ -30,38 +35,12 @@ const hueNames: Record<BucketColour, string> = {
 };
 
 const typeOptions = [["recurring", "Recurring"], ["goal", "Dated goal"], ["plain", "Plain"]] as const;
-const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const monthNames = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 
 /** "2027-08" -> "Aug 2027". */
-export function monthLabel(month: string): string {
-  const [year, number] = month.split("-");
-  return `${months[Number(number) - 1] ?? ""} ${year}`;
-}
+export const monthLabel = shortMonthLabel;
 
-/** Accepts Aug 2027, August 27, 8/27, 08/2027 or 2027-08. Returns "YYYY-MM", or null if it is not a month. */
-export function parseMonthText(text: string): string | null {
-  const t = text.trim().toLowerCase().replace(/[.,]/g, " ").replace(/\s+/g, " ");
-  let year: number;
-  let month: number;
-  let m: RegExpExecArray | null;
-  if ((m = /^(\d{4}) ?[-/ ] ?(\d{1,2})$/.exec(t))) {
-    year = Number(m[1]);
-    month = Number(m[2]);
-  } else if ((m = /^(\d{1,2}) ?[-/ ] ?(\d{2}|\d{4})$/.exec(t))) {
-    month = Number(m[1]);
-    year = Number(m[2]);
-  } else if ((m = /^([a-z]{3,}) ?'?(\d{2}|\d{4})$/.exec(t))) {
-    const word = m[1]!;
-    month = monthNames.findIndex((name) => name.startsWith(word)) + 1;
-    year = Number(m[2]);
-  } else {
-    return null;
-  }
-  if (year < 100) year += 2000;
-  if (month < 1 || month > 12 || year < 1000 || year > 9999) return null;
-  return `${year}-${String(month).padStart(2, "0")}`;
-}
+/** A new goal is due a year from this month until another month is picked. */
+const DEFAULT_GOAL_MONTHS = 12;
 
 const dot = (colour: string) => withVars(el("span", { class: "dot", "aria-hidden": "true" }), { "--c": `var(--b-${colour})` });
 
@@ -101,8 +80,7 @@ export function openBucketDialog(ctx: BucketDialogContext, options: { bucket?: B
   let shownType: BucketType = existing?.type ?? "recurring";
   const amount = field("Amount per month", (id) => moneyInput(id, "").wrap);
   const amountInput = amount.root.querySelector("input") as HTMLInputElement;
-  const by = field("By", (id) => textInput(id, existing?.goalMonth ? monthLabel(existing.goalMonth) : "", { inputmode: "text" }));
-  const byInput = by.root.querySelector("input") as HTMLInputElement;
+  const by = goalMonthField(existing?.goalMonth ?? addMonths(ctx.thisMonth, DEFAULT_GOAL_MONTHS), ctx.thisMonth);
   const details = el("div", { class: "two details" }, amount.root, by.root);
   const showType = (next: BucketType, save = true) => {
     if (save && shownType !== "plain") drafts[shownType] = amountInput.value;
@@ -130,10 +108,6 @@ export function openBucketDialog(ctx: BucketDialogContext, options: { bucket?: B
       // Reported on save.
     }
   });
-  byInput.addEventListener("blur", () => {
-    const month = parseMonthText(byInput.value);
-    if (month) byInput.value = monthLabel(month);
-  });
 
   function readAmount(): number | null {
     if (amountInput.value.trim() === "") return null;
@@ -143,18 +117,12 @@ export function openBucketDialog(ctx: BucketDialogContext, options: { bucket?: B
       throw new FieldError((error as Error).message, amountInput);
     }
   }
-  function readMonth(): string | null {
-    if (byInput.value.trim() === "") return null;
-    const month = parseMonthText(byInput.value);
-    if (!month) throw new FieldError("Enter the month as Aug 2027, 8/27 or 2027-08.", byInput);
-    return month;
-  }
   /** Type, amount and month as the server takes them for the chosen type. */
   function shape(): { type: BucketType; amount?: number | null; goalMonth?: string | null } {
     const chosen = type.value();
     if (chosen === "plain") return { type: chosen };
     if (chosen === "recurring") return { type: chosen, amount: readAmount() };
-    return { type: chosen, amount: readAmount(), goalMonth: readMonth() };
+    return { type: chosen, amount: readAmount(), goalMonth: by.value() };
   }
   function groupChoice(): { groupId: string } | { newGroupName: string } {
     const value = group.value();
@@ -166,7 +134,7 @@ export function openBucketDialog(ctx: BucketDialogContext, options: { bucket?: B
       case "name": return nameInput;
       case "group": return group.control();
       case "amount": return amountInput;
-      case "month": return byInput;
+      case "month": return by.button;
       default: return null;
     }
   };
@@ -263,6 +231,34 @@ export function openBucketDialog(ctx: BucketDialogContext, options: { bucket?: B
     section.append(button);
     return section;
   }
+}
+
+/**
+ * The goal's "By" month: a button that looks like the other inputs, showing "Aug 2027", and opens the month picker.
+ * Months before this month are disabled; the saved month stays pickable even once it has passed.
+ */
+function goalMonthField(initial: string, thisMonth: string): { root: HTMLDivElement; button: HTMLButtonElement; value(): string } {
+  let month = initial;
+  const labelId = uid("by-label");
+  const valueId = uid("by-value");
+  const valueText = el("span", { class: "sv", id: valueId }, monthLabel(month));
+  const button = el("button", { class: "input select-btn", type: "button", "aria-labelledby": `${labelId} ${valueId}` }, valueText, icon("down", "sm"));
+  const root = el("div", { class: "field" }, el("span", { class: "flabel", id: labelId }, "By"), button);
+  attachMonthPicker({
+    trigger: button,
+    root,
+    value: () => month,
+    first: thisMonth,
+    last: "9999-12",
+    float: true,
+    choose(next) {
+      month = next;
+      valueText.textContent = monthLabel(month);
+      button.focus();
+      root.dispatchEvent(new Event("input", { bubbles: true }));
+    },
+  });
+  return { root, button, value: () => month };
 }
 
 const rowButton = (id: string) => document.querySelector<HTMLElement>(`.name-btn[data-bucket-id="${CSS.escape(id)}"]`);

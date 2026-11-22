@@ -100,6 +100,20 @@ async function eventually(check: () => Promise<void>, timeout = 5_000): Promise<
 
 const rowTop = async (locator: Locator) => (await locator.boundingBox())!.y + 2;
 
+const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const goalMonthButton = (dialog: Locator) => dialog.getByRole("button", { name: /^By\b/ });
+
+/** Opens the dialog's By picker, steps to the month's year and picks the month ("YYYY-MM"). */
+async function pickGoalMonth(page: Page, dialog: Locator, month: string): Promise<void> {
+  await goalMonthButton(dialog).click();
+  const picker = page.getByRole("dialog", { name: "Choose month" });
+  const year = Number(month.slice(0, 4));
+  for (let shown = Number(await picker.locator(".pick-year").textContent()); shown !== year; shown += shown < year ? 1 : -1) {
+    await picker.getByRole("button", { name: shown < year ? "Next year" : "Previous year" }).click();
+  }
+  await picker.getByRole("button", { name: `${monthNames[Number(month.slice(5, 7)) - 1]} ${year}` }).click();
+}
+
 test("the Buckets page is reached from the nav and its deep link; / still opens Accounts", { timeout: 45_000 }, async (t) => {
   const app = await openApp(t);
   const { page } = app;
@@ -380,25 +394,16 @@ test("colour swatches move by arrow keys and are named; each type keeps its own 
   await dialog.getByRole("radio", { name: "Dated goal" }).click();
   assert.equal(await dialog.getByLabel("Goal amount").inputValue(), "");
   await dialog.getByLabel("Goal amount").fill("1800");
-  await dialog.getByLabel("By").fill("8/27");
-  await dialog.getByLabel("By").blur();
-  assert.equal(await dialog.getByLabel("By").inputValue(), "Aug 2027", "The month normalises on blur.");
+  await pickGoalMonth(page, dialog, "2027-08");
+  assert.equal((await goalMonthButton(dialog).innerText()).trim(), "Aug 2027");
   await dialog.getByRole("radio", { name: "Recurring" }).click();
   assert.equal(await dialog.getByLabel("Amount per month").inputValue(), "160.00", "The recurring draft is kept (tidied on blur).");
-  assert.equal(await dialog.getByLabel("By").isVisible(), false);
+  assert.equal(await goalMonthButton(dialog).isVisible(), false);
   await dialog.getByRole("radio", { name: "Plain" }).click();
   assert.equal(await dialog.getByLabel("Amount per month").isVisible(), false);
   await dialog.getByRole("radio", { name: "Dated goal" }).click();
   assert.equal(await dialog.getByLabel("Goal amount").inputValue(), "1,800.00");
-  assert.equal(await dialog.getByLabel("By").inputValue(), "Aug 2027");
-
-  // A goal month in the past is refused by the server; the By field gets the note and focus.
-  await dialog.getByLabel("By").fill("2020-01");
-  await dialog.getByRole("button", { name: "Add bucket" }).click();
-  await dialog.locator(".snote span").waitFor();
-  assert.equal(await dialog.getByLabel("By").getAttribute("aria-invalid"), "true");
-  assert.equal(await dialog.getByLabel("By").evaluate((node) => node === document.activeElement), true);
-  await dialog.getByLabel("By").fill("Aug 2027");
+  assert.equal((await goalMonthButton(dialog).innerText()).trim(), "Aug 2027", "The goal month is kept too.");
   await dialog.getByRole("button", { name: "Add bucket" }).click();
   await dialog.waitFor({ state: "detached" });
   const laptop = (await tableOf(app, budgetId)).buckets.find((b) => b.name === "Laptop")!;
@@ -1038,7 +1043,8 @@ test("Undo of a goal edit puts the goal back, and Undo of an edit that made a ne
   // The goal's amount and month change, then Undo restores both through the revert path.
   await page.getByRole("button", { name: "Edit Vacation" }).click();
   await dialog.getByLabel("Goal amount").fill("4,000.00");
-  await dialog.getByLabel("By").fill("Mar 2028");
+  assert.equal((await goalMonthButton(dialog).innerText()).trim(), "Aug 2027", "Edit opens on the saved month.");
+  await pickGoalMonth(page, dialog, "2028-03");
   await dialog.getByRole("button", { name: "Save" }).click();
   await dialog.waitFor({ state: "detached" });
   assert.deepEqual([(await bucketNow("Vacation")).amount, (await bucketNow("Vacation")).goalMonth], [400000, "2028-03"]);
