@@ -299,6 +299,8 @@ export function dropdown(config: { label: string; options: readonly DropdownOpti
   }
 
   button.addEventListener("click", (event) => {
+    // Safari doesn't focus a clicked button; the list's keys go to it, so it takes focus here.
+    button.focus();
     if (!isOpen()) setOpen(true, selectedIndex());
     else if (event.detail === 0) pick(active); // Enter or Space on the open list picks
     else setOpen(false);

@@ -56,7 +56,11 @@ export function createShell(handlers: ShellHandlers) {
     button.focus();
   };
 
-  button.addEventListener("click", () => setOpen(menu.hidden));
+  // Safari doesn't focus a clicked button, so Escape and the arrows would miss the menu; focusing it lets them reach it.
+  button.addEventListener("click", () => {
+    setOpen(menu.hidden);
+    button.focus();
+  });
   document.addEventListener("pointerdown", (event) => {
     if (!menu.hidden && event.target instanceof Node && !wrap.contains(event.target)) setOpen(false);
   });

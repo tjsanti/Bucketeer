@@ -312,6 +312,15 @@ test("the group dropdown opens without changing the choice, has typeahead and a 
   assert.equal(compact(await combo.innerText()), "Fixed");
   assert.equal(await combo.evaluate((node) => node === document.activeElement), true);
 
+  // After a click opens the list, the keys still reach it (Safari doesn't focus a clicked button).
+  await combo.click();
+  assert.equal(await active(), "Fixed");
+  await page.keyboard.press("ArrowDown");
+  assert.equal(await active(), "Everyday", "ArrowDown after a click moves the active option.");
+  await page.keyboard.press("Escape");
+  assert.equal(await list.isVisible(), false);
+  assert.equal(await dialog.isVisible(), true, "Escape after a click closes only the list.");
+
   // Pointer: click opens, clicking an option picks it.
   await combo.click();
   await dialog.getByRole("option", { name: "Goals" }).click();
