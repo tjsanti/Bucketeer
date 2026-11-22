@@ -17,7 +17,7 @@
     "bucketeer": "node dist/cli.js",
     "check": "tsc -p tsconfig.test.json --noEmit",
     "test": "npm run build && tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js",
-    "test:ui": "npm run build && tsc -p tsconfig.test.json && node --test .test-dist/test/browser/*.test.js",
+    "test:ui": "npm run build && tsc -p tsconfig.test.json && node scripts/test-ui.ts",
     "acceptance": "node scripts/acceptance.ts"
   },
   "devDependencies": {

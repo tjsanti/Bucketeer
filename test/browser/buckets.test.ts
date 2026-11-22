@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Locator, Page } from "playwright-core";
-import { openApp, ready, seedBudget } from "./harness.js";
+import { engine, openApp, ready, seedBudget } from "./harness.js";
 import type { App } from "./harness.js";
 
 // Independent expectations, taken from the plan and the locked design (not from the code under test).
@@ -590,7 +590,8 @@ const cardLook = (page: Page): Promise<CardLook> => page.evaluate(() => {
     gaps: surfaces.slice(1).map((card, index) => {
       const above = box(surfaces[index]!).bottom;
       const y = (above + box(card).top) / 2;
-      return { above: nameOf(groups[index + 1]!), gap: box(card).top - above, middle: behind(box(card).left + box(card).width / 2, y), availColumn: behind(columnX(columns[0]!.head), y) };
+      // To the hundredth of a pixel: Firefox lays out in sixtieths, so a 20px gap can measure 19.99994.
+      return { above: nameOf(groups[index + 1]!), gap: Math.round((box(card).top - above) * 100) / 100, middle: behind(box(card).left + box(card).width / 2, y), availColumn: behind(columnX(columns[0]!.head), y) };
     }),
     bucketGaps: rows.filter((row, index) => index > 0 && row.classList.contains("brow") && rows[index - 1]!.classList.contains("brow")).map((row) => box(row).top - box(rows[rows.indexOf(row) - 1]!).bottom),
     misaligned: rows.filter((row) => row !== header && columns.some(({ selector, head }) => {
@@ -1291,14 +1292,31 @@ test("on a touch phone, only the grip drags in Reorder mode; swipes on rows scro
   await openBuckets(app, budgetId);
   const grid = page.getByRole("table", { name: "Buckets" });
   const seeded = { Fixed: ["Rent", "Gym"], Everyday: ["Groceries", "Dining out", "Fuel"], Goals: ["Vacation"] };
-  // Real touch input through Chromium's input pipeline, so scrolling and pointer events come from the browser.
-  const cdp = await page.context().newCDPSession(page);
-  const touch = (type: string, points: { x: number; y: number }[]) => cdp.send("Input.dispatchTouchEvent", { type: type as "touchStart", touchPoints: points });
+  // Playwright sends touch moves only to Chromium (through CDP), whose input pipeline turns them into scrolling and
+  // pointer events as a phone's does. In WebKit and Firefox it can only tap: there a swipe is checked through the
+  // touch-action that lets the browser scroll it, and the grip is dragged with the pointer events of a mouse.
+  const cdp = engine === "chromium" ? await page.context().newCDPSession(page) : null;
+  const touch = (type: string, points: { x: number; y: number }[]) => cdp!.send("Input.dispatchTouchEvent", { type: type as "touchStart", touchPoints: points });
   async function swipe(from: { x: number; y: number }, toY: number): Promise<void> {
     await touch("touchStart", [from]);
     for (let i = 1; i <= 10; i++) await touch("touchMove", [{ x: from.x, y: from.y + ((toY - from.y) * i) / 10 }]);
     await touch("touchEnd", []);
   }
+  async function drag(from: { x: number; y: number }, toY: number): Promise<void> {
+    if (cdp) return swipe(from, toY);
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    for (let i = 1; i <= 10; i++) await page.mouse.move(from.x, from.y + ((toY - from.y) * i) / 10);
+    await page.mouse.up();
+  }
+  /** A vertical swipe on `locator` scrolls: it and every element around it leave vertical panning to the browser. */
+  const pans = (locator: Locator) => locator.evaluate((node) => {
+    for (let at: Element | null = node; at; at = at.parentElement) {
+      const action = getComputedStyle(at).touchAction;
+      if (!(action === "auto" || action === "manipulation" || action.includes("pan-y"))) return false;
+    }
+    return true;
+  });
   const centre = async (locator: Locator) => {
     const box = (await locator.boundingBox())!;
     return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
@@ -1312,9 +1330,15 @@ test("on a touch phone, only the grip drags in Reorder mode; swipes on rows scro
   // Reorder mode: a swipe up starting on a row's name scrolls the page and moves nothing.
   await page.getByRole("button", { name: "Reorder" }).tap();
   assert.ok(await page.evaluate(() => document.documentElement.scrollHeight > window.innerHeight), "The page is tall enough to scroll.");
-  const fuelName = await centre(grid.locator(".brow", { hasText: "Fuel" }).locator(".name"));
-  await swipe(fuelName, fuelName.y - 150);
-  await eventually(async () => assert.ok((await scrollY()) > 0, "The swipe scrolled the page."));
+  const fuel = grid.locator(".brow", { hasText: "Fuel" });
+  if (cdp) {
+    const fuelName = await centre(fuel.locator(".name"));
+    await swipe(fuelName, fuelName.y - 150);
+    await eventually(async () => assert.ok((await scrollY()) > 0, "The swipe scrolled the page."));
+  } else {
+    assert.equal(await pans(fuel.locator(".name")), true, "A swipe on a row's name scrolls the page.");
+    assert.equal(await fuel.locator("[data-grip]").evaluate((node) => getComputedStyle(node).touchAction), "none", "A swipe on the grip drags.");
+  }
   assert.equal(await page.locator(".drag-ghost").count(), 0);
   assert.deepEqual(await order(app, budgetId), seeded);
 
@@ -1325,11 +1349,11 @@ test("on a touch phone, only the grip drags in Reorder mode; swipes on rows scro
   assert.equal(await page.locator("dialog").count(), 0);
   assert.equal(await page.locator("#snack").isHidden(), true);
 
-  // A touch drag from Groceries' grip to just above Rent moves it, and the move is saved.
+  // A drag from Groceries' grip to just above Rent moves it, and the move is saved.
   await grid.locator(".brow", { hasText: "Rent" }).evaluate((row) => row.scrollIntoView({ block: "start" }));
   const grip = await centre(grid.locator(".brow", { hasText: "Groceries" }).locator("[data-grip]"));
   const rentTop = (await grid.locator(".brow", { hasText: "Rent" }).boundingBox())!.y + 2;
-  await swipe(grip, rentTop);
+  await drag(grip, rentTop);
   await waitForSnack(page, "Moved Groceries to Fixed.");
   assert.deepEqual(await order(app, budgetId), { ...seeded, Fixed: ["Groceries", "Rent", "Gym"], Everyday: ["Dining out", "Fuel"] });
 
@@ -1341,9 +1365,15 @@ test("on a touch phone, only the grip drags in Reorder mode; swipes on rows scro
   await showGym();
   const startY = await scrollY();
   const before = await order(app, budgetId);
-  const gymName = await centre(grid.locator(".brow", { hasText: "Gym" }).locator(".name"));
-  await swipe(gymName, gymName.y - 150);
-  await eventually(async () => assert.ok((await scrollY()) > startY));
+  const gym = grid.locator(".brow", { hasText: "Gym" });
+  assert.equal(await gym.locator("[data-grip]").isVisible(), false, "Out of Reorder mode there is no grip.");
+  if (cdp) {
+    const gymName = await centre(gym.locator(".name"));
+    await swipe(gymName, gymName.y - 150);
+    await eventually(async () => assert.ok((await scrollY()) > startY));
+  } else {
+    assert.equal(await pans(gym.locator(".name")), true, "A swipe on a row scrolls the page.");
+  }
   assert.equal(await page.locator(".drag-ghost").count(), 0);
   assert.equal(await page.locator("dialog").count(), 0);
   assert.deepEqual(await order(app, budgetId), before);

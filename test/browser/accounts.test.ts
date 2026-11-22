@@ -344,8 +344,10 @@ for (const width of [390, 375, 360]) {
     // The sidebar becomes a top bar: brand, picker, theme toggle, then a tab row; the account list is on the page.
     assert.equal(await page.locator("#side-accounts").isVisible(), false);
     const box = async (locator: Locator) => (await locator.boundingBox())!;
+    // The page's own width: a desktop browser's scrollbar, where it takes room, sits beside the page.
+    const pageWidth = await page.evaluate(() => document.documentElement.clientWidth);
     const top = await box(page.locator(".side"));
-    assert.ok(top.y === 0 && top.width === width);
+    assert.ok(top.y === 0 && top.width === pageWidth, `The top bar is ${top.width}px wide on a ${pageWidth}px page.`);
     for (const locator of [page.locator("#budget-button"), page.locator("#theme-toggle"), page.locator("#nav-accounts"), page.getByRole("button", { name: "Add account" }), page.getByRole("button", { name: "Edit Checking" }), page.getByRole("button", { name: "Reopen Old savings" }), page.locator("details.closed summary")]) {
       const size = await box(locator);
       assert.ok(size.height >= 44 && size.width >= 44, `${await locator.textContent()} is ${size.width}x${size.height}`);

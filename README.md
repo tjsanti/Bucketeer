@@ -38,6 +38,10 @@ Without either, the container runs in UTC.
 
 > **There are no user accounts or authentication.** Anyone who can reach the port can read and change every budget. The published port binds to `127.0.0.1` by default. To reach it from other devices, put it behind a private network you trust (a VPN such as Tailscale) and set `BUCKETEER_BIND` to the server's VPN IP. Do not expose it to the public internet. `BUCKETEER_PORT` changes the host port.
 
+## Browser support
+
+The web UI supports the latest Chrome and Edge, Safari on macOS and iOS, and Firefox. Every browser test runs in each of their engines (Chromium, WebKit and Firefox).
+
 ## CLI
 
 The image includes the `bucketeer` command. Every data command accepts `--json`, which writes one JSON value to stdout. Failures exit nonzero and return `{ "error": { "code": "...", "message": "..." } }` in JSON mode. Without `--json`, errors go to stderr. `bucketeer --help` lists every command.
@@ -175,14 +179,16 @@ npm test
 npm run acceptance
 ```
 
-Browser tests cover the budget picker, accounts, the account register (income, spending and transfer entry, the category picker and its transfer preview, the sign control, editing in place, the phone entry sheet, and Undo for add, edit and delete), Ready to assign, Recent activity, and buckets (add, edit, archive, restore, undo, drag and keyboard reordering), failed saves and failed refreshes, mobile layouts, the light/dark theme and its saved override, and bundled fonts loading with no external requests. They run in Chromium, and the goal month's phone test also runs in WebKit, for Safari's handling of taps. Install both once, then run them:
+Browser tests cover the budget picker, accounts, the account register (income, spending and transfer entry, the category picker and its transfer preview, the sign control, editing in place, the phone entry sheet, and Undo for add, edit and delete), Ready to assign, Recent activity, and buckets (add, edit, archive, restore, undo, drag and keyboard reordering), failed saves and failed refreshes, mobile layouts, the light/dark theme and its saved override, and bundled fonts loading with no external requests. `npm run test:ui` runs every one of them in each supported engine: Chromium, WebKit and Firefox. An engine that isn't installed fails its run rather than being skipped. Install all three once, then run them:
 
 ```sh
-npx playwright-core install chromium webkit
+npx playwright-core install chromium webkit firefox
 npm run test:ui
 ```
 
-On Linux, `npx playwright-core install-deps webkit` adds the system libraries WebKit needs.
+On Linux, `npx playwright-core install-deps webkit firefox` adds the system libraries WebKit and Firefox need.
+
+Name engines to run only those, such as `npm run test:ui -- firefox`; other arguments go to `node --test`, so `npm run test:ui -- webkit .test-dist/test/browser/goal-month.test.js` runs one file. Run without the npm script, the tests use the engine in `BUCKETEER_BROWSER` (`chromium`, `webkit` or `firefox`; Chromium by default). Phone tests emulate a phone's viewport and touch in each engine. Firefox has no mobile mode, so its phone still reports a mouse's hover, and Playwright sends touch swipes only to Chromium, so in WebKit and Firefox the touch reorder test checks the `touch-action` that lets the browser scroll and drags with the pointer instead.
 
 To use an existing Chrome or Chromium executable in place of Playwright's Chromium, set `BUCKETEER_BROWSER_PATH` to its full path.
 
@@ -206,7 +212,7 @@ Server configuration: `PORT` defaults to `3000`, `HOST` to `0.0.0.0`, and `DATAB
 - `src/client.ts` is the HTTP client shared by the CLI and UI.
 - `src/cli.ts` provides scriptable commands.
 - `src/ui/` is the web app, with no framework: the shell and budget picker, the Accounts page and each account's register, the Buckets page, and their dialogs. `styles.css` holds the design tokens and light/dark themes. The build bundles the Nunito and Figtree fonts from Fontsource into `dist/ui/fonts` with content-hashed names, served as immutable.
-- `scripts/` holds the asset build and the Docker acceptance check; `test/` holds core, API, CLI, and browser tests.
+- `scripts/` holds the asset build, the browser test runner (one run per engine) and the Docker acceptance check; `test/` holds core, API, CLI, and browser tests.
 
 ## Contributing
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Locator, Page } from "playwright-core";
-import { openApp, ready, seedBudget } from "./harness.js";
+import { openApp, ready, seedBudget, tabKeys } from "./harness.js";
 import type { App } from "./harness.js";
 
 // A dated goal's "By" month is chosen with a year stepper and a month grid, never typed. Months before the
@@ -135,8 +135,7 @@ test("the By picker works from the keyboard, and Escape closes only the picker",
   await page.keyboard.press(" ");
   await picker(page).waitFor();
   const target = Number(saved.slice(5, 7)) < 12 ? shift(saved, 1) : shift(saved, -1);
-  if (target > saved) await page.keyboard.press("Tab");
-  else await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press(target > saved ? tabKeys.next : tabKeys.previous);
   assert.equal(await focusedName(), long(target));
   await page.keyboard.press("Enter");
   assert.equal(await picker(page).count(), 0);
@@ -146,7 +145,7 @@ test("the By picker works from the keyboard, and Escape closes only the picker",
   // Tabbing out of the picker closes it without changing the month.
   await page.keyboard.press("Enter");
   await picker(page).waitFor();
-  for (let i = 0; i < 20 && (await picker(page).count()) > 0; i++) await page.keyboard.press("Tab");
+  for (let i = 0; i < 20 && (await picker(page).count()) > 0; i++) await page.keyboard.press(tabKeys.next);
   assert.equal(await picker(page).count(), 0);
   assert.equal((await byButton(dialog).innerText()).trim(), short(target));
 
@@ -215,58 +214,56 @@ for (const scheme of ["light", "dark"] as const) {
 }
 
 // Safari doesn't focus a pressed button, so focus falls back to the nearest focusable ancestor, such as the bucket
-// dialog around the picker. WebKit runs the phone flow the way Safari does.
-for (const engine of ["chromium", "webkit"] as const) {
-  test(`on a phone in ${engine}, taps step the By picker years ahead and pick a month`, { timeout: 45_000 }, async (t) => {
-    const app = await openApp(t, { browser: engine, width: 390, height: 844, touch: true });
-    const { page } = app;
-    const { current, bucket } = await seed(app, (now) => shift(now, 9));
-    const dialog = page.locator("dialog");
-    await page.getByRole("button", { name: "Add bucket" }).tap();
-    await dialog.getByLabel("Name", { exact: true }).fill("Laptop");
-    await dialog.getByRole("radio", { name: "Dated goal" }).tap();
-    await dialog.getByLabel("Goal amount").fill("1800");
+// dialog around the picker. WebKit runs this phone flow the way Safari does.
+test("on a phone, taps step the By picker years ahead and pick a month", { timeout: 45_000 }, async (t) => {
+  const app = await openApp(t, { width: 390, height: 844, touch: true });
+  const { page } = app;
+  const { current, bucket } = await seed(app, (now) => shift(now, 9));
+  const dialog = page.locator("dialog");
+  await page.getByRole("button", { name: "Add bucket" }).tap();
+  await dialog.getByLabel("Name", { exact: true }).fill("Laptop");
+  await dialog.getByRole("radio", { name: "Dated goal" }).tap();
+  await dialog.getByLabel("Goal amount").fill("1800");
 
-    await byButton(dialog).tap();
-    await picker(page).waitFor();
-    assert.equal(await pickerYear(page), String(year(current) + 1));
-    for (const shown of [year(current) + 2, year(current) + 3, year(current) + 4]) {
-      await picker(page).getByRole("button", { name: "Next year" }).tap();
-      assert.equal(await picker(page).count(), 1, "The picker stays open.");
-      assert.equal(await pickerYear(page), String(shown));
-    }
-    // Focus stays in the picker after a tap, so Escape still closes only the picker.
-    assert.equal(await picker(page).evaluate((node) => node.contains(document.activeElement)), true, "Focus stays in the picker.");
-    await page.keyboard.press("Escape");
-    assert.equal(await picker(page).count(), 0);
-    assert.equal(await dialog.isVisible(), true, "The bucket dialog stays open.");
-    // Tapping By again closes it as well.
-    await byButton(dialog).tap();
-    await picker(page).waitFor();
-    await byButton(dialog).tap();
-    assert.equal(await picker(page).count(), 0, "Tapping By closes the picker.");
-    assert.equal(await byButton(dialog).getAttribute("aria-expanded"), "false");
+  await byButton(dialog).tap();
+  await picker(page).waitFor();
+  assert.equal(await pickerYear(page), String(year(current) + 1));
+  for (const shown of [year(current) + 2, year(current) + 3, year(current) + 4]) {
+    await picker(page).getByRole("button", { name: "Next year" }).tap();
+    assert.equal(await picker(page).count(), 1, "The picker stays open.");
+    assert.equal(await pickerYear(page), String(shown));
+  }
+  // Focus stays in the picker after a tap, so Escape still closes only the picker.
+  assert.equal(await picker(page).evaluate((node) => node.contains(document.activeElement)), true, "Focus stays in the picker.");
+  await page.keyboard.press("Escape");
+  assert.equal(await picker(page).count(), 0);
+  assert.equal(await dialog.isVisible(), true, "The bucket dialog stays open.");
+  // Tapping By again closes it as well.
+  await byButton(dialog).tap();
+  await picker(page).waitFor();
+  await byButton(dialog).tap();
+  assert.equal(await picker(page).count(), 0, "Tapping By closes the picker.");
+  assert.equal(await byButton(dialog).getAttribute("aria-expanded"), "false");
 
-    await byButton(dialog).tap();
-    await picker(page).waitFor();
-    assert.equal(await pickerYear(page), String(year(current) + 1), "It reopens on the chosen month's year.");
-    await picker(page).getByRole("button", { name: "Previous year" }).tap();
-    assert.equal(await pickerYear(page), String(year(current)));
-    for (let back = 1; back < Number(current.slice(5, 7)); back++) {
-      assert.equal(await picker(page).getByRole("button", { name: long(shift(current, -back)) }).isDisabled(), true, long(shift(current, -back)));
-    }
-    for (let ahead = 0; ahead < 4; ahead++) await picker(page).getByRole("button", { name: "Next year" }).tap();
-    const chosen = `${year(current) + 4}-06`;
-    await picker(page).getByRole("button", { name: long(chosen) }).tap();
-    assert.equal(await picker(page).count(), 0);
-    assert.equal((await byButton(dialog).innerText()).trim(), short(chosen));
+  await byButton(dialog).tap();
+  await picker(page).waitFor();
+  assert.equal(await pickerYear(page), String(year(current) + 1), "It reopens on the chosen month's year.");
+  await picker(page).getByRole("button", { name: "Previous year" }).tap();
+  assert.equal(await pickerYear(page), String(year(current)));
+  for (let back = 1; back < Number(current.slice(5, 7)); back++) {
+    assert.equal(await picker(page).getByRole("button", { name: long(shift(current, -back)) }).isDisabled(), true, long(shift(current, -back)));
+  }
+  for (let ahead = 0; ahead < 4; ahead++) await picker(page).getByRole("button", { name: "Next year" }).tap();
+  const chosen = `${year(current) + 4}-06`;
+  await picker(page).getByRole("button", { name: long(chosen) }).tap();
+  assert.equal(await picker(page).count(), 0);
+  assert.equal((await byButton(dialog).innerText()).trim(), short(chosen));
 
-    await dialog.getByRole("button", { name: "Add bucket" }).tap();
-    await dialog.waitFor({ state: "detached" });
-    assert.equal((await bucket("Laptop")).goalMonth, chosen);
-    assert.deepEqual(app.pageErrors, []);
-  });
-}
+  await dialog.getByRole("button", { name: "Add bucket" }).tap();
+  await dialog.waitFor({ state: "detached" });
+  assert.equal((await bucket("Laptop")).goalMonth, chosen);
+  assert.deepEqual(app.pageErrors, []);
+});
 
 test("a goal month the server refuses marks By and focuses it", { timeout: 45_000 }, async (t) => {
   const app = await openApp(t);

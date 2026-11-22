@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { launchBrowser, ready, startServer } from "./harness.js";
+import { openContext, ready, startServer } from "./harness.js";
 
 const lightBackground = "rgb(242, 246, 248)";
 const darkBackground = "rgb(15, 23, 30)";
 
 test("the theme follows the system, a saved choice overrides it, and fonts come from the app", { timeout: 30_000 }, async (t) => {
   const url = await startServer(t);
-  const browser = await launchBrowser(t);
-  const context = await browser.newContext({ colorScheme: "dark" });
+  const context = await openContext(t, { colorScheme: "dark" });
   const page = await context.newPage();
   const pageErrors: string[] = [];
   const foreignRequests: string[] = [];
@@ -63,8 +62,7 @@ test("the theme follows the system, a saved choice overrides it, and fonts come 
 
 test("the theme toggle still works when storage is unavailable", { timeout: 30_000 }, async (t) => {
   const url = await startServer(t);
-  const browser = await launchBrowser(t);
-  const page = await browser.newPage({ colorScheme: "light" });
+  const page = await (await openContext(t, { colorScheme: "light" })).newPage();
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.addInitScript(() => {
