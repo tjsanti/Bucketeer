@@ -123,6 +123,14 @@ test("the By picker works from the keyboard, and Escape closes only the picker",
   assert.equal(await isFocused(byButton(dialog)), true);
   assert.equal(await byButton(dialog).getAttribute("aria-expanded"), "false");
 
+  // A browser whose Escape still asks the dialog to close, despite the cancelled keydown, closes only the picker.
+  await byButton(dialog).click();
+  await picker(page).waitFor();
+  await dialog.evaluate((node) => node.dispatchEvent(new Event("cancel", { cancelable: true })));
+  assert.equal(await picker(page).count(), 0, "The cancel closes the picker.");
+  assert.equal(await dialog.isVisible(), true, "The bucket dialog stays open.");
+  await byButton(dialog).focus();
+
   // Tab moves through the months; Enter picks one. Space opens the picker as well.
   await page.keyboard.press(" ");
   await picker(page).waitFor();

@@ -139,9 +139,10 @@ export function attachReorder(container: HTMLElement, config: ReorderConfig): { 
     if (current.key.kind === "group") {
       // A group lands between two groups' cards, so its line sits in the middle of the gap above a group row.
       const shown = [...table.querySelectorAll<HTMLElement>('[role="row"]')].filter(shows);
+      const position = new Map(shown.map((row, index) => [row, index]));
       const lineAbove = (row: HTMLElement) => {
         const top = row.getBoundingClientRect().top;
-        const above = shown[shown.indexOf(row) - 1];
+        const above = shown[(position.get(row) ?? 0) - 1];
         return above ? (above.getBoundingClientRect().bottom + top) / 2 : top;
       };
       const groups = [...table.querySelectorAll<HTMLElement>(".bgroup")].filter((row) => row !== current.row);

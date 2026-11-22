@@ -22,8 +22,10 @@ export interface MonthPickerOptions {
 }
 
 const monthDates = Array.from({ length: 12 }, (_, index) => new Date(2000, index, 1));
-const longName = (index: number) => monthDates[index]!.toLocaleDateString("en-US", { month: "long" });
-const shortName = (index: number) => monthDates[index]!.toLocaleDateString("en-US", { month: "short" });
+// A malformed month ("2027-13", "2027-8") gets no name rather than throwing while a page renders.
+const nameOf = (index: number, month: "long" | "short") => monthDates[index]?.toLocaleDateString("en-US", { month }) ?? "";
+const longName = (index: number) => nameOf(index, "long");
+const shortName = (index: number) => nameOf(index, "short");
 const yearOf = (month: string) => Number(month.slice(0, 4));
 // Where dialogs become bottom sheets, a floating picker spans the screen, as the month header's does.
 const narrow = window.matchMedia("(max-width: 760px)");
@@ -42,8 +44,28 @@ export function attachMonthPicker(options: MonthPickerOptions): void {
   const { trigger, root } = options;
   let picker: HTMLElement | null = null;
   let place: (() => void) | null = null;
+  // Set for one tick after Escape closes the picker, so a <dialog> around it doesn't also close.
+  let swallowCancel = false;
   trigger.setAttribute("aria-haspopup", "dialog");
   trigger.setAttribute("aria-expanded", "false");
+
+  /** Closes only the picker on Escape, never a dialog around it, even where a cancelled keydown still cancels it. */
+  function escape(event: KeyboardEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+    swallowCancel = true;
+    window.setTimeout(() => { swallowCancel = false; }, 0);
+    close(true);
+  }
+  // Wired once the trigger is in its dialog, as the Group dropdown's guard is.
+  queueMicrotask(() => {
+    root.closest("dialog")?.addEventListener("cancel", (event) => {
+      if (swallowCancel || picker) {
+        event.preventDefault();
+        close(true);
+      }
+    });
+  });
 
   function close(returnFocus: boolean): void {
     if (!picker) return;
@@ -109,12 +131,7 @@ export function attachMonthPicker(options: MonthPickerOptions): void {
     previousYear.addEventListener("click", () => step(-1, previousYear));
     nextYear.addEventListener("click", () => step(1, nextYear));
     dialog.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") {
-        // Closes only the picker, not a dialog around it.
-        event.preventDefault();
-        event.stopPropagation();
-        close(true);
-      }
+      if (event.key === "Escape") escape(event);
     });
     dialog.addEventListener("focusout", (event) => {
       if (event.relatedTarget instanceof Node && !root.contains(event.relatedTarget)) close(false);
@@ -145,10 +162,6 @@ export function attachMonthPicker(options: MonthPickerOptions): void {
 
   trigger.addEventListener("click", () => (picker ? close(true) : open()));
   trigger.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && picker) {
-      event.preventDefault();
-      event.stopPropagation();
-      close(true);
-    }
+    if (event.key === "Escape" && picker) escape(event);
   });
 }
