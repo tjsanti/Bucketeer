@@ -576,8 +576,9 @@ main { padding: var(--s-8) var(--s-10) var(--s-16); min-width: 0; max-width: 110
 .acct-summary { display: flex; flex-direction: column; gap: 2px; padding: var(--s-4) var(--s-5); }
 .acct-summary .label { font-size: var(--fs-sm); font-weight: var(--fw-medium); color: var(--text-muted); }
 .acct-summary .figure { font-size: var(--fs-2xl); font-weight: var(--fw-heavy); letter-spacing: -0.01em; overflow-wrap: anywhere; }
-.reg { overflow: hidden; }
-.reg [role="row"], .reg .erow { display: grid; grid-template-columns: 88px minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.2fr) 128px 128px; }
+/* Date is wide enough for every engine's date field with its year and calendar button (Firefox's is the widest). */
+.reg { overflow: hidden; --reg-date: 140px; --reg-cols: var(--reg-date) minmax(0, 1.05fr) minmax(0, 1fr) minmax(0, 1.05fr) 128px 128px; }
+.reg [role="row"], .reg .erow { display: grid; grid-template-columns: var(--reg-cols); }
 .reg .c { display: flex; align-items: center; padding: 0 var(--s-3); min-width: 0; gap: 8px; }
 .reg .c.amt, .reg .c.bal { justify-content: flex-end; }
 .reg .rhead { min-height: 40px; border-bottom: 1px solid var(--border-strong); }
@@ -627,7 +628,7 @@ main { padding: var(--s-8) var(--s-10) var(--s-16); min-width: 0; max-width: 110
 .amt-wrap .cin { border-radius: 0 var(--r-sm) var(--r-sm) 0; }
 /* A split's lines under the draft: bucket and pill amount in the register's Category and Amount columns. */
 .splits[hidden] { display: none; }
-.splits .sline, .splits .sfoot { display: grid; grid-template-columns: 88px minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.2fr) 128px 128px; align-items: center; min-height: 40px; }
+.splits .sline, .splits .sfoot { display: grid; grid-template-columns: var(--reg-cols); align-items: center; min-height: 40px; }
 .splits .sline .c, .splits .sfoot > * { padding: 0 4px; min-width: 0; }
 .splits .lbl { grid-column: 2; display: flex; justify-content: flex-end; color: var(--text-muted); font-size: var(--fs-sm); }
 .splits .sbucket { grid-column: 3; }
@@ -637,7 +638,7 @@ main { padding: var(--s-8) var(--s-10) var(--s-16); min-width: 0; max-width: 110
 .splits .sleft { grid-column: 5 / 7; display: flex; justify-content: flex-end; align-items: center; gap: 6px; padding-right: 10px; font-size: var(--fs-sm); color: var(--text-muted); white-space: nowrap; }
 .splits .sleft strong { color: var(--text); font-weight: var(--fw-bold); }
 .splits .sleft.zero strong { color: var(--ok); }
-.splits > .snote { margin: 2px 10px 6px calc(88px + 4px); width: fit-content; max-width: calc(100% - 108px); }
+.splits > .snote { margin: 2px 10px 6px calc(var(--reg-date) + 4px); width: fit-content; max-width: calc(100% - var(--reg-date) - 20px); }
 .splits > .snote:empty { margin: 0; }
 .dots { display: inline-flex; flex: none; }
 .dots .dot + .dot { margin-left: -3px; }
