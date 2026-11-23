@@ -8,18 +8,14 @@ import type { BucketType } from "./types.js";
 export const MAX_BUCKET_NAME_LENGTH = 60;
 export const BUCKET_TYPES: readonly BucketType[] = ["recurring", "goal", "plain"];
 
-// The one place a bucket's Available is computed. Assigning, spending and the month view add to it.
-export function bucketAvailable(_bucket: { id: string }): number {
-  return 0;
+// A bucket's Available now: its ledger entries up to the current month plus its transaction lines, money
+// in and money out (transactions are never dated later). The month view computes any month (assignments.ts).
+export function bucketAvailable(activity: { ledger: number; moneyIn: number; moneyOut: number }): number {
+  return activity.ledger + activity.moneyIn - activity.moneyOut;
 }
 
 export function nameKey(name: string): string {
   return name.toLowerCase();
-}
-
-/** "YYYY-MM" of a date in the server's local time. */
-export function monthOf(date: Date): string {
-  return `${String(date.getFullYear()).padStart(4, "0")}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function invalid(message: string, field?: BudgetErrorField): never {

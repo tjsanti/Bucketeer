@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { ApiError, createClient } from "./client.js";
-import type { Account, AccountType, Bucket, BucketColour, BucketGroup, BucketTable, BucketType, Budget, NewBucketInput } from "./core/index.js";
+import type {
+  Account, AccountType, Bucket, BucketColour, BucketGroup, BucketMonth, BucketTable, BucketType, Budget, CategoryInput, GroupMonth, NewBucketInput, RegisterTransaction,
+  Rain, SplitLine, Transaction,
+} from "./core/index.js";
 import { formatMoney, parseMoney } from "./core/money.js";
 import { BudgetError } from "./core/types.js";
 
@@ -29,17 +32,43 @@ const help = `Usage:
   bucketeer bucket move <id> [--group <id>] --position <n> [--json]
   bucketeer bucket archive <id> [--json]
   bucketeer bucket restore <id> [--json]
+  bucketeer tx list --account <id> [--month <YYYY-MM>] [--json]
+  bucketeer tx add --account <id> --amount <amount> (--income | --bucket <id> | --line <bucketId>:<amount> --line … | --transfer <account-id>)
+                   [--date <YYYY-MM-DD>] [--payee <payee>] [--memo <memo>] [--json]
+  bucketeer tx edit <id> [--amount <amount>] [--income | --bucket <id> | --line <bucketId>:<amount> --line … | --transfer <account-id>]
+                   [--date <YYYY-MM-DD>] [--payee <payee>] [--memo <memo>] [--json]
+  bucketeer tx delete <id> [--json]
+  bucketeer ready --budget <id> [--json]
+  bucketeer month --budget <id> [--month <YYYY-MM>] [--json]
+  bucketeer assign <bucketId> --amount <amount> [--month <YYYY-MM>] [--json]
+  bucketeer rain --budget <id> [--month <YYYY-MM>] [--dry-run] [--json]
+  bucketeer rain undo <rainId> [--json]
 
 Options:
   --url <url>    Server address (default: BUCKETEER_URL or http://localhost:3000)
   --budget <id>  Budget for list and add commands (default: BUCKETEER_BUDGET)
   --starting-balance <amount>
                  Dollars, signed: 1000, 1,000.50, -412.09 (a card's debt is negative; default 0)
-  --date <date>  Balance date for a new account (default: today)
+  --account <id> Account for tx list and tx add
+  --date <date>  Balance date for a new account, or a transaction's date
+                 (default: today in the server's time zone)
+  --income       File the transaction as Income, which adds to Ready to assign
+  --bucket <id>  File the transaction to a bucket: money out is spent, money in is assigned to it
+  --line <bucketId>:<amount>
+                 One line of a split, repeated for each bucket (at least two). Lines share the
+                 transaction's sign and add up to --amount
+  --transfer <account-id>
+                 Move money to (negative amount) or from (positive) another account in the budget;
+                 the other side is recorded there, and no bucket or Ready to assign changes
   --type <type>  For buckets: recurring (--amount per month), goal (--amount by --by), or plain (default)
   --amount <amount>
-                 Dollars: 160, 3,000.00
+                 Dollars: 160, 3,000.00 (signed for transactions, where Income is positive;
+                 signed for assign, where -50 takes money back to Ready to assign)
   --by <month>   A goal's month, YYYY-MM
+  --month <month>
+                 YYYY-MM: for tx list, only that month's transactions, then the balance at its end;
+                 for month, assign and rain, the month (default: the server's current month)
+  --dry-run      For rain: show what each bucket would get, without moving any money
   --colour <hue> sky, denim, blue, slate, teal, mint, green, forest,
                  lime, olive, sun, cocoa, peach, tangerine, rose, plum (default: least used)
   --position <n> 1 is first
@@ -80,6 +109,15 @@ try {
       colour: { type: "string" },
       position: { type: "string" },
       archived: { type: "boolean" },
+      account: { type: "string" },
+      income: { type: "boolean" },
+      bucket: { type: "string" },
+      line: { type: "string", multiple: true },
+      transfer: { type: "string" },
+      payee: { type: "string" },
+      memo: { type: "string" },
+      month: { type: "string" },
+      "dry-run": { type: "boolean" },
     },
   });
   jsonOutput = values.json;
@@ -130,7 +168,7 @@ try {
         name: values.name,
         type: values.type as AccountType,
         startingBalance: parseMoney(values["starting-balance"] ?? "0"),
-        startingDate: values.date ?? today(),
+        ...(values.date !== undefined && { startingDate: values.date }),
       });
       result = account;
       if (!jsonOutput) console.log(formatAccount(account));
@@ -217,8 +255,97 @@ try {
       const bucket = await client.restoreBucket(id);
       result = bucket;
       if (!jsonOutput) console.log(formatBucket(bucket, await client.listBucketTable(bucket.budgetId)));
+    } else if (command === "ready") {
+      options(1, "budget");
+      const ready = await client.readyToAssign(budget());
+      result = ready;
+      if (!jsonOutput) console.log(formatMoney(ready.readyToAssign));
+    } else if (command === "month" && action === undefined) {
+      options(1, "budget", "month");
+      const view = await client.bucketMonth(budget(), values.month ?? await currentMonth(budget()));
+      result = view;
+      if (!jsonOutput) {
+        const { month, readyToAssign, income, assigned, spent } = view.summary;
+        const summary = `${month}\tReady to assign\t${formatMoney(readyToAssign)}\tIncome\t${formatMoney(income)}\tAssigned\t${formatMoney(assigned)}\tSpent\t${formatMoney(spent)}`;
+        console.log([summary, ...view.buckets.map((bucket) => formatBucketMonth(bucket, view.groups))].join("\n"));
+      }
+    } else if (command === "assign" && action !== undefined && values.amount !== undefined) {
+      options(2, "amount", "month");
+      const budgetId = (await client.openBucket(action)).budgetId;
+      const assigned = await client.assign(action, { month: values.month ?? await currentMonth(budgetId), amount: parseMoney(values.amount) });
+      result = assigned;
+      if (!jsonOutput) console.log(formatBucketMonth(assigned, (await client.bucketMonth(budgetId, assigned.month)).groups));
+    } else if (command === "rain" && action === undefined) {
+      options(1, "budget", "month", "dry-run");
+      const budgetId = budget();
+      const month = values.month ?? await currentMonth(budgetId);
+      const rain: Rain = values["dry-run"] ? await client.planRain(budgetId, month) : await client.rain(budgetId, month);
+      result = rain;
+      if (!jsonOutput) {
+        const names = await categoryNames(budgetId);
+        const lines = rain.fills.length ? rain.fills.map((fill) => `${names.get(fill.bucketId) ?? fill.bucketId}\t${formatMoney(fill.amount)}`) : ["Nothing to fill."];
+        console.log([...lines, `Total\t${formatMoney(rain.total)}`, ...(rain.rainId ? [`Rain ${rain.rainId}`] : [])].join("\n"));
+      }
+    } else if (command === "rain" && action === "undo" && id) {
+      options(3);
+      await client.undoRain(id);
+      result = { rainId: id, undone: true };
+      if (!jsonOutput) console.log(`Undid rain ${id}.`);
+    } else if (command === "tx" && action === "list" && values.account !== undefined) {
+      options(2, "account", "month");
+      const names = await categoryNames((await client.openAccount(values.account)).budgetId);
+      const listed = (rows: { transactions: RegisterTransaction[] }) => rows.transactions.length ? rows.transactions.map((row) => formatTransaction(row, names)).join("\n") : "No transactions.";
+      if (values.month === undefined) {
+        const register = await client.listTransactions(values.account);
+        result = register;
+        if (!jsonOutput) console.log(listed(register));
+      } else {
+        const month = await client.accountMonth(values.account, values.month);
+        result = month;
+        if (!jsonOutput) console.log(`${listed(month)}\nBalance at end of ${values.month}\t${formatMoney(month.balance)}`);
+      }
+    } else if (command === "tx" && action === "add" && values.account !== undefined && values.amount !== undefined) {
+      options(2, "account", "amount", "income", "bucket", "line", "transfer", "date", "payee", "memo");
+      const category = categoryOption(values);
+      if (!category) throw new ApiError("usage", "Choose a category with --income, --bucket <id>, --line <bucketId>:<amount> or --transfer <account-id>.");
+      const added = await client.addTransaction(values.account, { amount: parseMoney(values.amount), category, ...transactionFields(values) });
+      result = added;
+      if (!jsonOutput) console.log(await inRegister(added));
+    } else if (command === "tx" && action === "edit" && id && ["amount", "income", "bucket", "line", "transfer", "date", "payee", "memo"].some((key) => key in values)) {
+      options(3, "amount", "income", "bucket", "line", "transfer", "date", "payee", "memo");
+      const category = categoryOption(values);
+      const edited = await client.editTransaction(id, {
+        ...(values.amount !== undefined && { amount: parseMoney(values.amount) }),
+        ...(category && { category }),
+        ...transactionFields(values),
+      });
+      result = edited;
+      if (!jsonOutput) console.log(await inRegister(edited));
+    } else if (command === "tx" && action === "delete" && id) {
+      options(3);
+      await client.deleteTransaction(id);
+      result = { id, deleted: true };
+      if (!jsonOutput) console.log(`Deleted transaction ${id}.`);
     } else {
       throw new ApiError("usage", help.trim());
+    }
+
+    // The transaction as its account's register shows it, with the running balance.
+    async function inRegister(transaction: Transaction): Promise<string> {
+      const { transactions } = await client.listTransactions(transaction.accountId);
+      const row = transactions.find((found) => found.id === transaction.id) ?? { ...transaction, runningBalance: 0 };
+      return formatTransaction(row, await categoryNames(transaction.budgetId));
+    }
+
+    // The server's current month, which comes with its month range.
+    async function currentMonth(budgetId: string): Promise<string> {
+      return (await client.monthRange(budgetId)).current;
+    }
+
+    // Bucket and account names by ID, for the category column.
+    async function categoryNames(budgetId: string): Promise<Map<string, string>> {
+      const [table, accounts] = await Promise.all([client.listBucketTable(budgetId), client.listAccounts(budgetId)]);
+      return new Map([...table.buckets, ...accounts].map((named) => [named.id, named.name]));
     }
     if (jsonOutput) console.log(JSON.stringify(result));
   }
@@ -256,22 +383,65 @@ function position(text: string): number {
   return Number(text) - 1;
 }
 
+// The one category option given, or undefined for none; two is a usage error. Repeated --line options make one split.
+function categoryOption(values: { income?: boolean; bucket?: string; line?: string[]; transfer?: string }): CategoryInput | undefined {
+  const given: CategoryInput[] = [];
+  if (values.income) given.push({ kind: "income" });
+  if (values.bucket !== undefined) given.push({ kind: "bucket", bucketId: values.bucket });
+  if (values.line !== undefined) given.push({ kind: "split", lines: values.line.map(splitLine) });
+  if (values.transfer !== undefined) given.push({ kind: "transfer", accountId: values.transfer });
+  if (given.length > 1) throw new ApiError("usage", "Give one category: --income, --bucket <id>, --line <bucketId>:<amount> (repeated) or --transfer <account-id>.");
+  return given[0];
+}
+
+// "<bucketId>:<amount>", amount in signed dollars.
+function splitLine(text: string): SplitLine {
+  const colon = text.lastIndexOf(":");
+  if (colon <= 0) throw new BudgetError("invalid_input", "Write each split line as --line <bucketId>:<amount>.");
+  return { bucketId: text.slice(0, colon), amount: parseMoney(text.slice(colon + 1)), memo: "" };
+}
+
+function transactionFields(values: { date?: string; payee?: string; memo?: string }) {
+  return {
+    ...(values.date !== undefined && { date: values.date }),
+    ...(values.payee !== undefined && { payee: values.payee }),
+    ...(values.memo !== undefined && { memo: values.memo }),
+  };
+}
+
+// id, date, payee, category, amount, running balance.
+function formatTransaction(transaction: RegisterTransaction, names: Map<string, string>): string {
+  const { category: filed } = transaction;
+  const category = filed.kind === "income" ? "Income"
+    : filed.kind === "split" ? `Split (${filed.lines.length})`
+    : filed.kind === "transfer" ? `Transfer → ${names.get(filed.accountId) ?? filed.accountId}`
+    : names.get(filed.bucketId) ?? filed.bucketId;
+  return [transaction.id, transaction.date, transaction.payee, category, formatMoney(transaction.amount), formatMoney(transaction.runningBalance)].join("\t");
+}
+
 function formatGroup(group: BucketGroup): string {
   return `${group.id}\t${group.name}`;
+}
+
+function targetOf(bucket: Bucket): string {
+  return bucket.amount === null ? ""
+    : bucket.type === "goal" ? `${formatMoney(bucket.amount)} by ${bucket.goalMonth}`
+    : `${formatMoney(bucket.amount)}/month`;
 }
 
 // id, group, name, type, target, available, and "archived" when archived.
 function formatBucket(bucket: Bucket, table: BucketTable): string {
   const group = table.groups.find((candidate) => candidate.id === bucket.groupId)?.name ?? "";
-  const target = bucket.amount === null ? ""
-    : bucket.type === "goal" ? `${formatMoney(bucket.amount)} by ${bucket.goalMonth}`
-    : `${formatMoney(bucket.amount)}/month`;
-  const fields = [bucket.id, group, bucket.name, bucket.type, target, formatMoney(bucket.available)];
+  const fields = [bucket.id, group, bucket.name, bucket.type, targetOf(bucket), formatMoney(bucket.available)];
   return (bucket.archived ? [...fields, "archived"] : fields).join("\t");
 }
 
-// Today in the CLI's own timezone, as YYYY-MM-DD.
-function today(): string {
-  const now = new Date();
-  return [now.getFullYear(), now.getMonth() + 1, now.getDate()].map((part, index) => String(part).padStart(index ? 2 : 4, "0")).join("-");
+// group, name, target, assigned, spent, available in the month, and "archived" when archived. A goal's target
+// ends with the month's share, written like a recurring bucket's amount, until nothing is left to save.
+function formatBucketMonth(bucket: BucketMonth, groups: readonly GroupMonth[]): string {
+  const group = groups.find((candidate) => candidate.id === bucket.groupId)?.name ?? "";
+  const target = bucket.monthlyShare ? `${targetOf(bucket)}, ${formatMoney(bucket.monthlyShare)}/month` : targetOf(bucket);
+  const fields = [group, bucket.name, target, formatMoney(bucket.assigned), formatMoney(bucket.spent), formatMoney(bucket.available)];
+  return (bucket.archived ? [...fields, "archived"] : fields).join("\t");
 }
+

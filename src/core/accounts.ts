@@ -5,15 +5,17 @@ export const MAX_ACCOUNT_NAME_LENGTH = 120;
 export const MAX_CENTS = 99_999_999_999;
 export const ACCOUNT_TYPES: readonly AccountType[] = ["checking", "savings", "credit-card", "cash"];
 
-// The one place an account's balance is computed. The spending slice adds transactions here.
-export function accountBalance(account: { startingBalance: number }): number {
-  return account.startingBalance;
+// The one place an account's balance is computed: the starting balance plus the sum of all its
+// transactions, including any dated before the starting date (ADR-0006).
+export function accountBalance(account: { startingBalance: number; activity: number }): number {
+  return account.startingBalance + account.activity;
 }
 
 // Owner rule: an account's starting balance counts as money to assign, and a card's negative
-// opening balance reduces it. Closed accounts are included.
-export function sumReadyToAssign(accounts: readonly { startingBalance: number }[]): number {
-  return accounts.reduce((total, account) => total + account.startingBalance, 0);
+// starting balance reduces it. Closed accounts are included. Income adds to it (ADR-0002), and every entry
+// in the assignment ledger, in any month, takes from it (ADR-0001, ADR-0003). It may be negative.
+export function sumReadyToAssign(accounts: readonly { startingBalance: number }[], income: number, assigned: number): number {
+  return accounts.reduce((total, account) => total + account.startingBalance, income) - assigned;
 }
 
 export function accountKey(name: string): string {
@@ -69,7 +71,7 @@ export function readNewAccount(input: unknown): NewAccountInput {
     name: readName(fields.name),
     type: readType(fields.type),
     startingBalance: readCents(fields.startingBalance),
-    startingDate: readDate(fields.startingDate),
+    ...("startingDate" in fields && { startingDate: readDate(fields.startingDate) }),
   };
 }
 

@@ -1,6 +1,6 @@
 import type {
-  Account, AccountEditInput, ArchiveResult, Bucket, BucketEditInput, BucketGroup, BucketRevertInput, BucketMoveInput, BucketTable, Budget, BudgetNameInput,
-  GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput,
+  Account, AccountMonth, MonthRange, Rain, RainPlan, AccountEditInput, ArchiveResult, AssignInput, Bucket, BucketMonth, BucketMonthView, BucketEditInput, BucketGroup, BucketRevertInput, BucketMoveInput, BucketTable, Budget, BudgetNameInput,
+  GroupNameInput, Health, MoveInput, NewAccountInput, NewBucketInput, NewTransactionInput, PayeeHistory, RegisterTransaction, Transaction, TransactionEditInput,
 } from "./core/index.js";
 
 export class ApiError extends Error {
@@ -41,6 +41,7 @@ export function createClient(baseUrl: string) {
   const budgetPath = (id: string) => `/api/budgets/${encodeURIComponent(id)}`;
   const group = (id: string) => `/api/groups/${encodeURIComponent(id)}`;
   const bucket = (id: string) => `/api/buckets/${encodeURIComponent(id)}`;
+  const transaction = (id: string) => `/api/transactions/${encodeURIComponent(id)}`;
 
   return {
     status: () => request<Health>("/health"),
@@ -74,5 +75,25 @@ export function createClient(baseUrl: string) {
     moveBucket: (id: string, input: BucketMoveInput) => request<Bucket>(`${bucket(id)}/move`, send("POST", input)),
     archiveBucket: (id: string) => request<ArchiveResult>(`${bucket(id)}/archive`, send("POST")),
     restoreBucket: (id: string) => request<Bucket>(`${bucket(id)}/restore`, send("POST")),
+    payees: (budgetId: string) => request<PayeeHistory[]>(`${budgetPath(budgetId)}/payees`),
+    readyToAssign: (budgetId: string) => request<{ readyToAssign: number }>(`${budgetPath(budgetId)}/ready-to-assign`),
+    recentTransactions: (budgetId: string, limit: number) => request<Transaction[]>(`${budgetPath(budgetId)}/transactions?limit=${limit}`),
+    listTransactions: (accountId: string) => request<{ transactions: RegisterTransaction[] }>(`${account(accountId)}/transactions`),
+    addTransaction: (accountId: string, input: NewTransactionInput) => request<Transaction>(`${account(accountId)}/transactions`, send("POST", input)),
+    openTransaction: (id: string) => request<Transaction>(transaction(id)),
+    editTransaction: (id: string, input: TransactionEditInput) => request<Transaction>(transaction(id), send("PATCH", input)),
+    deleteTransaction: (id: string) => request<void>(transaction(id), send("DELETE")),
+    /** The budget's month range and the server's today, "YYYY-MM-DD" (ADR-0007). */
+    monthRange: (budgetId: string) => request<MonthRange & { today: string }>(`${budgetPath(budgetId)}/month-range`),
+    accountBalances: (budgetId: string, month: string) =>
+      request<Record<string, number>>(`${budgetPath(budgetId)}/account-balances?month=${encodeURIComponent(month)}`),
+    bucketMonth: (budgetId: string, month: string) => request<BucketMonthView>(`${budgetPath(budgetId)}/months/${encodeURIComponent(month)}`),
+    assign: (bucketId: string, input: AssignInput) => request<BucketMonth>(`${bucket(bucketId)}/assign`, send("POST", input)),
+    planRain: (budgetId: string, month: string) => request<RainPlan>(`${budgetPath(budgetId)}/months/${encodeURIComponent(month)}/rain`),
+    /** With `expect`, the preview being confirmed, the server refuses with rain_changed if the plan differs now. */
+    rain: (budgetId: string, month: string, expect?: RainPlan) =>
+      request<Rain>(`${budgetPath(budgetId)}/months/${encodeURIComponent(month)}/rain`, send("POST", expect === undefined ? undefined : { expect })),
+    undoRain: (rainId: string) => request<void>(`/api/rains/${encodeURIComponent(rainId)}/undo`, send("POST")),
+    accountMonth: (accountId: string, month: string) => request<AccountMonth>(`${account(accountId)}/months/${encodeURIComponent(month)}`),
   };
 }

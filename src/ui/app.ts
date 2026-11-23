@@ -1,12 +1,17 @@
 // Entry point: routing and loading. The History API drives two kinds of page:
 //   /                          -> the last-used (or first) budget's Accounts page, or the first-run card
 //   /budgets/<id>/accounts     -> the Accounts page
+//   /budgets/<id>/accounts/<accountId> -> that account's register
 //   /budgets/<id>/buckets      -> the Buckets page
+// The Accounts and Buckets pages take ?month=YYYY-MM (absent for the current month); in-app links keep the chosen month.
 import { createClient } from "../client.js";
-import type { Budget } from "../core/index.js";
+import type { Account, Budget, MonthRange } from "../core/index.js";
 import { createAccountsPage } from "./accounts.js";
 import { createBucketsPage } from "./buckets.js";
 import { byId, el, messageOf, setNote } from "./dom.js";
+import { createMonthHeader } from "./month-header.js";
+import { createRegisterPage } from "./register.js";
+import { RECENT_LIMIT, recentActivity } from "./recent-activity.js";
 import { field, openSheet, textInput } from "./sheet.js";
 import { accountsPath, createShell } from "./shell.js";
 import type { Section } from "./shell.js";
@@ -16,6 +21,11 @@ const main = byId("main");
 const budgetKey = "bucketeer-budget";
 let routeSeq = 0;
 let current: Budget | undefined;
+// The month chosen on a month header and the server's current month, kept while moving between pages.
+let chosenMonth: string | undefined;
+let thisMonth: string | undefined;
+// The header control that chose the month, refocused once the new month has drawn.
+let monthFocus: "previous" | "next" | "picker" | undefined;
 
 function lastUsedBudget(): string | undefined {
   try {
@@ -43,9 +53,56 @@ const shell = createShell({
   },
 });
 
+interface Side {
+  accounts: Account[];
+}
+
+/** The sidebar's figures: every account. Ready to assign lives in the Buckets page's summary strip. */
+async function loadSide(budgetId: string): Promise<Side> {
+  return { accounts: await client.listAccounts(budgetId) };
+}
+
+function showSide(side: Side | null): void {
+  shell.setAccounts(side?.accounts ?? null);
+}
+
+/** The query that carries the chosen month, or "" for the current month. */
+const monthQuery = (month: string | undefined) => month && month !== thisMonth ? `?month=${month}` : "";
+
+/** Routes to a path; a path without a query keeps the chosen month. */
 async function navigate(path: string): Promise<void> {
-  if (path !== window.location.pathname) window.history.pushState(null, "", path);
+  const target = path.includes("?") ? path : `${path}${monthQuery(chosenMonth)}`;
+  if (target !== window.location.pathname + window.location.search) window.history.pushState(null, "", target);
   await route();
+}
+
+/** The URL's month if it is inside the range, else the current month; a bad one is dropped from the URL. */
+function monthFromUrl(range: MonthRange): string {
+  const current = range.current;
+  thisMonth = current;
+  const requested = new URLSearchParams(window.location.search).get("month");
+  const valid = requested !== null && /^\d{4}-(0[1-9]|1[0-2])$/.test(requested) && requested >= range.first && requested <= range.last;
+  if (requested !== null && (!valid || requested === current)) window.history.replaceState(null, "", window.location.pathname);
+  chosenMonth = valid ? requested : current;
+  return chosenMonth;
+}
+
+function monthHeader(range: MonthRange, month: string) {
+  return createMonthHeader({
+    range,
+    month,
+    choose(next, from) {
+      chosenMonth = next;
+      monthFocus = from;
+      void navigate(window.location.pathname);
+    },
+  });
+}
+
+/** Puts focus back on the month header after a month change redraws the page. */
+function restoreMonthFocus(header: ReturnType<typeof createMonthHeader>): void {
+  if (monthFocus) header.focus(monthFocus);
+  monthFocus = undefined;
 }
 
 /** Name dialog for both "New budget" and "Rename budget". */
@@ -119,7 +176,7 @@ async function route(): Promise<void> {
     if (budgets.length === 0) {
       current = undefined;
       shell.setBudgets(budgets, undefined);
-      shell.setAccounts(null);
+      showSide(null);
       if (path !== "/") window.history.replaceState(null, "", "/");
       showFirstRun();
       return;
@@ -127,11 +184,13 @@ async function route(): Promise<void> {
 
     let id: string | undefined;
     let section: Section = "accounts";
-    const match = /^\/budgets\/([^/]+)\/(accounts|buckets)$/.exec(path);
+    let accountId: string | undefined;
+    const match = /^\/budgets\/([^/]+)\/(?:(buckets)|accounts(?:\/([^/]+))?)$/.exec(path);
     if (match) {
-      section = match[2] as Section;
+      section = match[2] ? "buckets" : "accounts";
       try {
         id = decodeURIComponent(match[1]!);
+        if (match[3] !== undefined) accountId = decodeURIComponent(match[3]);
       } catch {
         id = "";
       }
@@ -145,59 +204,128 @@ async function route(): Promise<void> {
     shell.setBudgets(budgets, current);
     shell.setSection(section);
     if (!current) {
-      shell.setAccounts(null);
+      showSide(null);
       showMessage("Budget not found", "That budget does not exist.", false);
       return;
     }
     const budget = current;
     rememberBudget(budget.id);
 
-    if (section === "buckets") {
-      const [accounts, table] = await Promise.all([client.listAccounts(budget.id), client.listBucketTable(budget.id)]);
+    if (accountId !== undefined) {
+      const side = await loadSide(budget.id);
       if (stale()) return;
+      showSide(side);
+      const account = side.accounts.find((candidate) => candidate.id === accountId);
+      if (!account) {
+        showMessage("Account not found", "That account does not exist in this budget.", false);
+        return;
+      }
+      const range = await client.monthRange(budget.id);
+      if (stale()) return;
+      const month = monthFromUrl(range);
+      const load = async () => {
+        const [register, table, payees] = await Promise.all([client.accountMonth(account.id, month), client.listBucketTable(budget.id), client.payees(budget.id)]);
+        return { register, table, payees };
+      };
+      const first = await load();
+      if (stale()) return;
+      const header = monthHeader(range, month);
+      const page = createRegisterPage({
+        client,
+        account,
+        snack: shell.showSnack,
+        monthHeader: header.root,
+        month,
+        past: month < range.current,
+        today: range.today,
+        async refresh() {
+          try {
+            const [next, data] = await Promise.all([loadSide(budget.id), load()]);
+            if (stale()) return;
+            showSide(next);
+            const current = next.accounts.find((candidate) => candidate.id === account.id);
+            if (current) page.render({ account: current, accounts: next.accounts, ...data });
+          } catch {
+            if (!stale()) page.note("Your change was saved, but the register could not refresh. Reload to try again.");
+          }
+        },
+      });
+      page.render({ account, accounts: side.accounts, ...first });
+      main.replaceChildren(page.root);
+      restoreMonthFocus(header);
+      document.title = `${account.name} · ${budget.name} · Bucketeer`;
+      return;
+    }
+
+    if (section === "buckets") {
+      const [side, range, recent] = await Promise.all([loadSide(budget.id), client.monthRange(budget.id), client.recentTransactions(budget.id, RECENT_LIMIT)]);
+      if (stale()) return;
+      const month = monthFromUrl(range);
+      const load = async () => {
+        const [table, view] = await Promise.all([client.listBucketTable(budget.id), client.bucketMonth(budget.id, month)]);
+        return { table, month: view };
+      };
+      const first = await load();
+      if (stale()) return;
+      const header = monthHeader(range, month);
       const page = createBucketsPage({
         client,
         budget,
+        monthHeader: header.root,
+        thisMonth: range.current,
         snack: shell.showSnack,
         announce: shell.announce,
         async reload() {
-          const next = await client.listBucketTable(budget.id);
+          const [next, data] = await Promise.all([loadSide(budget.id), load()]);
           if (stale()) throw new Error("This page has changed.");
-          return next;
+          showSide(next);
+          return data;
         },
       });
-      shell.setAccounts(accounts);
-      page.render(table);
+      showSide(side);
+      page.render(first);
+      page.root.append(recentActivity({ transactions: recent, accounts: side.accounts, table: first.table, showAccount: false }) ?? "");
       main.replaceChildren(page.root);
+      restoreMonthFocus(header);
       document.title = `Buckets · ${budget.name} · Bucketeer`;
       return;
     }
 
-    const accounts = await client.listAccounts(budget.id);
+    const [side, range] = await Promise.all([loadSide(budget.id), client.monthRange(budget.id)]);
     if (stale()) return;
+    const month = monthFromUrl(range);
+    const [balances, recent, table] = await Promise.all([
+      client.accountBalances(budget.id, month), client.recentTransactions(budget.id, RECENT_LIMIT), client.listBucketTable(budget.id)]);
+    if (stale()) return;
+    const header = monthHeader(range, month);
     const page = createAccountsPage({
       client,
       budget,
+      monthHeader: header.root,
+      today: range.today,
       snack: shell.showSnack,
+      navigate: (target) => void navigate(target),
       async refresh() {
         try {
-          const next = await client.listAccounts(budget.id);
+          const [next, nextBalances] = await Promise.all([loadSide(budget.id), client.accountBalances(budget.id, month)]);
           if (stale()) return;
-          shell.setAccounts(next);
-          page.render(next);
+          showSide(next);
+          page.render(next.accounts, nextBalances);
           page.note(null);
         } catch {
           if (!stale()) page.note("Your change was saved, but the accounts could not refresh. Reload to try again.");
         }
       },
     });
-    shell.setAccounts(accounts);
-    page.render(accounts);
+    showSide(side);
+    page.render(side.accounts, balances);
+    page.root.append(recentActivity({ transactions: recent, accounts: side.accounts, table, showAccount: true }) ?? "");
     main.replaceChildren(page.root);
+    restoreMonthFocus(header);
     document.title = `Accounts · ${budget.name} · Bucketeer`;
   } catch (error) {
     if (stale()) return;
-    shell.setAccounts(null);
+    showSide(null);
     showMessage("Could not load", messageOf(error));
   } finally {
     if (!stale()) main.removeAttribute("aria-busy");

@@ -324,7 +324,7 @@ test("the dark theme renders the page and its dialogs", { timeout: 30_000 }, asy
   assert.deepEqual(app.pageErrors, []);
 });
 
-for (const width of [390, 375]) {
+for (const width of [390, 375, 360]) {
   test(`at ${width}px nothing overflows, targets are touchable and dialogs are bottom sheets`, { timeout: 45_000 }, async (t) => {
     const app = await openApp(t, { width, height: 780 });
     const { page } = app;
@@ -344,8 +344,10 @@ for (const width of [390, 375]) {
     // The sidebar becomes a top bar: brand, picker, theme toggle, then a tab row; the account list is on the page.
     assert.equal(await page.locator("#side-accounts").isVisible(), false);
     const box = async (locator: Locator) => (await locator.boundingBox())!;
+    // The page's own width: a desktop browser's scrollbar, where it takes room, sits beside the page.
+    const pageWidth = await page.evaluate(() => document.documentElement.clientWidth);
     const top = await box(page.locator(".side"));
-    assert.ok(top.y === 0 && top.width === width);
+    assert.ok(top.y === 0 && top.width === pageWidth, `The top bar is ${top.width}px wide on a ${pageWidth}px page.`);
     for (const locator of [page.locator("#budget-button"), page.locator("#theme-toggle"), page.locator("#nav-accounts"), page.getByRole("button", { name: "Add account" }), page.getByRole("button", { name: "Edit Checking" }), page.getByRole("button", { name: "Reopen Old savings" }), page.locator("details.closed summary")]) {
       const size = await box(locator);
       assert.ok(size.height >= 44 && size.width >= 44, `${await locator.textContent()} is ${size.width}x${size.height}`);
@@ -385,8 +387,20 @@ for (const width of [390, 375]) {
     // The picker menu fits inside the viewport.
     await page.locator("#budget-button").click();
     const menu = await box(page.locator("#budget-menu"));
-    assert.ok(menu.x >= 0 && menu.x + menu.width <= width);
+    assert.ok(menu.x >= 0 && menu.x + menu.width <= width, JSON.stringify(menu));
     assert.equal(await noOverflow(), true);
     assert.deepEqual(app.pageErrors, []);
   });
 }
+
+test("a new account's balance date defaults to the server's today, not the browser's", { timeout: 60_000 }, async (t) => {
+  // Kiritimati (UTC+14) is always a day or more ahead of Pago Pago (UTC−11).
+  const serverZone = "Pacific/Pago_Pago";
+  const app = await openApp(t, { serverTimeZone: serverZone, browserTimeZone: "Pacific/Kiritimati" });
+  const { page } = app;
+  await openAccounts(app);
+  const serverToday = new Intl.DateTimeFormat("en-CA", { timeZone: serverZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  await page.getByRole("button", { name: "Add account" }).click();
+  assert.equal(await page.locator("dialog").getByLabel("Balance on").inputValue(), serverToday);
+  assert.deepEqual(app.pageErrors, []);
+});

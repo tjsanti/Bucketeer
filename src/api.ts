@@ -18,6 +18,10 @@ const assets = new Map<string, Asset>([
   // Shared with the browser: money.js imports types.js at runtime.
   ["/core/money.js", { file: "./core/money.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
   ["/core/types.js", { file: "./core/types.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
+  // Core's wording for a refused add or take, shown by the pill and the phone sheet while typing.
+  ["/core/refusals.js", { file: "./core/refusals.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
+  // Month arithmetic for the month header, shared like money.js.
+  ["/core/months.js", { file: "./core/months.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
   // Palette order and the least-used colour rule, shared with the browser like money.js.
   ["/core/colours.js", { file: "./core/colours.js", type: "text/javascript; charset=utf-8", cache: revalidate }],
 ]);
@@ -28,7 +32,7 @@ function findAsset(pathname: string): Asset | undefined {
   const known = assets.get(pathname);
   if (known) return known;
   // Path-routed pages: the UI reads the budget ID from the URL.
-  if (/^\/budgets\/[^/]+\/(?:accounts|buckets)\/?$/.test(pathname)) return assets.get("/");
+  if (/^\/budgets\/[^/]+\/(?:accounts|buckets|accounts\/[^/]+)\/?$/.test(pathname)) return assets.get("/");
   // Compiled UI modules (app.js, theme.js, accounts.js, ...) live flat in dist/ui.
   const script = /^\/ui\/([a-z][a-z0-9-]*\.js)$/.exec(pathname)?.[1];
   if (script) return { file: `./ui/${script}`, type: "text/javascript; charset=utf-8", cache: revalidate };
@@ -54,7 +58,7 @@ class HttpError extends Error {
   }
 }
 
-const statuses = { invalid_input: 400, not_found: 404, name_taken: 409, balance_not_zero: 409, group_not_empty: 409, bucket_overspent: 409, bucket_changed: 409 } as const;
+const statuses = { invalid_input: 400, not_found: 404, name_taken: 409, balance_not_zero: 409, group_not_empty: 409, bucket_overspent: 409, bucket_changed: 409, account_closed: 409, bucket_archived: 409, bucket_has_future: 409, not_enough_ready: 409, not_enough_available: 409, money_moved: 409, rain_changed: 409 } as const;
 
 function decodeId(segment: string, what: string): string {
   try {
@@ -122,6 +126,90 @@ export function createApi(core: Bucketeer) {
         json(response, 201, account);
         return;
       }
+      const budgetReady = /^\/api\/budgets\/([^/]+)\/ready-to-assign$/.exec(pathname)?.[1];
+      if (budgetReady && request.method === "GET") {
+        json(response, 200, { readyToAssign: core.readyToAssign(decodeId(budgetReady, "Budget")) });
+        return;
+      }
+      const budgetPayees = /^\/api\/budgets\/([^/]+)\/payees$/.exec(pathname)?.[1];
+      if (budgetPayees && request.method === "GET") {
+        json(response, 200, core.payees(decodeId(budgetPayees, "Budget")));
+        return;
+      }
+      // Recent activity: ?limit=n, the ten newest by default.
+      const budgetTransactions = /^\/api\/budgets\/([^/]+)\/transactions$/.exec(pathname)?.[1];
+      if (budgetTransactions && request.method === "GET") {
+        const limit = new URL(request.url ?? "/", "http://localhost").searchParams.get("limit");
+        const read = limit === null ? 10 : /^\d{1,9}$/.test(limit) ? Number(limit) : limit;
+        json(response, 200, core.listBudgetTransactions(decodeId(budgetTransactions, "Budget"), { limit: read }));
+        return;
+      }
+      const budgetRange = /^\/api\/budgets\/([^/]+)\/month-range$/.exec(pathname)?.[1];
+      if (budgetRange && request.method === "GET") {
+        // With the range, the server's today: clients default new dates to it, never their own clock (ADR-0007).
+        json(response, 200, { ...core.monthRange(decodeId(budgetRange, "Budget")), today: core.today() });
+        return;
+      }
+      const budgetBalances = /^\/api\/budgets\/([^/]+)\/account-balances$/.exec(pathname)?.[1];
+      if (budgetBalances && request.method === "GET") {
+        const month = new URL(request.url ?? "/", "http://localhost").searchParams.get("month");
+        json(response, 200, core.accountBalances(decodeId(budgetBalances, "Budget"), month ?? ""));
+        return;
+      }
+      const budgetRain = /^\/api\/budgets\/([^/]+)\/months\/([^/]+)\/rain$/.exec(pathname);
+      if (budgetRain?.[1] && budgetRain[2]) {
+        const [budgetId, month] = [decodeId(budgetRain[1], "Budget"), decodeId(budgetRain[2], "Month")];
+        if (request.method === "GET") {
+          json(response, 200, core.planRain(budgetId, month));
+          return;
+        }
+        if (request.method === "POST") {
+          // The body, { expect: plan }, is optional: without one the server rains whatever the plan is now.
+          const body = request.headers["content-type"] === undefined ? undefined : await readJson(request);
+          json(response, 201, core.rain(budgetId, month, body));
+          return;
+        }
+      }
+      const rainUndo = /^\/api\/rains\/([^/]+)\/undo$/.exec(pathname)?.[1];
+      if (rainUndo && request.method === "POST") {
+        core.undoRain(decodeId(rainUndo, "Rain"));
+        response.writeHead(204, { "cache-control": "no-store" }).end();
+        return;
+      }
+      const budgetMonth = /^\/api\/budgets\/([^/]+)\/months\/([^/]+)$/.exec(pathname);
+      if (budgetMonth?.[1] && budgetMonth[2] && request.method === "GET") {
+        json(response, 200, core.bucketMonth(decodeId(budgetMonth[1], "Budget"), decodeId(budgetMonth[2], "Month")));
+        return;
+      }
+      const accountMonth = /^\/api\/accounts\/([^/]+)\/months\/([^/]+)$/.exec(pathname);
+      if (accountMonth?.[1] && accountMonth[2] && request.method === "GET") {
+        json(response, 200, core.accountMonth(decodeId(accountMonth[1], "Account"), decodeId(accountMonth[2], "Month")));
+        return;
+      }
+      const accountTransactions = /^\/api\/accounts\/([^/]+)\/transactions$/.exec(pathname)?.[1];
+      if (accountTransactions && request.method === "GET") {
+        json(response, 200, core.listTransactions(decodeId(accountTransactions, "Account")));
+        return;
+      }
+      if (accountTransactions && request.method === "POST") {
+        const id = decodeId(accountTransactions, "Account");
+        const created = core.addTransaction(id, await readJson(request));
+        response.setHeader("location", `/api/transactions/${encodeURIComponent(created.id)}`);
+        json(response, 201, created);
+        return;
+      }
+      const transactionRoute = /^\/api\/transactions\/([^/]+)$/.exec(pathname)?.[1];
+      if (transactionRoute && ["GET", "PATCH", "DELETE"].includes(request.method ?? "")) {
+        const id = decodeId(transactionRoute, "Transaction");
+        if (request.method === "GET") json(response, 200, core.openTransaction(id));
+        else if (request.method === "PATCH") json(response, 200, core.editTransaction(id, await readJson(request)));
+        else {
+          core.deleteTransaction(id);
+          response.writeHead(204, { "cache-control": "no-store" });
+          response.end();
+        }
+        return;
+      }
       const accountRoute = /^\/api\/accounts\/([^/]+)(?:\/(close|reopen))?$/.exec(pathname);
       if (accountRoute?.[1]) {
         const id = decodeId(accountRoute[1], "Account");
@@ -176,6 +264,11 @@ export function createApi(core: Bucketeer) {
           json(response, 200, core.moveGroup(id, await readJson(request)));
           return;
         }
+      }
+      const bucketAssign = /^\/api\/buckets\/([^/]+)\/assign$/.exec(pathname)?.[1];
+      if (bucketAssign && request.method === "POST") {
+        json(response, 200, core.assign(decodeId(bucketAssign, "Bucket"), await readJson(request)));
+        return;
       }
       const bucketRoute = /^\/api\/buckets\/([^/]+)(?:\/(move|archive|restore|revert))?$/.exec(pathname);
       if (bucketRoute?.[1]) {

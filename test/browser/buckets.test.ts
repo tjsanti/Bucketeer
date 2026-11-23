@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Locator, Page } from "playwright-core";
-import { openApp, ready, seedBudget } from "./harness.js";
+import { engine, openApp, ready, seedBudget } from "./harness.js";
 import type { App } from "./harness.js";
 
 // Independent expectations, taken from the plan and the locked design (not from the code under test).
@@ -100,6 +100,20 @@ async function eventually(check: () => Promise<void>, timeout = 5_000): Promise<
 
 const rowTop = async (locator: Locator) => (await locator.boundingBox())!.y + 2;
 
+const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const goalMonthButton = (dialog: Locator) => dialog.getByRole("button", { name: /^By\b/ });
+
+/** Opens the dialog's By picker, steps to the month's year and picks the month ("YYYY-MM"). */
+async function pickGoalMonth(page: Page, dialog: Locator, month: string): Promise<void> {
+  await goalMonthButton(dialog).click();
+  const picker = page.getByRole("dialog", { name: "Choose month" });
+  const year = Number(month.slice(0, 4));
+  for (let shown = Number(await picker.locator(".pick-year").textContent()); shown !== year; shown += shown < year ? 1 : -1) {
+    await picker.getByRole("button", { name: shown < year ? "Next year" : "Previous year" }).click();
+  }
+  await picker.getByRole("button", { name: `${monthNames[Number(month.slice(5, 7)) - 1]} ${year}` }).click();
+}
+
 test("the Buckets page is reached from the nav and its deep link; / still opens Accounts", { timeout: 45_000 }, async (t) => {
   const app = await openApp(t);
   const { page } = app;
@@ -132,7 +146,7 @@ test("the Buckets page is reached from the nav and its deep link; / still opens 
   assert.deepEqual((await grid.locator(".bgroup .gname").allTextContents()), ["Fixed", "Everyday", "Goals"]);
   assert.deepEqual(await grid.locator(".bgroup .gcount").allTextContents(), ["2", "3", "1"]);
   const rent = grid.getByRole("row", { name: /Rent/ });
-  assert.equal(compact(await rent.locator(".det").innerText()), "$1,650.00 a month");
+  assert.equal(compact(await rent.locator(".det").innerText()), "$0.00 of $1,650.00 per month");
   const vacation = grid.getByRole("row", { name: /Vacation/ });
   assert.equal(compact(await vacation.locator(".gmeta").innerText()), "of $3,000.00 · Aug 2027");
   assert.equal(await vacation.locator(".pct").textContent(), "0%");
@@ -226,7 +240,7 @@ test("buckets can be added, edited, archived and restored, with Undo for edit an
     rent = (await tableOf(app, budgetId)).buckets.find((b) => b.id === rent.id)!;
     assert.deepEqual([rent.type, rent.amount], ["recurring", 165000]);
   });
-  await eventually(async () => assert.equal(compact(await page.getByRole("row", { name: /Rent/ }).locator(".det").innerText()), "$1,650.00 a month"));
+  await eventually(async () => assert.equal(compact(await page.getByRole("row", { name: /Rent/ }).locator(".det").innerText()), "$0.00 of $1,650.00 per month"));
 
   // Archive from Edit (the zero case): the row moves to the fold; Undo restores it.
   await page.getByRole("button", { name: "Edit Clothing" }).click();
@@ -297,6 +311,15 @@ test("the group dropdown opens without changing the choice, has typeahead and a 
   assert.equal(await list.isVisible(), false);
   assert.equal(compact(await combo.innerText()), "Fixed");
   assert.equal(await combo.evaluate((node) => node === document.activeElement), true);
+
+  // After a click opens the list, the keys still reach it (Safari doesn't focus a clicked button).
+  await combo.click();
+  assert.equal(await active(), "Fixed");
+  await page.keyboard.press("ArrowDown");
+  assert.equal(await active(), "Everyday", "ArrowDown after a click moves the active option.");
+  await page.keyboard.press("Escape");
+  assert.equal(await list.isVisible(), false);
+  assert.equal(await dialog.isVisible(), true, "Escape after a click closes only the list.");
 
   // Pointer: click opens, clicking an option picks it.
   await combo.click();
@@ -380,25 +403,16 @@ test("colour swatches move by arrow keys and are named; each type keeps its own 
   await dialog.getByRole("radio", { name: "Dated goal" }).click();
   assert.equal(await dialog.getByLabel("Goal amount").inputValue(), "");
   await dialog.getByLabel("Goal amount").fill("1800");
-  await dialog.getByLabel("By").fill("8/27");
-  await dialog.getByLabel("By").blur();
-  assert.equal(await dialog.getByLabel("By").inputValue(), "Aug 2027", "The month normalises on blur.");
+  await pickGoalMonth(page, dialog, "2027-08");
+  assert.equal((await goalMonthButton(dialog).innerText()).trim(), "Aug 2027");
   await dialog.getByRole("radio", { name: "Recurring" }).click();
   assert.equal(await dialog.getByLabel("Amount per month").inputValue(), "160.00", "The recurring draft is kept (tidied on blur).");
-  assert.equal(await dialog.getByLabel("By").isVisible(), false);
+  assert.equal(await goalMonthButton(dialog).isVisible(), false);
   await dialog.getByRole("radio", { name: "Plain" }).click();
   assert.equal(await dialog.getByLabel("Amount per month").isVisible(), false);
   await dialog.getByRole("radio", { name: "Dated goal" }).click();
   assert.equal(await dialog.getByLabel("Goal amount").inputValue(), "1,800.00");
-  assert.equal(await dialog.getByLabel("By").inputValue(), "Aug 2027");
-
-  // A goal month in the past is refused by the server; the By field gets the note and focus.
-  await dialog.getByLabel("By").fill("2020-01");
-  await dialog.getByRole("button", { name: "Add bucket" }).click();
-  await dialog.locator(".snote span").waitFor();
-  assert.equal(await dialog.getByLabel("By").getAttribute("aria-invalid"), "true");
-  assert.equal(await dialog.getByLabel("By").evaluate((node) => node === document.activeElement), true);
-  await dialog.getByLabel("By").fill("Aug 2027");
+  assert.equal((await goalMonthButton(dialog).innerText()).trim(), "Aug 2027", "The goal month is kept too.");
   await dialog.getByRole("button", { name: "Add bucket" }).click();
   await dialog.waitFor({ state: "detached" });
   const laptop = (await tableOf(app, budgetId)).buckets.find((b) => b.name === "Laptop")!;
@@ -479,6 +493,272 @@ test("groups render with No buckets, rename inline with Undo, and delete only wh
   await page.getByRole("menuitem", { name: "Delete group" }).click();
   await page.getByRole("button", { name: "Kids group actions" }).waitFor({ state: "detached" });
   assert.equal((await tableOf(app, budgetId)).groups.some((g) => g.id === groups.Kids), false);
+  assert.deepEqual(app.pageErrors, []);
+});
+
+interface CardLook {
+  /** The page's own background, as [r, g, b]. */
+  pageBackground: number[];
+  /** The month summary card's corners and shadow, which every card shares. */
+  summaryCard: { radius: string; shadow: string };
+  /** How many rows of column headers show, whether they sit on the first group's card, and the space between them and that group. */
+  headerRows: number;
+  headerOnFirstCard: boolean;
+  headerToFirstGroup: number;
+  /** Per group, in order: whether the surface under its row is its own, and that surface's corners and shadow. */
+  cards: { name: string; own: boolean; radius: string; shadow: string }[];
+  /** Between one group's card and the next: the space, and what shows in its middle across the card and under the Available column. */
+  gaps: { above: string; gap: number; middle: number[]; availColumn: number[] }[];
+  bucketGaps: number[];
+  /** Rows whose Available cell (or Spent, where it shows) is not under the column's header. */
+  misaligned: string[];
+  /** Each group row's background behind its name as [r, g, b], with its hue in degrees. */
+  groupBackgrounds: Record<string, { rgb: number[]; hue: number }>;
+  groupAvail: number[];
+  bucketBackground: number[];
+  inkContrast: number[];
+}
+
+/** How the groups look: each on its own card with the page between, their tint against the page and a bucket row, and their text contrast. */
+const cardLook = (page: Page): Promise<CardLook> => page.evaluate(() => {
+  // Computed colours come as rgb(), rgba(), or color(srgb r g b / a) with 0-1 channels (from color-mix).
+  const rgba = (value: string) => {
+    const parts = (value.match(/[\d.]+/g) ?? []).map(Number);
+    const scale = value.startsWith("color(srgb") ? 255 : 1;
+    const [r = 0, g = 0, b = 0] = parts.map((part) => part * scale);
+    return { r, g, b, a: value.startsWith("rgba") || value.includes("/") ? parts[3] ?? 1 : 1 };
+  };
+  // The colour behind an element: its own background over its ancestors' until one is opaque.
+  const backgroundOf = (node: Element) => {
+    const layers = [];
+    for (let at: Element | null = node; at; at = at.parentElement) {
+      const layer = rgba(getComputedStyle(at).backgroundColor);
+      if (layer.a > 0) layers.push(layer);
+      if (layer.a >= 1) break;
+    }
+    return layers.reverse().reduce((under, over) => ({
+      r: over.r * over.a + under.r * (1 - over.a), g: over.g * over.a + under.g * (1 - over.a), b: over.b * over.a + under.b * (1 - over.a), a: 1,
+    }), { r: 255, g: 255, b: 255, a: 1 });
+  };
+  // The surface a row sits on: its nearest ancestor with a background of its own.
+  const surfaceOf = (row: Element) => {
+    let at = row.parentElement;
+    while (at && rgba(getComputedStyle(at).backgroundColor).a === 0) at = at.parentElement;
+    return at!;
+  };
+  const luminance = ({ r, g, b }: { r: number; g: number; b: number }) => {
+    const channel = (c: number) => { const s = c / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; };
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+  };
+  const contrast = (text: Element) => {
+    const [a, b] = [luminance(rgba(getComputedStyle(text).color)), luminance(backgroundOf(text))].sort((x, y) => y - x);
+    return (a! + 0.05) / (b! + 0.05);
+  };
+  const triple = (c: { r: number; g: number; b: number }) => [c.r, c.g, c.b];
+  const hue = ({ r, g, b }: { r: number; g: number; b: number }) => {
+    const max = Math.max(r, g, b);
+    const d = max - Math.min(r, g, b);
+    if (!d) return 0;
+    const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return (h * 60 + 360) % 360;
+  };
+  const shows = (node: Element) => node.getClientRects().length > 0;
+  const box = (node: Element) => node.getBoundingClientRect();
+  const table = document.querySelector('[role="table"][aria-label="Buckets"]')!;
+  const rows = [...table.querySelectorAll<HTMLElement>('[role="row"]')].filter(shows);
+  const headers = rows.filter((row) => row.querySelector('[role="columnheader"]'));
+  const header = headers[0]!;
+  const groups = rows.filter((row) => row.classList.contains("bgroup"));
+  const nameOf = (group: Element) => group.querySelector(".gname")!.textContent ?? "";
+  const surfaces = groups.map(surfaceOf);
+  const summary = getComputedStyle(document.querySelector(".summary")!);
+  const page = triple(backgroundOf(document.body));
+  const columnX = (cell: Element) => box(cell).left + box(cell).width / 2;
+  const behind = (x: number, y: number) => triple(backgroundOf(document.elementFromPoint(x, y)!));
+  const columns = [".c.avail", ".c.spent"].map((selector) => ({ selector, head: header.querySelector(selector)! })).filter(({ head }) => shows(head));
+  const firstGroup = groups[0]!;
+  return {
+    pageBackground: page,
+    summaryCard: { radius: summary.borderRadius, shadow: summary.boxShadow },
+    headerRows: headers.length,
+    headerOnFirstCard: surfaceOf(header) === surfaces[0],
+    headerToFirstGroup: box(firstGroup).top - box(header).bottom,
+    cards: groups.map((group, index) => {
+      const style = getComputedStyle(surfaces[index]!);
+      return { name: nameOf(group), own: surfaces.indexOf(surfaces[index]!) === index, radius: style.borderRadius, shadow: style.boxShadow };
+    }),
+    gaps: surfaces.slice(1).map((card, index) => {
+      const above = box(surfaces[index]!).bottom;
+      const y = (above + box(card).top) / 2;
+      // To the hundredth of a pixel: Firefox lays out in sixtieths, so a 20px gap can measure 19.99994.
+      return { above: nameOf(groups[index + 1]!), gap: Math.round((box(card).top - above) * 100) / 100, middle: behind(box(card).left + box(card).width / 2, y), availColumn: behind(columnX(columns[0]!.head), y) };
+    }),
+    bucketGaps: rows.filter((row, index) => index > 0 && row.classList.contains("brow") && rows[index - 1]!.classList.contains("brow")).map((row) => box(row).top - box(rows[rows.indexOf(row) - 1]!).bottom),
+    misaligned: rows.filter((row) => row !== header && columns.some(({ selector, head }) => {
+      const cell = row.querySelector(`:scope > ${selector}`);
+      return cell && shows(cell) && (Math.abs(box(cell).left - box(head).left) > 0.5 || Math.abs(box(cell).right - box(head).right) > 0.5);
+    })).map((row) => row.textContent ?? ""),
+    groupBackgrounds: Object.fromEntries(groups.map((group) => {
+      const background = backgroundOf(group.querySelector(".gcell")!);
+      return [nameOf(group), { rgb: triple(background), hue: hue(background) }];
+    })),
+    groupAvail: triple(backgroundOf(firstGroup.querySelector(".c.avail")!)),
+    bucketBackground: triple(backgroundOf(table.querySelector(".brow .bname")!)),
+    inkContrast: [...firstGroup.querySelectorAll(".gname, .gcount, .c.spent, .c.avail")].filter(shows).map(contrast),
+  };
+});
+
+/** How far apart two colours are, as a straight line through RGB. */
+const distance = (a: number[], b: number[]) => Math.hypot(...a.map((channel, i) => channel - b[i]!));
+
+test("each group is its own card with the page showing between, under one header, its row tinted apart from page and buckets, in both themes and at 390px", { timeout: 45_000 }, async (t) => {
+  const app = await openApp(t, { height: 1400 });
+  const { page } = app;
+  const { budgetId } = await seed(app, { kids: true });
+  await openBuckets(app, budgetId);
+
+  // One table, one header row, and each group a row group of its own row and buckets.
+  const grid = page.getByRole("table", { name: "Buckets" });
+  assert.equal(await grid.count(), 1);
+  assert.deepEqual(await grid.getByRole("columnheader").allInnerTexts(), ["Bucket", "Target or goal", "Spent", "Add / take", "Available"]);
+  assert.deepEqual(await grid.getByRole("rowgroup").evaluateAll((sections) => sections.map((section) => [...section.querySelectorAll('[role="row"]')]
+    .map((row) => (row.querySelector(".gname, .name") ?? row.querySelector('[role="columnheader"], [role="cell"]'))?.textContent))),
+  [["Bucket"], ["Fixed", "Rent", "Gym"], ["Everyday", "Groceries", "Dining out", "Fuel"], ["Goals", "Vacation"], ["Kids", "No buckets"]]);
+
+  const cases = [
+    { scheme: "light", width: 1280 }, { scheme: "dark", width: 1280 },
+    { scheme: "light", width: 390 }, { scheme: "dark", width: 390 },
+  ] as const;
+  for (const { scheme, width } of cases) {
+    const where = `${scheme} at ${width}px`;
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.setViewportSize({ width, height: 1400 });
+    const look = await cardLook(page);
+
+    // Cards: one per group, shaped like the summary card, the header atop the first.
+    assert.equal(look.headerRows, 1, `${where}: the column headers show once`);
+    assert.ok(look.headerOnFirstCard, `${where}: the header sits atop the first group's card`);
+    assert.ok(Math.abs(look.headerToFirstGroup) <= 0.5, `${where}: the first group follows the header (${look.headerToFirstGroup})`);
+    assert.deepEqual(look.cards.map((card) => card.name), ["Fixed", "Everyday", "Goals", "Kids"]);
+    for (const card of look.cards) {
+      assert.ok(card.own, `${where}: ${card.name} has a card of its own`);
+      assert.deepEqual({ radius: card.radius, shadow: card.shadow }, look.summaryCard, `${where}: ${card.name}'s card has the card radius and shadow`);
+    }
+    // Between cards, a real gap (about 20–24px) where the page shows, across the card and under the Available column.
+    assert.deepEqual(look.gaps.map((gap) => gap.above), ["Everyday", "Goals", "Kids"]);
+    for (const { above, gap, middle, availColumn } of look.gaps) {
+      assert.ok(gap >= 20 && gap <= 24, `${where}: a 20–24px gap above ${above} (${gap})`);
+      assert.ok(distance(middle, look.pageBackground) < 1, `${where}: the page shows in the gap above ${above} (${middle})`);
+      assert.ok(distance(availColumn, look.pageBackground) < 1, `${where}: the Available tint stops at the card above ${above} (${availColumn})`);
+    }
+    for (const gap of look.bucketGaps) assert.ok(Math.abs(gap) <= 0.5, `${where}: bucket rows within a group touch (${gap})`);
+    assert.deepEqual(look.misaligned, [], `${where}: every card's columns line up under the header`);
+
+    // The group row's tint: clearly apart from the page (as far as dark's) and from a bucket row, in the cool family.
+    const tint = look.groupBackgrounds.Fixed!;
+    const fromPage = distance(tint.rgb, look.pageBackground);
+    const fromBuckets = distance(tint.rgb, look.bucketBackground);
+    assert.ok(fromPage >= 30, `${where}: a group row is tinted clearly apart from the page (${fromPage.toFixed(1)})`);
+    assert.ok(fromBuckets >= 15, `${where}: a group row is tinted apart from a bucket row (${fromBuckets.toFixed(1)})`);
+    // Its Available cell a shade deeper: apart from the row, and further from the page.
+    assert.ok(distance(look.groupAvail, tint.rgb) >= 10, `${where}: the group's Available cell is a shade apart (${distance(look.groupAvail, tint.rgb).toFixed(1)})`);
+    assert.ok(distance(look.groupAvail, look.pageBackground) > fromPage, `${where}: the group's Available cell is deeper than its row`);
+    // Not the violet of Ready to assign (254°) or the overspent red (350°): the same 25° floor the bucket hues keep.
+    const hueGap = (a: number, b: number) => Math.min(Math.abs(a - b), 360 - Math.abs(a - b));
+    assert.ok(hueGap(tint.hue, 254) >= 25 && hueGap(tint.hue, 350) >= 25, `${where}: the tint stays clear of violet and red (${tint.hue.toFixed(0)}°)`);
+    for (const ratio of look.inkContrast) assert.ok(ratio >= 4.5, `${where}: group row text keeps 4.5:1 on the tint (${ratio.toFixed(2)})`);
+
+    if (width === 390) assert.equal(await noHorizontalScroll(page), true, where);
+    else {
+      // The drop target's highlight still shows on a tinted header (the tint is not the accent).
+      const fuel = page.locator(".brow", { hasText: "Fuel" });
+      await fuel.hover();
+      const grip = (await fuel.locator("[data-grip]").boundingBox())!;
+      await page.mouse.move(grip.x + 5, grip.y + 5);
+      await page.mouse.down();
+      await page.mouse.move(grip.x + 20, (await page.locator(".bgroup", { hasText: "Goals" }).boundingBox())!.y + 60, { steps: 8 });
+      assert.deepEqual(await page.locator(".bgroup.drop-into .gname").allTextContents(), ["Goals"]);
+      const lit = distance((await cardLook(page)).groupBackgrounds.Goals!.rgb, look.groupBackgrounds.Goals!.rgb);
+      assert.ok(lit >= 12, `${where}: the drop target is lit clearly over the tint (${lit.toFixed(1)})`);
+      await page.keyboard.press("Escape");
+      await page.mouse.up();
+
+      // A group's drop line sits in the gap between two cards, not on a card's edge.
+      const kids = page.locator(".bgroup", { hasText: "Kids" });
+      await kids.hover();
+      const kidsGrip = (await kids.locator("[data-grip]").boundingBox())!;
+      await page.mouse.move(kidsGrip.x + 5, kidsGrip.y + 5);
+      await page.mouse.down();
+      const everyday = (await page.locator(".bgroup", { hasText: "Everyday" }).boundingBox())!;
+      await page.mouse.move(kidsGrip.x + 20, everyday.y + 2, { steps: 8 });
+      const line = (await page.locator(".drop-line").boundingBox())!;
+      const gym = (await page.locator(".brow", { hasText: "Gym" }).boundingBox())!;
+      const lineY = line.y + line.height / 2;
+      assert.ok(lineY > gym.y + gym.height + 4 && lineY < everyday.y - 4, `${where}: a group's drop line sits in the gap above Everyday (${lineY}, between ${gym.y + gym.height} and ${everyday.y})`);
+      await page.keyboard.press("Escape");
+      await page.mouse.up();
+    }
+  }
+  assert.deepEqual(app.pageErrors, []);
+});
+
+/** Spends a bucket's whole month (10.00) and archives it, so it shows that month as an archived row. */
+async function archiveWithActivity(app: App, budgetId: string, bucketId: string): Promise<void> {
+  const thisMonth = new Date().toLocaleDateString("en-CA").slice(0, 7);
+  const accounts = await api<{ id: string }[]>(app, "GET", `/api/budgets/${budgetId}/accounts`);
+  const account = accounts[0] ?? await api<{ id: string }>(app, "POST", `/api/budgets/${budgetId}/accounts`, { name: "Checking", type: "checking", startingBalance: 100_000, startingDate: `${thisMonth}-01` });
+  await api(app, "POST", `/api/buckets/${bucketId}/assign`, { month: thisMonth, amount: 1_000 });
+  await api(app, "POST", `/api/accounts/${account.id}/transactions`, { amount: -1_000, category: { kind: "bucket", bucketId } });
+  await api(app, "POST", `/api/buckets/${bucketId}/archive`);
+}
+
+test("archived buckets whose group was deleted sit on a card of their own after the groups, which group drags pass over", { timeout: 60_000 }, async (t) => {
+  const app = await openApp(t, { height: 1000 });
+  const { page } = app;
+  const { budgetId, groups } = await seed(app);
+  // Magazine: archived, still in Fixed. Club: archived, its group Old deleted since.
+  const magazine = await api<Bucket>(app, "POST", `/api/budgets/${budgetId}/buckets`, { name: "Magazine", groupId: groups.Fixed, colour: "olive", type: "plain" });
+  const old = await api<Group>(app, "POST", `/api/budgets/${budgetId}/groups`, { name: "Old" });
+  const club = await api<Bucket>(app, "POST", `/api/budgets/${budgetId}/buckets`, { name: "Club", groupId: old.id, colour: "cocoa", type: "plain" });
+  await archiveWithActivity(app, budgetId, magazine.id);
+  await archiveWithActivity(app, budgetId, club.id);
+  await api(app, "DELETE", `/api/groups/${old.id}`);
+  await openBuckets(app, budgetId);
+  const grid = page.getByRole("table", { name: "Buckets" });
+
+  assert.deepEqual(await grid.getByRole("rowgroup").evaluateAll((sections) => sections.map((section) => [...section.querySelectorAll('[role="row"]')]
+    .map((row) => (row.querySelector(".gname, .name") ?? row.querySelector('[role="columnheader"]'))?.textContent))),
+  [["Bucket"], ["Fixed", "Rent", "Gym", "Magazine"], ["Everyday", "Groceries", "Dining out", "Fuel"], ["Goals", "Vacation"], ["Club"]]);
+  const look = await cardLook(page);
+  assert.equal(look.gaps.length, 2, "Fixed, Everyday and Goals are three cards");
+  const clubRow = grid.locator(".brow", { hasText: "Club" });
+  const goalsBottom = await grid.locator(".brow", { hasText: "Vacation" }).evaluate((row) => row.getBoundingClientRect().bottom);
+  const clubBox = (await clubRow.boundingBox())!;
+  assert.ok(clubBox.y - goalsBottom >= 20, `Club's card stands apart from Goals' (${clubBox.y - goalsBottom})`);
+  assert.equal(await clubRow.evaluate((row) => getComputedStyle(row).borderTopWidth), "0px", "No line at the top of Club's card");
+
+  // A group dragged past the end lands after the last group, with its line at that group's card.
+  const fixed = grid.locator(".bgroup", { hasText: "Fixed" });
+  await fixed.hover();
+  const grip = (await fixed.locator("[data-grip]").boundingBox())!;
+  await page.mouse.move(grip.x + 5, grip.y + 5);
+  await page.mouse.down();
+  await page.mouse.move(grip.x + 20, clubBox.y + clubBox.height + 10, { steps: 8 });
+  const line = (await page.locator(".drop-line").boundingBox())!;
+  assert.ok(Math.abs(line.y + line.height / 2 - goalsBottom) <= 2, `The line marks the end of Goals' card (${line.y + line.height / 2} vs ${goalsBottom})`);
+  await page.mouse.up();
+  await waitForSnack(page, "Moved the Fixed group down.");
+  assert.deepEqual((await tableOf(app, budgetId)).groups.map((g) => g.name), ["Everyday", "Goals", "Fixed"]);
+
+  // Phone Reorder hides archived rows, and with them Club's card. A group dragged high goes to the top, though
+  // the last group (Fixed) ends in a hidden row.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Reorder" }).click();
+  assert.equal(await clubRow.isVisible(), false);
+  assert.equal(await grid.locator(".bcard").evaluateAll((cards) => cards.filter((card) => card.getClientRects().length > 0 && card.getBoundingClientRect().height === 0).length), 0, "No empty card shows");
+  await drag(page, grid.locator(".bgroup", { hasText: "Goals" }), 20);
+  await waitForSnack(page, "Moved the Goals group up.");
+  assert.deepEqual((await tableOf(app, budgetId)).groups.map((g) => g.name), ["Goals", "Everyday", "Fixed"]);
   assert.deepEqual(app.pageErrors, []);
 });
 
@@ -603,19 +883,13 @@ test("available figures: positive and overspent rendering, and the archive secti
   for (const scheme of ["light", "dark"] as const) {
     const app = await openApp(t, { colorScheme: scheme, height: 800 });
     const { page } = app;
-    const { budgetId } = await seed(app);
-    // Assigning does not exist yet, so Available comes from a fixture: Groceries 186.53, Dining out −18.25.
-    await page.route("**/api/budgets/*/buckets", async (route) => {
-      if (route.request().method() !== "GET") return route.continue();
-      const response = await route.fetch();
-      const table = (await response.json()) as Table & { buckets: (Bucket & { available: number })[] };
-      for (const bucket of table.buckets) {
-        if (bucket.name === "Groceries") bucket.available = 18653;
-        if (bucket.name === "Dining out") bucket.available = -1825;
-        if (bucket.name === "Vacation") bucket.available = 124000;
-      }
-      await route.fulfill({ response, json: table });
-    });
+    const { budgetId, buckets } = await seed(app);
+    // Groceries 186.53 and Vacation 1,240.00 assigned this month; Dining out overspent by 18.25.
+    const thisMonth = new Date().toLocaleDateString("en-CA").slice(0, 7);
+    const checking = await api<{ id: string }>(app, "POST", `/api/budgets/${budgetId}/accounts`, { name: "Checking", type: "checking", startingBalance: 200_000, startingDate: `${thisMonth}-01` });
+    await api(app, "POST", `/api/buckets/${buckets.Groceries}/assign`, { month: thisMonth, amount: 18_653 });
+    await api(app, "POST", `/api/buckets/${buckets.Vacation}/assign`, { month: thisMonth, amount: 124_000 });
+    await api(app, "POST", `/api/accounts/${checking.id}/transactions`, { amount: -1_825, category: { kind: "bucket", bucketId: buckets["Dining out"] } });
     await openBuckets(app, budgetId);
     const grid = page.getByRole("table", { name: "Buckets" });
     const dining = grid.getByRole("row", { name: /Dining out/ });
@@ -647,6 +921,28 @@ test("available figures: positive and overspent rendering, and the archive secti
     assert.equal(compact(await dialog.locator(".arch-prev").innerText()), "Groceries 186.53 → 0.00 Ready to assign +186.53");
     assert.equal(await dialog.getByRole("button", { name: "Archive and return $186.53" }).isEnabled(), true);
     assert.equal(await dialog.locator(".sheet-body").evaluate((node) => node.scrollHeight <= node.clientHeight), true);
+    // The positive path: the money goes back to Ready to assign (2,000.00 − 186.53 − 1,240.00 + 186.53), and
+    // Undo restores the bucket without re-assigning it.
+    assert.equal(compact(await page.getByRole("region", { name: "Month summary" }).locator(".ready-figure").innerText()), "$573.47");
+    await dialog.getByRole("button", { name: "Archive and return $186.53" }).click();
+    await dialog.waitFor({ state: "detached" });
+    await waitForSnack(page, "Archived Groceries and returned $186.53.");
+    await eventually(async () => assert.equal(compact(await page.getByRole("region", { name: "Month summary" }).locator(".ready-figure").innerText()), "$760.00"));
+    assert.equal(await page.getByRole("button", { name: "Edit Groceries" }).count(), 0);
+    await page.locator("#snack-undo").click();
+    await eventually(async () => assert.equal(await grid.getByRole("row", { name: /Groceries/ }).locator(".avail").textContent(), "0.00"));
+    assert.equal(compact(await page.getByRole("region", { name: "Month summary" }).locator(".ready-figure").innerText()), "$760.00");
+
+    // Money assigned in a later month blocks archiving; the dialog says which month.
+    const [year, monthNumber] = thisMonth.split("-").map(Number) as [number, number];
+    const next = new Date(Date.UTC(year, monthNumber, 1));
+    const nextMonth = next.toISOString().slice(0, 7);
+    const nextName = next.toLocaleString("en-US", { month: "long", timeZone: "UTC" }) + (next.getUTCFullYear() === year ? "" : ` ${next.getUTCFullYear()}`);
+    await api(app, "POST", `/api/buckets/${buckets.Vacation}/assign`, { month: nextMonth, amount: 1_000 });
+    await page.getByRole("button", { name: "Edit Vacation" }).click();
+    await dialog.getByRole("button", { name: "Archive and return $1,240.00" }).click();
+    await eventually(async () => assert.equal(compact(await dialog.locator(".snote").innerText()), `Vacation has money assigned in ${nextName}.`));
+    assert.equal(await page.getByRole("button", { name: "Edit Vacation" }).count(), 1);
     await page.keyboard.press("Escape");
     assert.deepEqual(app.pageErrors, []);
   }
@@ -660,7 +956,7 @@ test("at 390px: no horizontal scroll, Reorder mode with 44px move buttons and gr
   assert.equal(await noHorizontalScroll(page), true);
   const grid = page.getByRole("table", { name: "Buckets" });
 
-  // No grips until Reorder is on; the row opens Edit.
+  // No grips until Reorder is on; the row opens the bucket sheet.
   assert.equal(await grid.locator("[data-grip]").first().isVisible(), false);
   const reorder = page.getByRole("button", { name: "Reorder" });
   assert.equal(await reorder.getAttribute("aria-pressed"), "false");
@@ -700,6 +996,8 @@ test("at 390px: no horizontal scroll, Reorder mode with 44px move buttons and gr
   assert.deepEqual((await order(app, budgetId)).Fixed, ["Rent", "Gym", "Groceries"]);
 
   // Grip drag works in Reorder mode.
+  // The summary strip sits above the table, so bring Rent to the top to have both rows on screen.
+  await grid.locator(".brow", { hasText: "Rent" }).evaluate((row) => row.scrollIntoView({ block: "start" }));
   const vacation = grid.locator(".brow", { hasText: "Vacation" });
   await drag(page, vacation, await rowTop(grid.locator(".brow", { hasText: "Rent" })));
   await waitForSnack(page, "Moved Vacation to Fixed.");
@@ -707,7 +1005,7 @@ test("at 390px: no horizontal scroll, Reorder mode with 44px move buttons and gr
 
   await done.click();
   assert.equal(await page.getByRole("button", { name: "Reorder" }).getAttribute("aria-pressed"), "false");
-  assert.equal(await page.getByRole("button", { name: "Edit Rent" }).count(), 1);
+  assert.equal(await page.getByRole("button", { name: "Rent", exact: true }).count(), 1);
   assert.equal(await noHorizontalScroll(page), true);
   assert.deepEqual(app.pageErrors, []);
 });
@@ -896,7 +1194,8 @@ test("Undo of a goal edit puts the goal back, and Undo of an edit that made a ne
   // The goal's amount and month change, then Undo restores both through the revert path.
   await page.getByRole("button", { name: "Edit Vacation" }).click();
   await dialog.getByLabel("Goal amount").fill("4,000.00");
-  await dialog.getByLabel("By").fill("Mar 2028");
+  assert.equal((await goalMonthButton(dialog).innerText()).trim(), "Aug 2027", "Edit opens on the saved month.");
+  await pickGoalMonth(page, dialog, "2028-03");
   await dialog.getByRole("button", { name: "Save" }).click();
   await dialog.waitFor({ state: "detached" });
   assert.deepEqual([(await bucketNow("Vacation")).amount, (await bucketNow("Vacation")).goalMonth], [400000, "2028-03"]);
@@ -993,14 +1292,31 @@ test("on a touch phone, only the grip drags in Reorder mode; swipes on rows scro
   await openBuckets(app, budgetId);
   const grid = page.getByRole("table", { name: "Buckets" });
   const seeded = { Fixed: ["Rent", "Gym"], Everyday: ["Groceries", "Dining out", "Fuel"], Goals: ["Vacation"] };
-  // Real touch input through Chromium's input pipeline, so scrolling and pointer events come from the browser.
-  const cdp = await page.context().newCDPSession(page);
-  const touch = (type: string, points: { x: number; y: number }[]) => cdp.send("Input.dispatchTouchEvent", { type: type as "touchStart", touchPoints: points });
+  // Playwright sends touch moves only to Chromium (through CDP), whose input pipeline turns them into scrolling and
+  // pointer events as a phone's does. In WebKit and Firefox it can only tap: there a swipe is checked through the
+  // touch-action that lets the browser scroll it, and the grip is dragged with the pointer events of a mouse.
+  const cdp = engine === "chromium" ? await page.context().newCDPSession(page) : null;
+  const touch = (type: string, points: { x: number; y: number }[]) => cdp!.send("Input.dispatchTouchEvent", { type: type as "touchStart", touchPoints: points });
   async function swipe(from: { x: number; y: number }, toY: number): Promise<void> {
     await touch("touchStart", [from]);
     for (let i = 1; i <= 10; i++) await touch("touchMove", [{ x: from.x, y: from.y + ((toY - from.y) * i) / 10 }]);
     await touch("touchEnd", []);
   }
+  async function drag(from: { x: number; y: number }, toY: number): Promise<void> {
+    if (cdp) return swipe(from, toY);
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    for (let i = 1; i <= 10; i++) await page.mouse.move(from.x, from.y + ((toY - from.y) * i) / 10);
+    await page.mouse.up();
+  }
+  /** A vertical swipe on `locator` scrolls: it and every element around it leave vertical panning to the browser. */
+  const pans = (locator: Locator) => locator.evaluate((node) => {
+    for (let at: Element | null = node; at; at = at.parentElement) {
+      const action = getComputedStyle(at).touchAction;
+      if (!(action === "auto" || action === "manipulation" || action.includes("pan-y"))) return false;
+    }
+    return true;
+  });
   const centre = async (locator: Locator) => {
     const box = (await locator.boundingBox())!;
     return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
@@ -1014,9 +1330,15 @@ test("on a touch phone, only the grip drags in Reorder mode; swipes on rows scro
   // Reorder mode: a swipe up starting on a row's name scrolls the page and moves nothing.
   await page.getByRole("button", { name: "Reorder" }).tap();
   assert.ok(await page.evaluate(() => document.documentElement.scrollHeight > window.innerHeight), "The page is tall enough to scroll.");
-  const fuelName = await centre(grid.locator(".brow", { hasText: "Fuel" }).locator(".name"));
-  await swipe(fuelName, fuelName.y - 150);
-  await eventually(async () => assert.ok((await scrollY()) > 0, "The swipe scrolled the page."));
+  const fuel = grid.locator(".brow", { hasText: "Fuel" });
+  if (cdp) {
+    const fuelName = await centre(fuel.locator(".name"));
+    await swipe(fuelName, fuelName.y - 150);
+    await eventually(async () => assert.ok((await scrollY()) > 0, "The swipe scrolled the page."));
+  } else {
+    assert.equal(await pans(fuel.locator(".name")), true, "A swipe on a row's name scrolls the page.");
+    assert.equal(await fuel.locator("[data-grip]").evaluate((node) => getComputedStyle(node).touchAction), "none", "A swipe on the grip drags.");
+  }
   assert.equal(await page.locator(".drag-ghost").count(), 0);
   assert.deepEqual(await order(app, budgetId), seeded);
 
@@ -1027,25 +1349,36 @@ test("on a touch phone, only the grip drags in Reorder mode; swipes on rows scro
   assert.equal(await page.locator("dialog").count(), 0);
   assert.equal(await page.locator("#snack").isHidden(), true);
 
-  // A touch drag from Groceries' grip to just above Rent moves it, and the move is saved.
+  // A drag from Groceries' grip to just above Rent moves it, and the move is saved.
+  await grid.locator(".brow", { hasText: "Rent" }).evaluate((row) => row.scrollIntoView({ block: "start" }));
   const grip = await centre(grid.locator(".brow", { hasText: "Groceries" }).locator("[data-grip]"));
   const rentTop = (await grid.locator(".brow", { hasText: "Rent" }).boundingBox())!.y + 2;
-  await swipe(grip, rentTop);
+  await drag(grip, rentTop);
   await waitForSnack(page, "Moved Groceries to Fixed.");
   assert.deepEqual(await order(app, budgetId), { ...seeded, Fixed: ["Groceries", "Rent", "Gym"], Everyday: ["Dining out", "Fuel"] });
 
-  // Out of Reorder mode there is no grip to drag; a swipe on a row scrolls, and a tap opens Edit.
+  // Out of Reorder mode there is no grip to drag; a swipe on a row scrolls, and a tap opens the bucket sheet.
   await page.getByRole("button", { name: "Done" }).tap();
+  // The summary strip sits above the table; keep Gym on screen, low enough that the page can still scroll down.
+  const showGym = () => grid.locator(".brow", { hasText: "Gym" }).evaluate((row) => row.scrollIntoView({ block: "end" }));
   await page.evaluate(() => window.scrollTo(0, 0));
+  await showGym();
+  const startY = await scrollY();
   const before = await order(app, budgetId);
-  const gymName = await centre(grid.locator(".brow", { hasText: "Gym" }).locator(".name"));
-  await swipe(gymName, gymName.y - 150);
-  await eventually(async () => assert.ok((await scrollY()) > 0));
+  const gym = grid.locator(".brow", { hasText: "Gym" });
+  assert.equal(await gym.locator("[data-grip]").isVisible(), false, "Out of Reorder mode there is no grip.");
+  if (cdp) {
+    const gymName = await centre(gym.locator(".name"));
+    await swipe(gymName, gymName.y - 150);
+    await eventually(async () => assert.ok((await scrollY()) > startY));
+  } else {
+    assert.equal(await pans(gym.locator(".name")), true, "A swipe on a row scrolls the page.");
+  }
   assert.equal(await page.locator(".drag-ghost").count(), 0);
   assert.equal(await page.locator("dialog").count(), 0);
   assert.deepEqual(await order(app, budgetId), before);
-  await page.evaluate(() => window.scrollTo(0, 0));
+  await grid.locator(".brow", { hasText: "Gym" }).evaluate((row) => row.scrollIntoView({ block: "center" }));
   await tap(grid.locator(".brow", { hasText: "Gym" }).locator(".name"));
-  assert.equal(await page.locator("dialog").getByRole("heading").textContent(), "Edit Gym");
+  assert.equal(await page.locator("dialog").getByRole("heading").textContent(), "Gym");
   assert.deepEqual(app.pageErrors, []);
 });

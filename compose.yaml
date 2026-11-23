@@ -3,8 +3,13 @@ services:
     build: .
     ports:
       - "${BUCKETEER_BIND:-127.0.0.1}:${BUCKETEER_PORT:-3000}:3000"
+    environment:
+      # "Today" and "this month" use the server's time zone (ADR-0007). TZ is passed through when set,
+      # and overrides the host zone mounted below.
+      TZ:
     volumes:
       - bucketeer-data:/data
+      - /etc/localtime:/etc/localtime:ro
     restart: unless-stopped
 
 volumes:

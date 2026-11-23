@@ -150,6 +150,7 @@ test("HTTP exposes accounts with status codes for every error and serves the sha
     assert.match(money.headers.get("content-type") ?? "", /^text\/javascript/);
     assert.match(await money.text(), /export function parseMoney/);
     assert.equal((await fetch(`${url}/core/types.js`)).status, 200);
+    assert.equal((await fetch(`${url}/core/refusals.js`)).status, 200);
     assert.equal((await fetch(`${url}/core/index.js`)).status, 404);
     assert.equal((await fetch(`${url}/core/database.js`)).status, 404);
   } finally {
@@ -172,16 +173,17 @@ test("the built server serves index.html for path-routed account pages", async (
     assert.equal(root.status, 200);
     const html = await root.text();
     assert.match(html, /<html/);
-    for (const path of ["/budgets/abc-123/accounts", "/budgets/abc-123/accounts/", "/budgets/a%20b/accounts", "/budgets/abc-123/buckets", "/budgets/abc-123/buckets/"]) {
+    for (const path of ["/budgets/abc-123/accounts", "/budgets/abc-123/accounts/", "/budgets/a%20b/accounts", "/budgets/abc-123/buckets", "/budgets/abc-123/buckets/",
+      "/budgets/abc-123/accounts/acc-1", "/budgets/abc-123/accounts/acc-1/"]) {
       const page = await fetch(`${url}${path}`);
       assert.equal(page.status, 200, path);
       assert.match(page.headers.get("content-type") ?? "", /^text\/html/);
       assert.equal(await page.text(), html);
     }
-    for (const path of ["/budgets/x/accounts/extra", "/budgets//accounts", "/budgets/x/buckets/extra", "/budgets//buckets", "/budgets/x", "/accounts"]) assert.equal((await fetch(`${url}${path}`)).status, 404, path);
+    for (const path of ["/budgets/x/accounts/a/extra", "/budgets//accounts", "/budgets/x/accounts//", "/budgets/x/buckets/extra", "/budgets//buckets", "/budgets/x", "/accounts"]) assert.equal((await fetch(`${url}${path}`)).status, 404, path);
     assert.equal((await fetch(`${url}/core/money.js`)).status, 200);
     // Compiled UI modules are served by name; unknown names and nested paths are not.
-    for (const name of ["app", "theme", "dom", "sheet", "shell", "accounts", "buckets", "bucket-dialog", "reorder"]) {
+    for (const name of ["app", "theme", "dom", "sheet", "shell", "accounts", "buckets", "bucket-dialog", "reorder", "register"]) {
       const script = await fetch(`${url}/ui/${name}.js`);
       assert.equal(script.status, 200, name);
       assert.match(script.headers.get("content-type") ?? "", /^text\/javascript/);
@@ -310,6 +312,116 @@ test("HTTP exposes groups and buckets with status codes for every error and serv
     assert.match(text, /export function leastUsedColour/);
     assert.doesNotMatch(text, /^import /m);
     assert.equal((await fetch(`${url}/core/buckets.js`)).status, 404);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    core.close();
+  }
+});
+
+test("HTTP exposes an account's transactions and Ready to assign, with status codes for every error", async () => {
+  const core = openBucketeer(":memory:", { now: () => new Date("2026-11-20T12:00:00.000Z"), timeZone: "UTC" });
+  const server = createApi(core);
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const url = `http://127.0.0.1:${address.port}`;
+  const client = createClient(url);
+  const send = (path: string, method: string, body?: unknown) =>
+    fetch(`${url}${path}`, { method, ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }) });
+  const statuses = async (path: string, method: string, body?: unknown) => {
+    const response = await send(path, method, body);
+    return [response.status, (await response.json()).error.code];
+  };
+  const income = { kind: "income" } as const;
+  try {
+    const budget = await client.createBudget({ name: "Household" });
+    const checking = await client.createAccount(budget.id, { name: "Checking", type: "checking", startingBalance: 100_000, startingDate: "2026-11-01" });
+    await client.createAccount(budget.id, { name: "Visa", type: "credit-card", startingBalance: -41_209, startingDate: "2026-11-01" });
+    assert.deepEqual(await client.readyToAssign(budget.id), { readyToAssign: 58_791 });
+    assert.deepEqual(await client.listTransactions(checking.id), { transactions: [] });
+
+    const response = await send(`/api/accounts/${checking.id}/transactions`, "POST", { date: "2026-11-14", payee: "Acme", amount: 200_000, category: income });
+    assert.equal(response.status, 201);
+    const paycheck = await response.json();
+    assert.equal(response.headers.get("location"), `/api/transactions/${paycheck.id}`);
+    assert.deepEqual(await client.openTransaction(paycheck.id), paycheck);
+    const bonus = await client.addTransaction(checking.id, { payee: "Bonus", amount: 5_000, category: income });
+    assert.equal(bonus.date, "2026-11-20");
+    assert.deepEqual(await client.listTransactions(checking.id), { transactions: [{ ...bonus, runningBalance: 305_000 }, { ...paycheck, runningBalance: 300_000 }] });
+    assert.deepEqual(await client.readyToAssign(budget.id), { readyToAssign: 263_791 });
+    assert.equal((await client.openAccount(checking.id)).balance, 305_000);
+
+    const edited = await client.editTransaction(bonus.id, { amount: 6_000, memo: "Year end" });
+    assert.deepEqual([edited.amount, edited.memo], [6_000, "Year end"]);
+    const deleted = await send(`/api/transactions/${bonus.id}`, "DELETE");
+    assert.equal(deleted.status, 204);
+    assert.equal(await client.deleteTransaction(paycheck.id), undefined);
+    assert.deepEqual(await client.readyToAssign(budget.id), { readyToAssign: 58_791 });
+
+    const wallet = await client.createAccount(budget.id, { name: "Wallet", type: "cash", startingBalance: 0, startingDate: "2026-11-01" });
+    await client.closeAccount(wallet.id);
+    const transactions = `/api/accounts/${checking.id}/transactions`;
+    assert.deepEqual(await statuses(`/api/accounts/${wallet.id}/transactions`, "POST", { amount: 100, category: income }), [409, "account_closed"]);
+    assert.deepEqual(await statuses(transactions, "POST", { amount: -500, category: income }), [400, "invalid_input"]);
+    assert.deepEqual(await statuses(transactions, "POST", { amount: 100, category: income, date: "2026-11-21" }), [400, "invalid_input"]);
+    assert.deepEqual(await statuses(transactions, "POST", { amount: 100, category: income, id: "mine" }), [400, "invalid_input"]);
+    assert.deepEqual(await statuses("/api/accounts/missing/transactions", "POST", { amount: 100, category: income }), [404, "not_found"]);
+    assert.deepEqual(await statuses("/api/accounts/missing/transactions", "GET"), [404, "not_found"]);
+    assert.deepEqual(await statuses(`/api/transactions/${bonus.id}`, "GET"), [404, "not_found"]);
+    assert.deepEqual(await statuses(`/api/transactions/${bonus.id}`, "PATCH", { memo: "x" }), [404, "not_found"]);
+    assert.deepEqual(await statuses(`/api/transactions/${bonus.id}`, "DELETE"), [404, "not_found"]);
+    assert.deepEqual(await statuses("/api/budgets/missing/ready-to-assign", "GET"), [404, "not_found"]);
+    for (const [path, method] of [
+      ["/api/accounts/%ZZ/transactions", "GET"], ["/api/accounts/%ZZ/transactions", "POST"], ["/api/transactions/%ZZ", "GET"],
+      ["/api/transactions/%ZZ", "PATCH"], ["/api/transactions/%ZZ", "DELETE"], ["/api/budgets/%ZZ/ready-to-assign", "GET"],
+    ] as const) {
+      assert.deepEqual(await statuses(path, method, method === "POST" || method === "PATCH" ? {} : undefined), [400, "invalid_input"], `${method} ${path}`);
+    }
+    for (const [path, method] of [[transactions, "PUT"], [transactions, "DELETE"], ["/api/transactions/x", "POST"], [`/api/budgets/${budget.id}/ready-to-assign`, "POST"]] as const) {
+      assert.deepEqual(await statuses(path, method, method === "DELETE" ? undefined : {}), [404, "not_found"], `${method} ${path}`);
+    }
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    core.close();
+  }
+});
+
+test("HTTP files transactions to buckets, refuses archived ones, and serves payee history", async () => {
+  const core = openBucketeer(":memory:", { now: () => new Date("2026-11-20T12:00:00.000Z"), timeZone: "UTC" });
+  const server = createApi(core);
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const url = `http://127.0.0.1:${address.port}`;
+  const client = createClient(url);
+  const statuses = async (path: string, method: string, body?: unknown) => {
+    const response = await fetch(`${url}${path}`, { method, ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }) });
+    return [response.status, (await response.json()).error.code];
+  };
+  try {
+    const budget = await client.createBudget({ name: "Household" });
+    const visa = await client.createAccount(budget.id, { name: "Visa", type: "credit-card", startingBalance: 0, startingDate: "2026-11-01" });
+    const group = await client.createGroup(budget.id, { name: "Everyday" });
+    const eatingOut = await client.createBucket(budget.id, { name: "Eating out", groupId: group.id, type: "plain" });
+    const old = await client.createBucket(budget.id, { name: "Old", groupId: group.id, type: "plain" });
+    const dinner = await client.addTransaction(visa.id, { payee: "Noodle Bar", amount: -12_000, category: { kind: "bucket", bucketId: eatingOut.id } });
+    assert.equal((await client.openBucket(eatingOut.id)).available, -12_000);
+    assert.deepEqual(await client.payees(budget.id), [{ payee: "Noodle Bar", category: { kind: "bucket", bucketId: eatingOut.id } }]);
+    assert.deepEqual(await statuses(`/api/buckets/${eatingOut.id}/archive`, "POST"), [409, "bucket_overspent"]);
+    await client.archiveBucket(old.id);
+    assert.deepEqual(await statuses(`/api/accounts/${visa.id}/transactions`, "POST", { amount: -100, category: { kind: "bucket", bucketId: old.id } }), [409, "bucket_archived"]);
+    assert.deepEqual(await statuses(`/api/transactions/${dinner.id}`, "PATCH", { category: { kind: "bucket", bucketId: old.id } }), [409, "bucket_archived"]);
+    await client.addTransaction(visa.id, { amount: 13_000, category: { kind: "bucket", bucketId: eatingOut.id } });
+    // The 10.00 left over goes back to Ready to assign.
+    assert.deepEqual((await client.archiveBucket(eatingOut.id)).returned, 1_000);
+    assert.equal((await client.readyToAssign(budget.id)).readyToAssign, 1_000);
+    const gifts = await client.createBucket(budget.id, { name: "Gifts", groupId: group.id, type: "plain" });
+    await client.assign(gifts.id, { month: "2026-12", amount: 500 });
+    assert.deepEqual(await statuses(`/api/buckets/${gifts.id}/archive`, "POST"), [409, "bucket_has_future"]);
+    assert.deepEqual(await statuses("/api/budgets/missing/payees", "GET"), [404, "not_found"]);
+    assert.deepEqual(await statuses(`/api/budgets/${budget.id}/payees`, "POST", {}), [404, "not_found"]);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     core.close();

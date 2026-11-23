@@ -5,6 +5,7 @@ import type { Account, AccountType, Budget } from "../core/index.js";
 import { formatMoney, parseMoney } from "../core/money.js";
 import { el, icon, messageOf, setNote } from "./dom.js";
 import { field, moneyInput, openSheet, segmented, textInput, uid } from "./sheet.js";
+import { accountPath, routeLink } from "./shell.js";
 
 export interface AccountsContext {
   client: ReturnType<typeof createClient>;
@@ -13,15 +14,15 @@ export interface AccountsContext {
   refresh(): Promise<void>;
   /** Shows a snackbar with an Undo button. */
   snack(message: string, undo: () => Promise<void>): void;
+  /** Routes to another page of the app. */
+  navigate(path: string): void;
+  /** The month header; the table shows balances at the end of its month. */
+  monthHeader: HTMLElement;
+  /** Today in the server's time zone (ADR-0007), the date a new account's balance defaults to. */
+  today: string;
 }
 
 const typeOptions = [["checking", "Checking"], ["savings", "Savings"], ["credit-card", "Credit card"], ["cash", "Cash"]] as const;
-
-/** Today as YYYY-MM-DD in the viewer's own time zone. */
-function today(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-}
 
 const closedDate = (iso: string | null) => iso
   ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
@@ -33,7 +34,7 @@ export function createAccountsPage(ctx: AccountsContext) {
   const note = el("div", { class: "note", role: "alert" });
   const content = el("div", { class: "accounts-content" });
   const root = el("div", { class: "page" },
-    el("div", { class: "page-row" }, el("h1", {}, "Accounts"), addButton),
+    el("div", { class: "page-row" }, el("h1", {}, "Accounts"), ctx.monthHeader, addButton),
     note,
     content);
   let closedOpen = false;
@@ -73,7 +74,7 @@ export function createAccountsPage(ctx: AccountsContext) {
   }
 
   function openAdd(): void {
-    const f = accountFields({ name: "", type: "checking", amount: "", date: today(), typeLocked: false });
+    const f = accountFields({ name: "", type: "checking", amount: "", date: ctx.today, typeLocked: false });
     openSheet({
       title: "Add account",
       submitLabel: "Add account",
@@ -153,15 +154,17 @@ export function createAccountsPage(ctx: AccountsContext) {
     }
   }
 
-  function renderTable(open: Account[]): HTMLElement {
-    const total = open.reduce((sum, account) => sum + account.balance, 0);
+  function renderTable(open: Account[], balanceOf: (account: Account) => number): HTMLElement {
+    const total = open.reduce((sum, account) => sum + balanceOf(account), 0);
     const rows = open.map((account) => {
       const edit = el("button", { class: "row-edit", type: "button", "aria-label": `Edit ${account.name}`, "data-edit-id": account.id }, icon("pencil"));
       const row = el("tr", { class: "orow" },
-        el("th", { scope: "row", class: "aname" }, account.name),
-        el("td", { class: "bal num" }, formatMoney(account.balance)),
+        el("th", { scope: "row", class: "aname" }, routeLink(el("a", { href: accountPath(budget.id, account.id) }, account.name), ctx.navigate)),
+        el("td", { class: "bal num" }, formatMoney(balanceOf(account))),
         el("td", { class: "go" }, edit));
-      row.addEventListener("click", () => openEdit(account));
+      row.addEventListener("click", (event) => {
+        if (!(event.target instanceof Element && event.target.closest("a"))) openEdit(account);
+      });
       return row;
     });
     return el("div", { class: "otable card" }, el("table", { "aria-label": "Accounts" },
@@ -190,12 +193,13 @@ export function createAccountsPage(ctx: AccountsContext) {
     return details;
   }
 
-  function render(next: Account[]): void {
+  /** `balances` are each account's balance at the end of the header's month, by ID. */
+  function render(next: Account[], balances: Record<string, number>): void {
     const open = next.filter((account) => !account.closed);
     const closed = next.filter((account) => account.closed);
     if (closed.length === 0) closedOpen = false;
     content.replaceChildren(
-      open.length ? renderTable(open) : el("p", { class: "empty" }, "No accounts yet."),
+      open.length ? renderTable(open, (account) => balances[account.id] ?? account.balance) : el("p", { class: "empty" }, "No accounts yet."),
       ...(closed.length ? [renderClosed(closed)] : []));
   }
 

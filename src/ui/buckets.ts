@@ -1,35 +1,69 @@
-// The Buckets page: groups and buckets in a table, the group menu with inline rename, the archived fold,
-// and reordering (drag, Alt+arrows, and the phone Reorder state). Every change saves at once and offers
-// Undo as an inverse operation. Amounts come from the server in cents; formatting lives in core/money.
+// The Buckets page for one month: groups and buckets in a table with each bucket's target, Spent and
+// Available that month, the group menu with inline rename, the archived fold, and reordering (drag,
+// Alt+arrows, and the phone Reorder state). Every change saves at once and offers Undo as an inverse
+// operation. Amounts and every total come from the server in cents; formatting lives in core/money.
 import type { createClient } from "../client.js";
-import type { Bucket, BucketGroup, BucketTable, Budget } from "../core/index.js";
+import type { Bucket, BucketGroup, BucketMonth, BucketMonthView, BucketTable, Budget, GroupMonth, MonthSummary } from "../core/index.js";
 import { formatMoney } from "../core/money.js";
+import { describeChange } from "./add-take.js";
+import { openBucketSheet } from "./bucket-sheet.js";
 import { monthLabel, openBucketDialog } from "./bucket-dialog.js";
 import { el, icon, messageOf, setNote, withVars } from "./dom.js";
+import { openRainPreview, rainButton } from "./rain.js";
 import { textInput, uid } from "./sheet.js";
+import { createPills } from "./pill.js";
 import { attachReorder, locate } from "./reorder.js";
 import type { Layout, MoveKey, MoveTarget } from "./reorder.js";
+
+/** Every bucket (for editing, ordering and the archived fold) and the month the page shows. */
+export interface BucketsData {
+  table: BucketTable;
+  month: BucketMonthView;
+}
 
 export interface BucketsContext {
   client: ReturnType<typeof createClient>;
   budget: Budget;
-  /** Re-reads the table. Throws if the page was left meanwhile. */
-  reload(): Promise<BucketTable>;
+  /** The month header, beside the page title. */
+  monthHeader: HTMLElement;
+  /** The server's current month: Make it rain is offered for it and later months only. */
+  thisMonth: string;
+  /** Re-reads the table and the month. Throws if the page was left meanwhile. */
+  reload(): Promise<BucketsData>;
   snack(message: string, undo: () => Promise<void>): void;
   announce(message: string): void;
 }
 
 const phone = window.matchMedia("(max-width: 600px)");
+// The compact table (no Spent, no pill): a row opens the bucket sheet instead of Edit.
+const compact = window.matchMedia("(max-width: 760px)");
 // Window and document listeners belong to the page on screen; a new page drops the old one's.
 let pageListeners: AbortController | undefined;
 const svgNs = "http://www.w3.org/2000/svg";
 
-/** The empty vessel outline for a recurring bucket. It fills once assigning exists. */
-function vessel(): SVGSVGElement {
+/**
+ * A recurring bucket's vessel: an 18×22 bucket that fills with this month's assigned ÷ monthly amount, clamped
+ * to 0–100%. Amber while filling, a soft green when the target is met.
+ */
+function vessel(assigned: number, amount: number): SVGSVGElement {
+  const share = Math.max(0, Math.min(1, assigned / amount));
+  const full = assigned >= amount;
   const svg = document.createElementNS(svgNs, "svg");
-  svg.setAttribute("class", "vessel");
+  svg.setAttribute("class", full ? "vessel" : "vessel part");
   svg.setAttribute("viewBox", "0 0 18 22");
-  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", full ? "Monthly target met" : `${Math.round(share * 100)}% of this month’s target assigned`);
+  if (share > 0) {
+    // The bucket's shape cut at the fill level: its walls taper from 2.1 at the rim (y 3) to 4.6 at the base (y 20.6).
+    const top = 3;
+    const bottom = 20.6;
+    const y = bottom - share * (bottom - top);
+    const inset = 2.1 + ((y - top) / (bottom - top)) * 2.5;
+    const fill = document.createElementNS(svgNs, "path");
+    fill.setAttribute("class", "vf");
+    fill.setAttribute("d", `M${inset.toFixed(2)} ${y.toFixed(2)} L4.6 ${bottom} Q4.7 21 5.6 21 H12.4 Q13.3 21 13.4 ${bottom} L${(18 - inset).toFixed(2)} ${y.toFixed(2)} Z`);
+    svg.append(fill);
+  }
   for (const d of ["M2.1 3 L4.6 20.2 Q4.8 21 5.6 21 H12.4 Q13.2 21 13.4 20.2 L15.9 3", "M1 3 H17"]) {
     const path = document.createElementNS(svgNs, "path");
     path.setAttribute("class", "vl");
@@ -55,10 +89,18 @@ function archivedDay(iso: string | null): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric", ...(sameYear ? {} : { year: "numeric" }) });
 }
 
-function target(bucket: Bucket): Node[] {
-  if (bucket.type === "recurring" && bucket.amount !== null) {
-    return [vessel(), el("span", { class: "num" }, `${formatMoney(bucket.amount, { symbol: true })} a month`)];
-  }
+/**
+ * This month's assigned against what the bucket wants each month: "$100.00 of $160.00 per month", the assigned figure
+ * in bold. Exactly met: just "$160.00 per month". A recurring bucket's monthly amount and a goal's monthly share alike.
+ */
+function perMonth(assigned: number, wanted: number, className = "num"): HTMLElement {
+  const amount = `${formatMoney(wanted, { symbol: true })} per month`;
+  return assigned === wanted ? el("span", { class: className }, amount)
+    : el("span", { class: className }, el("span", { class: "fund" }, formatMoney(assigned, { symbol: true })), ` of ${amount}`);
+}
+
+function target(bucket: BucketMonth): Node[] {
+  if (bucket.type === "recurring" && bucket.amount !== null) return [vessel(bucket.assigned, bucket.amount), perMonth(bucket.assigned, bucket.amount)];
   if (bucket.type === "goal" && bucket.amount !== null && bucket.goalMonth) {
     const share = Math.max(0, Math.min(1, bucket.available / bucket.amount));
     const percent = Math.floor(share * 100);
@@ -70,9 +112,37 @@ function target(bucket: Bucket): Node[] {
         el("span", { class: "pct num" }, `${percent}%`),
         el("span", { class: "gmeta num" }, `of ${goal}`, el("span", { class: "when" }, " ", el("span", { class: "sep" }, "·"), ` ${when}`))),
       el("span", { class: "goal-date num" }, `By ${when}`),
+      // The month's share, on a line of its own: none once nothing is left to save.
+      ...(bucket.monthlyShare ? [perMonth(bucket.assigned, bucket.monthlyShare, "goal-share num")] : []),
     ];
   }
   return [el("span", { class: "sr-only" }, "No target")];
+}
+
+/**
+ * The month's summary strip (ADR-0003): Ready to assign, largest, with small cents, violet or the overspent red
+ * when negative; Make it rain beside it (absent for past months); then the month's Income, Assigned and Spent.
+ */
+/** Ready to assign's figure, with small cents. */
+function readyParts(cents: number): (string | HTMLElement)[] {
+  const ready = formatMoney(cents, { symbol: true });
+  const dot = ready.lastIndexOf(".");
+  return [ready.slice(0, dot), el("span", { class: "cents" }, ready.slice(dot))];
+}
+
+function renderSummary(summary: MonthSummary, rain: HTMLElement | null): HTMLElement {
+  const stat = (name: string, label: string, cents: number) => el("div", { class: "stat" },
+    el("span", { class: "label" }, icon(name, "sm"), label), el("span", { class: "figure num" }, formatMoney(cents, { symbol: true })));
+  return el("section", { class: "card summary", "aria-label": "Month summary" },
+    el("div", { class: `ready${summary.readyToAssign < 0 ? " neg" : ""}` },
+      el("div", {},
+        el("div", { class: "ready-label", id: "ready-label" }, icon("drop", "sm"), "Ready to assign"),
+        el("div", { class: "ready-figure num", "aria-labelledby": "ready-label" }, ...readyParts(summary.readyToAssign))),
+      rain,
+      el("div", { class: "rain-layer", "aria-hidden": "true" })),
+    stat("in", "Income", summary.income),
+    stat("assign", "Assigned", summary.assigned),
+    stat("receipt", "Spent", summary.spent));
 }
 
 export function createBucketsPage(ctx: BucketsContext) {
@@ -80,10 +150,12 @@ export function createBucketsPage(ctx: BucketsContext) {
   const note = el("div", { class: "note", role: "alert" });
   const actions = el("div", { class: "head-actions" });
   const content = el("div", { class: "buckets-content" });
+  const strip = el("div", { class: "summary-wrap" });
   const menu = el("div", { class: "gmenu", role: "menu", hidden: true });
-  const root = el("div", { class: "page" }, el("div", { class: "page-row" }, el("h1", {}, "Buckets"), actions), note, content, menu);
+  const root = el("div", { class: "page" }, el("div", { class: "page-row" }, el("h1", {}, "Buckets"), ctx.monthHeader, actions), strip, note, content, menu);
 
   let table: BucketTable = { groups: [], buckets: [] };
+  let month: BucketMonthView = { summary: { month: "", readyToAssign: 0, income: 0, assigned: 0, spent: 0 }, groups: [], buckets: [] };
   let reordering = false;
   let renaming: { groupId: string; draft: string; error: string } | null = null;
   let archivedOpen = false;
@@ -113,7 +185,7 @@ export function createBucketsPage(ctx: BucketsContext) {
    * it last showed and says the change was saved. Returns whether the table was redrawn.
    */
   async function refresh(focusBucketId?: string): Promise<boolean> {
-    let next: BucketTable;
+    let next: BucketsData;
     try {
       next = await ctx.reload();
     } catch {
@@ -126,7 +198,83 @@ export function createBucketsPage(ctx: BucketsContext) {
     return true;
   }
 
-  const dialogContext = { client, budget, table: () => table, refresh, snack: ctx.snack };
+  // ----- Add / take -----
+  // Changes made on this page, newest last, for Cmd/Ctrl+Z; each runs its Undo at most once.
+  const changes: { undo: () => Promise<void>; used: boolean }[] = [];
+  let flashId: string | null = null;
+
+  /** Assigns (+) or takes (−) for the month shown; resolves to the refusal's message, if any. */
+  async function changeMoney(bucket: BucketMonth, delta: number): Promise<string | null> {
+    const key = month.summary.month;
+    try {
+      await client.assign(bucket.id, { month: key, amount: delta });
+    } catch (error) {
+      return messageOf(error);
+    }
+    flashId = bucket.id;
+    await refresh();
+    const text = describeChange(bucket.name, delta);
+    const change = {
+      used: false,
+      async undo() {
+        if (change.used) return;
+        change.used = true;
+        try {
+          await client.assign(bucket.id, { month: key, amount: -delta });
+        } catch (error) {
+          change.used = false;
+          throw error;
+        }
+        flashId = bucket.id;
+        await refresh();
+        const now = month.buckets.find((candidate) => candidate.id === bucket.id);
+        ctx.announce(now ? `Undone. ${bucket.name} is back to ${formatMoney(now.available, { symbol: true })} available.` : `Undone. ${text}.`);
+      },
+    };
+    changes.push(change);
+    ctx.snack(`${text}.`, change.undo);
+    const after = month.buckets.find((candidate) => candidate.id === bucket.id);
+    if (after) ctx.announce(`${text}. ${bucket.name} now has ${formatMoney(after.available, { symbol: true })} available. Ready to assign ${formatMoney(month.summary.readyToAssign, { symbol: true })}.`);
+    return null;
+  }
+
+  const pills = createPills({
+    readyToAssign: () => month.summary.readyToAssign,
+    apply: changeMoney,
+    previewReady(cents) {
+      const figure = strip.querySelector<HTMLElement>(".ready-figure");
+      if (!figure) return;
+      const shown = cents ?? month.summary.readyToAssign;
+      figure.replaceChildren(...readyParts(shown));
+      figure.classList.toggle("is-preview", cents !== null);
+      figure.closest(".ready")?.classList.toggle("neg", shown < 0);
+    },
+  });
+
+  // Cmd/Ctrl+Z undoes the latest add or take: outside fields (where it is the field's own undo), or in an empty pill.
+  document.addEventListener("keydown", (event) => {
+    if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey || event.key.toLowerCase() !== "z") return;
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    const emptyPill = target instanceof HTMLInputElement && target.classList.contains("pill-in") && target.value === "";
+    if (target?.closest("input, textarea, select, [contenteditable]") && !emptyPill) return;
+    if (document.querySelector("dialog[open]")) return;
+    const change = changes.findLast((candidate) => !candidate.used);
+    if (!change) return;
+    event.preventDefault();
+    change.undo().catch((error: unknown) => setNote(note, messageOf(error)));
+  }, { signal });
+
+  function openMoneySheet(bucket: BucketMonth, opener: HTMLElement): void {
+    openBucketSheet({
+      bucket,
+      readyToAssign: month.summary.readyToAssign,
+      apply: (delta) => changeMoney(bucket, delta),
+      edit: () => openEdit(bucket.id),
+      returnFocus: () => find(`.name-btn[data-bucket-id="${attr(bucket.id)}"]`) ?? (opener.isConnected ? opener : null),
+    });
+  }
+
+  const dialogContext = { client, budget, thisMonth: ctx.thisMonth, table: () => table, refresh, snack: ctx.snack };
   const addButtonFocus = () => find("[data-add]") ?? find("h1");
 
   function openAdd(groupId?: string, opener?: HTMLElement): void {
@@ -134,7 +282,10 @@ export function createBucketsPage(ctx: BucketsContext) {
     openBucketDialog(dialogContext, { ...(groupId ? { groupId } : {}), returnFocus: () => (opener?.isConnected ? opener : addButtonFocus()) });
   }
 
-  function openEdit(bucket: Bucket): void {
+  function openEdit(id: string): void {
+    // The dialog works on the bucket as it is now (its Available this month), whatever month is shown.
+    const bucket = table.buckets.find((candidate) => candidate.id === id);
+    if (!bucket) return;
     closeMenu(false);
     openBucketDialog(dialogContext, { bucket, returnFocus: () => find(`.name-btn[data-bucket-id="${attr(bucket.id)}"]`) ?? addButtonFocus() });
   }
@@ -183,7 +334,7 @@ export function createBucketsPage(ctx: BucketsContext) {
       const message = key.kind === "group" ? `Moved the ${name} group ${upDown}.`
         : from.groupId === to.groupId ? `Moved ${name} ${upDown}.` : `Moved ${name} to ${groupName(to.groupId)}.`;
       ctx.snack(message, async () => {
-        const now = locate(layoutOf(await ctx.reload()), key);
+        const now = locate(layoutOf((await ctx.reload()).table), key);
         if (!now || now.index !== to.index || now.groupId !== to.groupId) throw new Error(`${name} has moved since, so the move was not undone.`);
         await send(key, from);
         movedKey = `${key.kind}:${key.id}`;
@@ -288,7 +439,7 @@ export function createBucketsPage(ctx: BucketsContext) {
   // ----- Rename in the row -----
   function startRename(group: BucketGroup): void {
     renaming = { groupId: group.id, draft: group.name, error: "" };
-    render(table);
+    render({ table, month });
     const input = find(".rn input") as HTMLInputElement | null;
     input?.focus();
     input?.select();
@@ -297,7 +448,7 @@ export function createBucketsPage(ctx: BucketsContext) {
   function cancelRename(): void {
     const id = renaming?.groupId;
     renaming = null;
-    render(table);
+    render({ table, month });
     if (id) focusKey({ kind: "group", id });
   }
 
@@ -312,10 +463,10 @@ export function createBucketsPage(ctx: BucketsContext) {
       const saved = await client.renameGroup(groupId, { name: draft });
       renaming = null;
       // The rename saved either way; without a fresh table, show the saved name in the one we have.
-      if (!(await refresh())) render({ ...table, groups: table.groups.map((g) => (g.id === groupId ? saved : g)) });
+      if (!(await refresh())) render({ table: { ...table, groups: table.groups.map((g) => (g.id === groupId ? saved : g)) }, month });
       focusKey({ kind: "group", id: groupId });
       ctx.snack(`Renamed ${group.name} to ${saved.name}.`, async () => {
-        const current = (await ctx.reload()).groups.find((g) => g.id === groupId);
+        const current = (await ctx.reload()).table.groups.find((g) => g.id === groupId);
         if (!current) throw new Error("That group was deleted, so the rename was not undone.");
         if (current.name !== saved.name) throw new Error(`${saved.name} has been renamed since, so the rename was not undone.`);
         await client.renameGroup(groupId, { name: group.name });
@@ -325,7 +476,7 @@ export function createBucketsPage(ctx: BucketsContext) {
     } catch (error) {
       if (renaming) {
         renaming.error = messageOf(error);
-        render(table);
+        render({ table, month });
         (find(".rn input") as HTMLInputElement | null)?.focus();
       }
     } finally {
@@ -382,9 +533,8 @@ export function createBucketsPage(ctx: BucketsContext) {
     return el("div", { class: "c ctl", role: "cell" }, button(-1, first), button(1, last));
   }
 
-  function groupRow(group: BucketGroup, index: number): HTMLElement {
+  function groupRow(group: BucketGroup, totals: GroupMonth | undefined, index: number): HTMLElement {
     const buckets = activeIn(group.id);
-    const total = buckets.reduce((sum, bucket) => sum + bucket.available, 0);
     const isRenaming = renaming?.groupId === group.id && !reordering;
     const row = el("div", { class: `bgroup${isRenaming ? " renaming" : ""}${movedKey === `group:${group.id}` ? " moved" : ""}`, role: "row", "data-group-id": group.id });
     if (isRenaming) row.append(renameCell());
@@ -401,59 +551,108 @@ export function createBucketsPage(ctx: BucketsContext) {
     }
     appendAll(row,
       el("div", { class: "c det", role: "cell" }),
-      el("div", { class: "c num avail", role: "cell" }, formatMoney(total)),
+      el("div", { class: "c num spent", role: "cell" }, formatMoney(totals?.spent ?? 0)),
+      el("div", { class: "c take", role: "cell" }),
+      el("div", { class: "c num avail", role: "cell" }, formatMoney(totals?.available ?? 0)),
       reordering ? moveButtons("group", group.id, `${group.name} group`, index === 0, index === table.groups.length - 1) : null,
       el("div", { class: "c go", "aria-hidden": "true" }));
     return row;
   }
 
-  function bucketRow(bucket: Bucket, first: boolean, last: boolean): HTMLElement {
+  function figures(bucket: BucketMonth, take: HTMLElement): HTMLElement[] {
     const over = bucket.available < 0;
-    const kind = bucket.type === "goal" ? " is-goal" : bucket.type === "plain" ? " is-plain" : "";
-    const row = el("div", { class: `brow${kind}${over ? " is-over" : ""}${movedKey === `bucket:${bucket.id}` ? " moved" : ""}`, role: "row", "data-bucket-id": bucket.id });
+    const available = el("div", { class: `c num avail${flashId === bucket.id ? " flash" : ""}`, role: "cell" },
+      el("span", { class: "fig" }, formatMoney(bucket.available)), over ? el("span", { class: "sr-only" }, " overspent") : null);
+    return [
+      el("div", { class: "c det", role: "cell" }, ...target(bucket)),
+      el("div", { class: "c num spent", role: "cell" }, formatMoney(bucket.spent)),
+      take,
+      available,
+    ];
+  }
+
+  const rowClass = (bucket: BucketMonth) => `brow${bucket.type === "goal" ? " is-goal" : bucket.type === "plain" ? " is-plain" : ""}${bucket.available < 0 ? " is-over" : ""}`;
+
+  function bucketRow(bucket: BucketMonth, first: boolean, last: boolean): HTMLElement {
+    const row = el("div", { class: `${rowClass(bucket)}${movedKey === `bucket:${bucket.id}` ? " moved" : ""}`, role: "row", "data-bucket-id": bucket.id });
     let label: HTMLElement;
     if (reordering) label = el("span", { class: "name" }, bucket.name);
     else {
+      // On the compact table the row opens the bucket sheet's Add / take tab (Edit is in its head).
+      const sheet = compact.matches;
       label = el("button", {
         class: "name-btn", type: "button", "data-bucket-id": bucket.id, "aria-haspopup": "dialog",
-        "aria-keyshortcuts": "Alt+ArrowUp Alt+ArrowDown", "aria-label": `Edit ${bucket.name}`,
+        "aria-keyshortcuts": "Alt+ArrowUp Alt+ArrowDown", "aria-label": sheet ? bucket.name : `Edit ${bucket.name}`,
       }, el("span", { class: "name" }, bucket.name));
-      label.addEventListener("click", () => openEdit(bucket));
+      label.addEventListener("click", () => {
+        if (compact.matches) openMoneySheet(bucket, label);
+        else openEdit(bucket.id);
+      });
     }
     appendAll(row,
       el("div", { class: "c bname", role: "rowheader" }, grip(), dot(bucket.colour), label),
-      el("div", { class: "c det", role: "cell" }, ...target(bucket)),
-      el("div", { class: "c num avail", role: "cell" }, formatMoney(bucket.available), over ? el("span", { class: "sr-only" }, " overspent") : null),
+      ...figures(bucket, reordering ? el("div", { class: "c take", role: "cell" }) : pills.cell(bucket)),
       reordering ? moveButtons("bucket", bucket.id, bucket.name, first, last) : null,
       el("div", { class: "c go", "aria-hidden": "true" }, reordering ? null : icon("right", "sm")));
     return row;
   }
 
+  /** An archived bucket with activity this month: shown for its figures, but it can't be edited or moved. */
+  function archivedRow(bucket: BucketMonth): HTMLElement {
+    const row = el("div", { class: `${rowClass(bucket)} is-archived`, role: "row" });
+    appendAll(row,
+      el("div", { class: "c bname", role: "rowheader" }, el("span", { class: "grip-space", "aria-hidden": "true" }), dot(bucket.colour),
+        el("span", { class: "name" }, bucket.name), el("span", { class: "tag" }, "Archived")),
+      ...figures(bucket, el("div", { class: "c take", role: "cell" })),
+      reordering ? el("div", { class: "c ctl", role: "cell" }) : null,
+      el("div", { class: "c go", "aria-hidden": "true" }));
+    return row;
+  }
+
+  /**
+   * One table whose groups each sit on a card of their own, with the page showing between them. Each group is a
+   * row group (its row, its buckets, its archived rows); the column headers are a row group atop the first card.
+   */
   function renderTable(): HTMLElement {
-    const grid = el("div", { class: `card btable${reordering ? " reordering" : ""}`, role: "table", "aria-label": "Buckets" },
-      el("div", { class: "bhead", role: "row" },
-        el("div", { class: "c", role: "columnheader" }, "Bucket"),
-        el("div", { class: "c det", role: "columnheader" }, "Target or goal"),
-        el("div", { class: "c num avail", role: "columnheader" }, "Available"),
-        reordering ? el("div", { class: "c ctl", role: "columnheader" }, el("span", { class: "sr-only" }, "Move")) : null,
-        el("div", { class: "c go", "aria-hidden": "true" })));
+    const head = el("div", { class: "bhead", role: "row" },
+      el("div", { class: "c", role: "columnheader" }, "Bucket"),
+      el("div", { class: "c det", role: "columnheader" }, "Target or goal"),
+      el("div", { class: "c num spent", role: "columnheader" }, "Spent"),
+      el("div", { class: "c take", role: "columnheader" }, "Add / take"),
+      el("div", { class: "c num avail", role: "columnheader" }, "Available"),
+      reordering ? el("div", { class: "c ctl", role: "columnheader" }, el("span", { class: "sr-only" }, "Move")) : null,
+      el("div", { class: "c go", "aria-hidden": "true" }));
+    const section = (...rows: HTMLElement[]) => el("div", { class: "bsection", role: "rowgroup" }, ...rows);
     const groups = table.groups;
-    groups.forEach((group, groupIndex) => {
-      grid.append(groupRow(group, groupIndex));
-      const buckets = activeIn(group.id);
-      if (!buckets.length) {
-        grid.append(el("div", { class: "bempty", role: "row", "data-group-id": group.id },
+    const shown = new Map(month.buckets.map((bucket) => [bucket.id, bucket]));
+    const archivedIn = (groupId: string | null) => month.buckets.filter((bucket) => bucket.archived && bucket.groupId === groupId);
+    const cards = groups.map((group, groupIndex) => {
+      const rows = [groupRow(group, month.groups.find((totals) => totals.id === group.id), groupIndex)];
+      const buckets = activeIn(group.id).map((bucket) => shown.get(bucket.id)).filter((bucket): bucket is BucketMonth => bucket !== undefined);
+      const archived = archivedIn(group.id);
+      if (!buckets.length && !archived.length) {
+        rows.push(el("div", { class: "bempty", role: "row", "data-group-id": group.id },
           el("div", { class: "c", role: "cell" }, "No buckets"),
           el("div", { class: "c det", role: "cell" }),
+          el("div", { class: "c spent", role: "cell" }),
+          el("div", { class: "c take", role: "cell" }),
           el("div", { class: "c avail", role: "cell" }),
           reordering ? el("div", { class: "c ctl", role: "cell" }) : null,
           el("div", { class: "c go", "aria-hidden": "true" })));
       }
-      buckets.forEach((bucket, index) => grid.append(bucketRow(bucket,
+      rows.push(...buckets.map((bucket, index) => bucketRow(bucket,
         groupIndex === 0 && index === 0,
         groupIndex === groups.length - 1 && index === buckets.length - 1)));
+      rows.push(...archived.map(archivedRow));
+      return [section(...rows)];
     });
-    return grid;
+    // An archived bucket whose group was deleted still shows its month, on a card after every group. Reorder
+    // hides archived rows, so it leaves that card out.
+    const orphans = reordering ? [] : archivedIn(null);
+    if (orphans.length) cards.push([section(...orphans.map(archivedRow))]);
+    const [first = [], ...rest] = cards;
+    return el("div", { class: `btable${reordering ? " reordering" : ""}`, role: "table", "aria-label": "Buckets" },
+      ...[[section(head), ...first], ...rest].map((sections) => el("div", { class: "card bcard" }, ...sections)));
   }
 
   function renderArchived(archived: Bucket[]): HTMLElement {
@@ -493,7 +692,7 @@ export function createBucketsPage(ctx: BucketsContext) {
     renaming = null;
     closeMenu(false);
     reorder.cancel();
-    render(table);
+    render({ table, month });
     find("[data-reorder]")?.focus();
   }
 
@@ -501,12 +700,25 @@ export function createBucketsPage(ctx: BucketsContext) {
     reorder.cancel();
     if (!phone.matches && reordering) {
       reordering = false;
-      render(table);
+      render({ table, month });
     }
   }, { signal });
+  // The row's label and what a tap opens follow the layout.
+  compact.addEventListener("change", () => render({ table, month }), { signal });
 
-  function render(next: BucketTable): void {
-    table = next;
+  function openRain(): void {
+    closeMenu(false);
+    void openRainPreview({
+      client, budget, month: month.summary.month, readyToAssign: month.summary.readyToAssign, buckets: month.buckets,
+      refresh: () => refresh(), snack: ctx.snack,
+      returnFocus: () => find(".btn-rain") ?? find("h1"),
+      layer: () => find(".rain-layer"),
+    }, (error) => setNote(note, messageOf(error)));
+  }
+
+  function render(next: BucketsData): void {
+    table = next.table;
+    month = next.month;
     closeMenu(false);
     if (!phone.matches) reordering = false;
     const active = table.buckets.filter((bucket) => !bucket.archived);
@@ -526,8 +738,12 @@ export function createBucketsPage(ctx: BucketsContext) {
     } else {
       main = renderTable();
     }
+    const focusedPill = pills.capture(root);
+    strip.replaceChildren(renderSummary(month.summary, month.summary.month >= ctx.thisMonth ? rainButton(openRain) : null));
     content.replaceChildren(main, ...(archived.length ? [renderArchived(archived)] : []));
+    pills.restore(root, focusedPill);
     movedKey = null;
+    flashId = null;
   }
 
   return {

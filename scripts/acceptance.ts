@@ -1,14 +1,22 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 
-// Isolated Compose project and volume, so acceptance never touches a running personal budget.
-const project = `bucketeer-acceptance-${process.pid}`;
+// Isolated Compose projects and volumes, so acceptance never touches a running personal budget.
+const mainProject = `bucketeer-acceptance-${process.pid}`;
+const upgradeProject = `bucketeer-acceptance-upgrade-${process.pid}`;
+const mainImage = `bucketeer-acceptance-main-${process.pid}`;
+const mainContainer = `bucketeer-acceptance-main-${process.pid}`;
+let project = mainProject;
 let port = 3000;
+let timeZone: string | undefined;
+function docker(args: string[], input?: string | Buffer): string {
+  return execFileSync("docker", args, { encoding: "utf8", input, timeout: 300_000, maxBuffer: 10 * 1024 * 1024 }).trim();
+}
 function compose(...args: string[]): string {
   return execFileSync("docker", ["compose", "-p", project, "-f", "compose.yaml", "-f", "-", ...args], {
     encoding: "utf8",
     input: JSON.stringify({ services: { bucketeer: { environment: { PORT: String(port) } } } }),
-    env: { ...process.env, BUCKETEER_PORT: "0", BUCKETEER_BIND: "127.0.0.1" },
+    env: { ...process.env, BUCKETEER_PORT: "0", BUCKETEER_BIND: "127.0.0.1", ...(timeZone ? { TZ: timeZone } : {}) },
     timeout: 180_000,
     maxBuffer: 10 * 1024 * 1024,
   }).trim();
@@ -68,8 +76,51 @@ try {
   cliFails("invalid_input", "account", "add", ...budgetArgs, "--name", "Bad", "--type", "cash", "--date", "2026-02-30");
   cliFails("invalid_input", "account", "add", ...budgetArgs, "--name", "Bad", "--type", "cash", "--starting-balance", "1.234");
   cliFails("not_found", "account", "close", "missing");
-  const accounts = JSON.parse(cli("account", "list", ...budgetArgs, "--json"));
+  let accounts = JSON.parse(cli("account", "list", ...budgetArgs, "--json"));
   assert.deepEqual(accounts, [renamed, visa, JSON.parse(cli("account", "reopen", wallet.id, "--json"))]);
+  // Income: it fills Ready to assign and the account's balance; a card's starting debt still reduces Ready to assign.
+  const ready = () => JSON.parse(cli("ready", ...budgetArgs, "--json")).readyToAssign;
+  assert.equal(ready(), 58791);
+  assert.equal(cli("ready", ...budgetArgs), "587.91");
+  const accountArgs = ["--account", checking.id];
+  const paycheck = JSON.parse(cli("tx", "add", ...accountArgs, "--amount", "2000", "--income", "--payee", "Acme Payroll", "--json"));
+  assert.deepEqual([paycheck.amount, paycheck.category, paycheck.payee], [200000, { kind: "income" }, "Acme Payroll"]);
+  assert.equal(ready(), 258791);
+  assert.equal(JSON.parse(cli("account", "list", ...budgetArgs, "--json"))[0].balance, 300000);
+  assert.deepEqual(cli("tx", "list", ...accountArgs).split("\n"), [`${paycheck.id}\t${paycheck.date}\tAcme Payroll\tIncome\t2,000.00\t3,000.00`]);
+  cliFails("invalid_input", "tx", "add", ...accountArgs, "--amount", "-5", "--income");
+  cliFails("invalid_input", "tx", "add", ...accountArgs, "--amount", "5", "--income", "--date", "2999-01-01");
+  cliFails("invalid_input", "tx", "add", ...accountArgs, "--amount", "5", "--income", "--date", "2000-01-01");
+  cliFails("usage", "tx", "add", ...accountArgs, "--amount", "5");
+  // A date before an account's starting date is accepted and counts. (Dates are a few days back, so the clock never matters.)
+  const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+  const savings = JSON.parse(cli("account", "add", ...budgetArgs, "--name", "Savings", "--type", "savings", "--date", daysAgo(2), "--json"));
+  const early = JSON.parse(cli("tx", "add", "--account", savings.id, "--amount", "25", "--income", "--date", daysAgo(3), "--json"));
+  assert.equal(early.date, daysAgo(3));
+  assert.equal(JSON.parse(cli("account", "list", ...budgetArgs, "--json"))[3].balance, 2500);
+  assert.equal(ready(), 261291);
+  // A closed account takes no new transactions.
+  cli("account", "close", wallet.id);
+  cliFails("account_closed", "tx", "add", "--account", wallet.id, "--amount", "5", "--income");
+  cli("account", "reopen", wallet.id);
+  // Editing income down is allowed; deleting removes it.
+  assert.equal(JSON.parse(cli("tx", "edit", early.id, "--amount", "10", "--json")).amount, 1000);
+  assert.deepEqual(JSON.parse(cli("tx", "delete", early.id, "--json")), { id: early.id, deleted: true });
+  assert.equal(ready(), 258791);
+  // tx list --month: only that month's rows, then the balance at its end (the container's zone is UTC).
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  const lastMonth = new Date(Date.UTC(Number(thisMonth.slice(0, 4)), Number(thisMonth.slice(5, 7)) - 2, 15)).toISOString().slice(0, 7);
+  const backPay = JSON.parse(cli("tx", "add", "--account", savings.id, "--amount", "25", "--income", "--date", `${lastMonth}-15`, "--json"));
+  assert.deepEqual(cli("tx", "list", "--account", savings.id, "--month", lastMonth).split("\n"), [
+    `${backPay.id}\t${lastMonth}-15\t\tIncome\t25.00\t25.00`,
+    `Balance at end of ${lastMonth}\t25.00`,
+  ]);
+  assert.deepEqual(cli("tx", "list", "--account", savings.id, "--month", thisMonth).split("\n"), ["No transactions.", `Balance at end of ${thisMonth}\t25.00`]);
+  assert.deepEqual(JSON.parse(cli("tx", "list", "--account", savings.id, "--month", lastMonth, "--json")).balance, 2500);
+  cliFails("invalid_input", "tx", "list", "--account", savings.id, "--month", "2999-01");
+  cli("tx", "delete", backPay.id);
+  accounts = JSON.parse(cli("account", "list", ...budgetArgs, "--json"));
+  let register = JSON.parse(cli("tx", "list", ...accountArgs, "--json"));
   // Buckets and groups: dollars in, cents out; positions are 1-based.
   assert.deepEqual(JSON.parse(cli("bucket", "list", ...budgetArgs, "--json")), { groups: [], buckets: [] });
   const fixed = JSON.parse(cli("group", "add", ...budgetArgs, "--name", "Fixed", "--json"));
@@ -111,15 +162,157 @@ try {
   cliFails("not_found", "bucket", "archive", "missing");
   cliFails("not_found", "group", "delete", "missing");
   cliFails("not_found", "bucket", "add", ...budgetArgs, "--name", "Car", "--group", "missing");
+  // Spending: a bucket takes either sign. Money out is Spent, money back in is assigned to the bucket, and
+  // neither moves Ready to assign.
+  // A bucket's figures in a month (default: the server's current month).
+  const bucketOf = (id: string, ...month: string[]) => JSON.parse(cli("month", ...budgetArgs, ...month, "--json")).buckets.find((bucket: { id: string }) => bucket.id === id);
+  const eatingOut = JSON.parse(cli("bucket", "add", ...budgetArgs, "--name", "Eating out", "--group", fixed.id, "--json"));
+  const readyBeforeSpending = ready();
+  cli("tx", "add", "--account", visa.id, "--amount", "-120", "--bucket", eatingOut.id, "--payee", "Noodle Bar");
+  assert.deepEqual([bucketOf(eatingOut.id).available, bucketOf(eatingOut.id).spent], [-12000, 12000]);
+  assert.equal(ready(), readyBeforeSpending);
+  cliFails("bucket_overspent", "bucket", "archive", eatingOut.id);
+  const reimbursed = JSON.parse(cli("tx", "add", ...accountArgs, "--amount", "30", "--bucket", eatingOut.id, "--json"));
+  assert.deepEqual(reimbursed.category, { kind: "bucket", bucketId: eatingOut.id });
+  assert.deepEqual([bucketOf(eatingOut.id).available, bucketOf(eatingOut.id).spent], [-9000, 12000]);
+  assert.equal(ready(), readyBeforeSpending);
+  cliFails("usage", "tx", "add", ...accountArgs, "--amount", "-5", "--income", "--bucket", eatingOut.id);
+  // Archiving returns money left in a bucket to Ready to assign; an archived bucket takes no new money,
+  // but what was filed to it stays and can still be edited.
+  const coat = JSON.parse(cli("tx", "add", ...accountArgs, "--amount", "-40", "--bucket", clothing.id, "--payee", "Coat", "--json"));
+  cli("tx", "add", ...accountArgs, "--amount", "50", "--bucket", clothing.id);
+  const readyBeforeArchive = ready();
+  const archivedWithMoney = JSON.parse(cli("bucket", "archive", clothing.id, "--json"));
+  assert.deepEqual([archivedWithMoney.bucket.archived, archivedWithMoney.returned], [true, 1000]);
+  assert.equal(ready(), readyBeforeArchive + 1000);
+  cliFails("bucket_archived", "tx", "add", ...accountArgs, "--amount", "-5", "--bucket", clothing.id);
+  cliFails("bucket_archived", "tx", "edit", reimbursed.id, "--bucket", clothing.id);
+  const kept = JSON.parse(cli("tx", "edit", coat.id, "--memo", "Winter", "--json"));
+  assert.deepEqual([kept.memo, kept.category], ["Winter", { kind: "bucket", bucketId: clothing.id }]);
+  cli("bucket", "restore", clothing.id);
+  // Assigning: every assign and take is a signed ledger entry in a month, drawn from one Ready to assign.
+  const month = JSON.parse(cli("month", ...budgetArgs, "--json")).summary.month as string;
+  const nextMonth = `${Number(month.slice(5)) === 12 ? Number(month.slice(0, 4)) + 1 : month.slice(0, 4)}-${String(Number(month.slice(5)) % 12 + 1).padStart(2, "0")}`;
+  const readyBeforeAssigning = ready();
+  assert.ok(readyBeforeAssigning >= 165000, "The acceptance budget has enough ready to assign Rent.");
+  const assigned = JSON.parse(cli("assign", rent.id, "--amount", "1650", "--json"));
+  assert.deepEqual([assigned.month, assigned.assigned, assigned.available], [month, 165000, 165000]);
+  assert.equal(ready(), readyBeforeAssigning - 165000);
+  cliFails("not_enough_ready", "assign", rent.id, "--amount", "99,999,999");
+  cliFails("not_enough_available", "assign", rent.id, "--amount", "-2000");
+  cliFails("invalid_input", "assign", rent.id, "--amount", "1", "--month", "1999-01");
+  // Assigning into next month draws from the same Ready to assign, shown alike in every month.
+  assert.equal(JSON.parse(cli("assign", rent.id, "--amount", "10", "--month", nextMonth, "--json")).assigned, 1000);
+  assert.equal(JSON.parse(cli("month", ...budgetArgs, "--month", nextMonth, "--json")).summary.readyToAssign, ready());
+  assert.equal(ready(), readyBeforeAssigning - 166000);
+  cliFails("bucket_has_future", "bucket", "archive", rent.id);
+  // Overspending carries into the next month.
+  assert.deepEqual([bucketOf(eatingOut.id, "--month", nextMonth).carriedIn, bucketOf(eatingOut.id, "--month", nextMonth).available], [-9000, -9000]);
+  assert.match(cli("month", ...budgetArgs).split("\n")[0]!, new RegExp(`^${month}\tReady to assign\t`));
+  // Splits: each line draws from its own bucket; lines must share the sign, sum to the amount and number two or more.
+  const [eatingBefore, clothingBefore] = [bucketOf(eatingOut.id).available, bucketOf(clothing.id).available];
+  const splitText = cli("tx", "add", ...accountArgs, "--amount", "-80", "--line", `${eatingOut.id}:-50`, "--line", `${clothing.id}:-30`, "--payee", "Superstore");
+  assert.equal(splitText.split("\t")[3], "Split (2)");
+  assert.deepEqual([bucketOf(eatingOut.id).available, bucketOf(clothing.id).available], [eatingBefore - 5000, clothingBefore - 3000]);
+  cliFails("invalid_input", "tx", "add", ...accountArgs, "--amount", "-80", "--line", `${eatingOut.id}:-50`, "--line", `${clothing.id}:-20`);
+  cliFails("invalid_input", "tx", "add", ...accountArgs, "--amount", "-80", "--line", `${eatingOut.id}:-100`, "--line", `${clothing.id}:20`);
+  cliFails("invalid_input", "tx", "add", ...accountArgs, "--amount", "-80", "--line", `${eatingOut.id}:-80`);
+  // Transfers: paying the card off moves money between accounts and touches no bucket or Ready to assign.
+  const balanceOf = (id: string) => JSON.parse(cli("account", "list", ...budgetArgs, "--json")).find((account: { id: string }) => account.id === id).balance;
+  const readyBeforeTransfer = ready();
+  const owed = balanceOf(visa.id);
+  const checkingBefore = balanceOf(checking.id);
+  const payoff = JSON.parse(cli("tx", "add", ...accountArgs, "--amount", (owed / 100).toFixed(2), "--transfer", visa.id, "--json"));
+  assert.equal(payoff.category.kind, "transfer");
+  assert.deepEqual([balanceOf(visa.id), balanceOf(checking.id), ready()], [0, checkingBefore + owed, readyBeforeTransfer]);
+  cliFails("invalid_input", "tx", "add", ...accountArgs, "--amount", "-5", "--transfer", checking.id);
+  cliFails("usage", "tx", "add", ...accountArgs, "--amount", "-5", "--transfer", visa.id, "--income");
+  // Deleting the card's side removes both.
+  const cardSide = JSON.parse(cli("tx", "list", "--account", visa.id, "--json")).transactions.find((row: { category: { kind: string } }) => row.category.kind === "transfer");
+  cli("tx", "delete", cardSide.id);
+  assert.deepEqual([balanceOf(visa.id), balanceOf(checking.id)], [owed, checkingBefore]);
+  cliFails("not_found", "tx", "edit", payoff.id, "--memo", "Gone");
+  // A transfer that stays, to persist across the recreate below.
+  const payment = cli("tx", "add", ...accountArgs, "--amount", "-100", "--transfer", visa.id, "--payee", "Card payment").split("\t");
+  assert.deepEqual(payment.slice(2, 5), ["Card payment", "Transfer \u2192 Visa", "\u2212100.00"]);
+  accounts = JSON.parse(cli("account", "list", ...budgetArgs, "--json"));
+  register = JSON.parse(cli("tx", "list", ...accountArgs, "--json"));
   const bucketsBefore = JSON.parse(cli("bucket", "list", ...budgetArgs, "--archived", "--json"));
   assert.deepEqual(bucketsBefore.groups.map((group: { name: string }) => group.name), ["Goals", "Fixed"]);
-  console.log("Budget saved and updated, accounts added and edited, buckets and groups added, moved, archived and restored. Recreating with the same volume and a non-default port...");
+  const monthBefore = JSON.parse(cli("month", ...budgetArgs, "--month", nextMonth, "--json"));
+  console.log("Budget saved and updated, accounts added and edited, income recorded, spending and reimbursements filed to buckets, transfers made and deleted, money assigned and taken by month, buckets and groups added, moved, archived and restored. Recreating with the same volume and a non-default port...");
   port = 4317;
   compose("up", "-d", "--force-recreate", "--wait", "--wait-timeout", "60");
   assert.deepEqual(JSON.parse(cli("budget", "open", saved.id, "--json")), updated);
   assert.deepEqual(JSON.parse(cli("budget", "list", "--json")), [updated]);
   assert.deepEqual(JSON.parse(cli("account", "list", ...budgetArgs, "--json")), accounts);
+  assert.deepEqual(JSON.parse(cli("tx", "list", ...accountArgs, "--json")), register);
   assert.deepEqual(JSON.parse(cli("bucket", "list", ...budgetArgs, "--archived", "--json")), bucketsBefore);
+  assert.deepEqual(JSON.parse(cli("month", ...budgetArgs, "--month", nextMonth, "--json")), monthBefore);
+
+  // Rain, in its own budget so every figure is exact (ADR-0005): Rent (recurring 1,650, already met) above Fuel
+  // (recurring 160) above Vacation (goal 3,000, 10 months left including this one) above Clothing (plain).
+  const monthsAfter = (from: string, count: number) => {
+    const index = Number(from.slice(0, 4)) * 12 + Number(from.slice(5)) - 1 + count;
+    return `${Math.floor(index / 12)}-${String(index % 12 + 1).padStart(2, "0")}`;
+  };
+  const rainBudget = ["--budget", JSON.parse(cli("budget", "save", "--name", "Rain", "--json")).id];
+  const rainAccount = JSON.parse(cli("account", "add", ...rainBudget, "--name", "Checking", "--type", "checking", "--starting-balance", "3350", "--json"));
+  const rainGroup = JSON.parse(cli("group", "add", ...rainBudget, "--name", "All", "--json")).id;
+  const rainBucket = (...args: string[]) => JSON.parse(cli("bucket", "add", ...rainBudget, "--group", rainGroup, ...args, "--json")).id as string;
+  const rainRent = rainBucket("--name", "Rent", "--type", "recurring", "--amount", "1650");
+  const fuel = rainBucket("--name", "Fuel", "--type", "recurring", "--amount", "160");
+  const saving = rainBucket("--name", "Vacation", "--type", "goal", "--amount", "3000", "--by", monthsAfter(month, 9));
+  const plain = rainBucket("--name", "Clothing");
+  cli("assign", rainRent, "--amount", "1650");
+  const rainReady = () => JSON.parse(cli("ready", ...rainBudget, "--json")).readyToAssign as number;
+  const rainJson = (...args: string[]) => JSON.parse(cli("rain", ...rainBudget, ...args, "--json"));
+  assert.equal(rainReady(), 170000);
+  const preview = rainJson("--dry-run");
+  assert.deepEqual(preview, { fills: [{ bucketId: fuel, amount: 16000 }, { bucketId: saving, amount: 30000 }], total: 46000 });
+  assert.equal(rainReady(), 170000);
+  const rained = rainJson();
+  assert.deepEqual({ fills: rained.fills, total: rained.total }, preview);
+  assert.equal(rainReady(), 124000);
+  assert.deepEqual(rainJson(), { fills: [], total: 0 });
+  cli("rain", "undo", rained.rainId);
+  assert.equal(rainReady(), 170000);
+  // Rain only into this month or later; a later month draws from the same pool.
+  cliFails("invalid_input", "rain", ...rainBudget, "--month", monthsAfter(month, -1));
+  const ahead = rainJson("--month", monthsAfter(month, 3));
+  assert.deepEqual(ahead.fills, [{ bucketId: rainRent, amount: 165000 }, { bucketId: fuel, amount: 5000 }]);
+  assert.equal(rainReady(), 0);
+  cli("rain", "undo", ahead.rainId);
+  // With 400 ready, Vacation gets a partial fill; spending from Fuel below its fill blocks the undo.
+  cli("assign", plain, "--amount", "1300");
+  const partial = rainJson();
+  assert.deepEqual(partial.fills, [{ bucketId: fuel, amount: 16000 }, { bucketId: saving, amount: 24000 }]);
+  cli("tx", "add", "--account", rainAccount.id, "--amount", "-1", "--bucket", fuel);
+  cliFails("money_moved", "rain", "undo", partial.rainId);
+  // A reimbursement and an overspend, in a budget of their own: Groceries (recurring 100) with 300 ready.
+  const spillBudget = ["--budget", JSON.parse(cli("budget", "save", "--name", "Spill", "--json")).id];
+  const spillAccount = JSON.parse(cli("account", "add", ...spillBudget, "--name", "Checking", "--type", "checking", "--starting-balance", "300", "--json"));
+  const spillGroup = JSON.parse(cli("group", "add", ...spillBudget, "--name", "All", "--json")).id;
+  const groceries = JSON.parse(cli("bucket", "add", ...spillBudget, "--group", spillGroup, "--name", "Groceries", "--type", "recurring", "--amount", "100", "--json")).id as string;
+  const spillMonth = (...args: string[]) => JSON.parse(cli("month", ...spillBudget, ...args, "--json"));
+  const groceriesIn = (...args: string[]) => spillMonth(...args).buckets.find((bucket: { id: string }) => bucket.id === groceries);
+  const summaryBefore = spillMonth().summary;
+  assert.equal(groceriesIn().need, 10000);
+  // Money back into a bucket counts as assigned to it: its need drops by 30, and the month's income and
+  // assigned both include the 30, while spent stays gross.
+  cli("tx", "add", "--account", spillAccount.id, "--amount", "30", "--bucket", groceries, "--payee", "Refund");
+  assert.equal(groceriesIn().need, 7000);
+  const summaryAfter = spillMonth().summary;
+  assert.deepEqual([summaryAfter.income, summaryAfter.assigned, summaryAfter.spent, summaryAfter.readyToAssign],
+    [summaryBefore.income + 3000, summaryBefore.assigned + 3000, summaryBefore.spent, summaryBefore.readyToAssign]);
+  // Fill the rest, then overspend by 40: next month carries −40, and its rain gives only the monthly 100.
+  cli("assign", groceries, "--amount", "70");
+  cli("tx", "add", "--account", spillAccount.id, "--amount", "-140", "--bucket", groceries);
+  const spillNext = monthsAfter(month, 1);
+  assert.deepEqual([groceriesIn("--month", spillNext).available, groceriesIn("--month", spillNext).need], [-4000, 10000]);
+  const spillRain = JSON.parse(cli("rain", ...spillBudget, "--month", spillNext, "--json"));
+  assert.deepEqual(spillRain.fills, [{ bucketId: groceries, amount: 10000 }]);
+  assert.equal(groceriesIn("--month", spillNext).available, 6000);
   assert.throws(() => cli("budget", "open", "missing", "--json"), (error: unknown) => {
     assert.ok(error && typeof error === "object" && "status" in error && "stdout" in error);
     assert.equal(error.status, 1);
@@ -128,7 +321,7 @@ try {
   }, "Missing budgets must produce a nonzero exit code.");
   compose("exec", "-T", "bucketeer", "node", "--input-type=module", "-e", `
     import assert from 'node:assert/strict';
-    for (const path of ['/', '/ui/app.js', '/ui/theme.js', '/ui/dom.js', '/ui/sheet.js', '/ui/shell.js', '/ui/accounts.js', '/ui/buckets.js', '/ui/bucket-dialog.js', '/ui/reorder.js', '/ui/styles.css', '/client.js', '/core/money.js', '/core/types.js', '/core/colours.js']) {
+    for (const path of ['/', '/ui/app.js', '/ui/theme.js', '/ui/dom.js', '/ui/sheet.js', '/ui/shell.js', '/ui/accounts.js', '/ui/buckets.js', '/ui/bucket-dialog.js', '/ui/reorder.js', '/ui/register.js', '/ui/split-lines.js', '/ui/category-picker.js', '/ui/styles.css', '/client.js', '/core/money.js', '/core/types.js', '/core/colours.js', '/core/refusals.js']) {
       const response = await fetch('http://localhost:${port}' + path);
       assert.equal(response.status, 200, path);
       assert.ok((await response.text()).length > 0, path);
@@ -141,6 +334,9 @@ try {
     const accountsPage = await fetch('http://localhost:${port}/budgets/${saved.id}/accounts');
     assert.equal(accountsPage.status, 200);
     assert.equal(await accountsPage.text(), await (await fetch('http://localhost:${port}/')).text());
+    const accountPage = await fetch('http://localhost:${port}/budgets/${saved.id}/accounts/${checking.id}');
+    assert.equal(accountPage.status, 200);
+    assert.equal(await accountPage.text(), await (await fetch('http://localhost:${port}/')).text());
     const bucketsPage = await fetch('http://localhost:${port}/budgets/${saved.id}/buckets');
     assert.equal(bucketsPage.status, 200);
     assert.equal(await bucketsPage.text(), await (await fetch('http://localhost:${port}/')).text());
@@ -154,7 +350,77 @@ try {
       assert.ok((await response.arrayBuffer()).byteLength > 0, path);
     }
   `);
-  console.log("PASS: Docker health on default and custom ports, CLI budget, account, group and bucket flows, container recreation, persistence, errors, and UI assets.");
+  console.log("PASS: Docker health on default and custom ports, CLI budget, account, income, spending, group and bucket flows, rain, container recreation, persistence, errors, and UI assets.");
+
+  // Upgrade: a volume written by the image from main, before versioned migrations, opens in place with the current build.
+  console.log("Building the image from main and filling an old volume with it...");
+  docker(["build", "-q", "-t", mainImage, "-"], execFileSync("git", ["archive", "--format=tar", "main"], { maxBuffer: 100 * 1024 * 1024 }));
+  const volume = `${upgradeProject}_bucketeer-data`;
+  docker(["volume", "create", "--label", `com.docker.compose.project=${upgradeProject}`, "--label", "com.docker.compose.volume=bucketeer-data", volume]);
+  docker(["run", "-d", "--name", mainContainer, "-v", `${volume}:/data`, mainImage]);
+  const oldCli = (...args: string[]) => docker(["exec", mainContainer, "bucketeer", "--url", "http://127.0.0.1:3000", ...args]);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      oldCli("status");
+      break;
+    } catch (error) {
+      if (attempt >= 60) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+    }
+  }
+  const oldBudget = JSON.parse(oldCli("budget", "save", "--name", "Old household", "--json"));
+  const oldBudgetArgs = ["--budget", oldBudget.id];
+  oldCli("account", "add", ...oldBudgetArgs, "--name", "Checking", "--type", "checking", "--starting-balance", "250.00", "--date", "2026-11-01");
+  const oldGroup = JSON.parse(oldCli("group", "add", ...oldBudgetArgs, "--name", "Fixed", "--json"));
+  oldCli("bucket", "add", ...oldBudgetArgs, "--name", "Rent", "--group", oldGroup.id, "--type", "recurring", "--amount", "1650");
+  const archivedOld = JSON.parse(oldCli("bucket", "add", ...oldBudgetArgs, "--name", "Old", "--group", oldGroup.id, "--json"));
+  oldCli("bucket", "archive", archivedOld.id);
+  const oldState = {
+    budgets: JSON.parse(oldCli("budget", "list", "--json")),
+    accounts: JSON.parse(oldCli("account", "list", ...oldBudgetArgs, "--json")),
+    buckets: JSON.parse(oldCli("bucket", "list", ...oldBudgetArgs, "--archived", "--json")),
+  };
+  docker(["stop", mainContainer]);
+  docker(["rm", mainContainer]);
+
+  console.log("Upgrading the old volume in place with the current build...");
+  project = upgradeProject;
+  port = 3000;
+  const userVersion = () => Number(compose("exec", "-T", "bucketeer", "node", "--input-type=module", "-e", `
+    import { DatabaseSync } from 'node:sqlite';
+    const database = new DatabaseSync('/data/bucketeer.sqlite', { readOnly: true });
+    console.log(database.prepare('PRAGMA user_version').get().user_version);
+  `));
+  const currentState = () => ({
+    budgets: JSON.parse(cli("budget", "list", "--json")),
+    accounts: JSON.parse(cli("account", "list", ...oldBudgetArgs, "--json")),
+    buckets: JSON.parse(cli("bucket", "list", ...oldBudgetArgs, "--archived", "--json")),
+  });
+  compose("up", "-d", "--build", "--wait", "--wait-timeout", "60");
+  assert.deepEqual(currentState(), oldState);
+  assert.equal(userVersion(), 3);
+  // The migrated volume takes transactions.
+  const oldAccount = oldState.accounts[0].id;
+  cli("tx", "add", "--account", oldAccount, "--amount", "10", "--income");
+  oldState.accounts[0] = JSON.parse(cli("account", "list", ...oldBudgetArgs, "--json"))[0];
+  assert.equal(oldState.accounts[0].balance, 26000);
+  port = 4317;
+  timeZone = "America/Los_Angeles";
+  compose("up", "-d", "--force-recreate", "--wait", "--wait-timeout", "60");
+  assert.deepEqual(currentState(), oldState);
+  assert.equal(userVersion(), 3);
+  assert.equal(compose("exec", "-T", "bucketeer", "node", "-e", "console.log(Intl.DateTimeFormat().resolvedOptions().timeZone)"), "America/Los_Angeles");
+  console.log("PASS: a volume from main upgrades in place to schema version 3 and keeps its data across a container recreate; TZ reaches the server.");
 } finally {
-  compose("down", "--volumes", "--remove-orphans", "--rmi", "local");
+  for (const name of [mainProject, upgradeProject]) {
+    project = name;
+    compose("down", "--volumes", "--remove-orphans", "--rmi", "local");
+  }
+  for (const args of [["rm", "-f", mainContainer], ["rmi", "-f", mainImage], ["volume", "rm", "-f", `${upgradeProject}_bucketeer-data`]]) {
+    try {
+      execFileSync("docker", args, { stdio: "ignore" });
+    } catch {
+      // Already gone.
+    }
+  }
 }
