@@ -182,7 +182,7 @@ test("a rain sent with the plan it previewed is refused with rain_changed once t
 test("a goal's monthly share is its goal over the months left, fixed for the month as money is assigned", () => {
   const { core, rent, fuel, vacation, clothing, row } = household(500_000);
   try {
-    // 3,000 by August 2027 is ten months from November: 300 a month.
+    // 3,000 by August 2027 is ten months from November: 300 per month.
     assert.deepEqual([row("2026-11", vacation.id).monthlyShare, row("2026-11", vacation.id).need], [30_000, 30_000]);
     core.assign(vacation.id, { month: "2026-11", amount: 10_000 });
     assert.deepEqual([row("2026-11", vacation.id).monthlyShare, row("2026-11", vacation.id).need], [30_000, 20_000]);

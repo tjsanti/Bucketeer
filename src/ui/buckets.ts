@@ -90,11 +90,11 @@ function archivedDay(iso: string | null): string {
 }
 
 /**
- * This month's assigned against what the bucket wants a month: "$100.00 of $160.00 a month", the assigned figure
- * in bold. Exactly met: just "$160.00 a month". A recurring bucket's monthly amount and a goal's monthly share alike.
+ * This month's assigned against what the bucket wants each month: "$100.00 of $160.00 per month", the assigned figure
+ * in bold. Exactly met: just "$160.00 per month". A recurring bucket's monthly amount and a goal's monthly share alike.
  */
 function perMonth(assigned: number, wanted: number, className = "num"): HTMLElement {
-  const amount = `${formatMoney(wanted, { symbol: true })} a month`;
+  const amount = `${formatMoney(wanted, { symbol: true })} per month`;
   return assigned === wanted ? el("span", { class: className }, amount)
     : el("span", { class: className }, el("span", { class: "fund" }, formatMoney(assigned, { symbol: true })), ` of ${amount}`);
 }

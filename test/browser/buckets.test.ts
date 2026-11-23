@@ -146,7 +146,7 @@ test("the Buckets page is reached from the nav and its deep link; / still opens 
   assert.deepEqual((await grid.locator(".bgroup .gname").allTextContents()), ["Fixed", "Everyday", "Goals"]);
   assert.deepEqual(await grid.locator(".bgroup .gcount").allTextContents(), ["2", "3", "1"]);
   const rent = grid.getByRole("row", { name: /Rent/ });
-  assert.equal(compact(await rent.locator(".det").innerText()), "$0.00 of $1,650.00 a month");
+  assert.equal(compact(await rent.locator(".det").innerText()), "$0.00 of $1,650.00 per month");
   const vacation = grid.getByRole("row", { name: /Vacation/ });
   assert.equal(compact(await vacation.locator(".gmeta").innerText()), "of $3,000.00 · Aug 2027");
   assert.equal(await vacation.locator(".pct").textContent(), "0%");
@@ -240,7 +240,7 @@ test("buckets can be added, edited, archived and restored, with Undo for edit an
     rent = (await tableOf(app, budgetId)).buckets.find((b) => b.id === rent.id)!;
     assert.deepEqual([rent.type, rent.amount], ["recurring", 165000]);
   });
-  await eventually(async () => assert.equal(compact(await page.getByRole("row", { name: /Rent/ }).locator(".det").innerText()), "$0.00 of $1,650.00 a month"));
+  await eventually(async () => assert.equal(compact(await page.getByRole("row", { name: /Rent/ }).locator(".det").innerText()), "$0.00 of $1,650.00 per month"));
 
   // Archive from Edit (the zero case): the row moves to the fold; Undo restores it.
   await page.getByRole("button", { name: "Edit Clothing" }).click();

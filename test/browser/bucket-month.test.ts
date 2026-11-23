@@ -60,9 +60,9 @@ test("the Buckets page shows a month's Spent, Available, vessels and goal bars, 
   assert.equal(await cell(page, "Groceries", "spent"), "0.00");
   assert.equal(await cell(page, "Groceries", "avail"), "260.00");
   assert.equal(await vesselLabel(page, "Groceries"), "50% of this month’s target assigned");
-  assert.match(await cell(page, "Groceries", "det"), /\$300\.00 of \$600\.00 a month/);
+  assert.match(await cell(page, "Groceries", "det"), /\$300\.00 of \$600\.00 per month/);
   assert.equal(await vesselLabel(page, "Rent"), "Monthly target met");
-  assert.equal(await cell(page, "Rent", "det"), "$1,650.00 a month");
+  assert.equal(await cell(page, "Rent", "det"), "$1,650.00 per month");
   assert.equal(await barLabel(page, "Vacation"), "10% saved toward a $3,000.00 goal");
   assert.equal(await groupCell(page, "Everyday", "spent"), "0.00");
   assert.equal(await groupCell(page, "Everyday", "avail"), "560.00");
@@ -100,9 +100,9 @@ test("the Buckets page shows a month's Spent, Available, vessels and goal bars, 
 
 /**
  * Checking at 9,000.00, with Rent (recurring 1,650, all assigned this month) beside the goals. Vacation (3,000 by
- * nine months on: ten months, 300 a month) has 100 this month. Laptop (1,800 over six months: 300 a month) has all
+ * nine months on: ten months, 300 per month) has 100 this month. Laptop (1,800 over six months: 300 per month) has all
  * 300. Bike (600) was saved in full last month. Camera (400) is due next month. House deposit (25,000 over twenty
- * months: 1,250 a month) has 1,000, the widest figures.
+ * months: 1,250 per month) has 1,000, the widest figures.
  */
 async function goals(url: string) {
   const budgetId = await seedBudget(url, "Household");
@@ -154,30 +154,30 @@ test("a goal row shows the month's share of its goal in a recurring row's words,
   await ready(page);
 
   // Short of the share, this month's assigned leads in bold; exactly met, only the share. A reached goal has none.
-  assert.equal(await shareText(page, "Vacation"), "$100.00 of $300.00 a month");
+  assert.equal(await shareText(page, "Vacation"), "$100.00 of $300.00 per month");
   assert.equal(await shareOf(page, "Vacation").locator(".fund").textContent(), "$100.00");
-  assert.equal(await shareText(page, "Laptop"), "$300.00 a month");
+  assert.equal(await shareText(page, "Laptop"), "$300.00 per month");
   assert.equal(await shareOf(page, "Laptop").locator(".fund").count(), 0);
-  assert.equal(await shareText(page, "Camera"), "$0.00 of $200.00 a month");
-  assert.equal(await shareText(page, "House deposit"), "$1,000.00 of $1,250.00 a month");
+  assert.equal(await shareText(page, "Camera"), "$0.00 of $200.00 per month");
+  assert.equal(await shareText(page, "House deposit"), "$1,000.00 of $1,250.00 per month");
   assert.equal(await shareOf(page, "Bike").count(), 0);
   assert.equal(await barLabel(page, "Bike"), "100% saved toward a $600.00 goal");
   assert.equal(compact(await rowOf(page, "Vacation").locator(".gmeta").innerText()), `of $3,000.00 · ${monthOf(9).label.replace(/^(\w{3})\w*/, "$1")}`);
-  assert.equal(await cell(page, "Rent", "det"), "$1,650.00 a month");
+  assert.equal(await cell(page, "Rent", "det"), "$1,650.00 per month");
   for (const name of ["Vacation", "Laptop", "Camera", "House deposit"]) await assertShareLine(page, name);
 
   // Next month the share is worked out again from what carried in: 2,900 over nine months is 322.22…, rounded up.
   await page.locator(".month-head").getByRole("button", { name: "Next month" }).click();
   await ready(page);
   assert.equal(compact(await page.locator(".month-head .month-label").innerText()), monthOf(1).label);
-  assert.equal(await shareText(page, "Vacation"), "$0.00 of $322.23 a month");
-  assert.equal(await shareText(page, "Laptop"), "$0.00 of $300.00 a month");
-  assert.equal(await shareText(page, "Camera"), "$0.00 of $400.00 a month");
+  assert.equal(await shareText(page, "Vacation"), "$0.00 of $322.23 per month");
+  assert.equal(await shareText(page, "Laptop"), "$0.00 of $300.00 per month");
+  assert.equal(await shareText(page, "Camera"), "$0.00 of $400.00 per month");
 
   // Overdue, Camera still wants all of what's left in one month.
   await page.goto(`${app.url}/budgets/${budgetId}/buckets?month=${monthOf(3).key}`);
   await ready(page);
-  assert.equal(await shareText(page, "Camera"), "$0.00 of $400.00 a month");
+  assert.equal(await shareText(page, "Camera"), "$0.00 of $400.00 per month");
   assert.deepEqual(app.pageErrors, []);
 });
 
@@ -190,8 +190,8 @@ test("on a phone a goal's share is its own line under its date, and nothing wrap
     await ready(page);
     const phoneRow = (name: string) => page.locator(".brow", { has: page.locator(".name", { hasText: new RegExp(`^${name}$`) }) });
     const share = (name: string) => phoneRow(name).locator(".goal-share");
-    assert.equal(compact(await share("Vacation").innerText()), "$100.00 of $300.00 a month");
-    assert.equal(compact(await share("House deposit").innerText()), "$1,000.00 of $1,250.00 a month");
+    assert.equal(compact(await share("Vacation").innerText()), "$100.00 of $300.00 per month");
+    assert.equal(compact(await share("House deposit").innerText()), "$1,000.00 of $1,250.00 per month");
     assert.equal(await share("Bike").count(), 0);
     for (const name of ["Vacation", "Laptop", "Camera", "House deposit"]) {
       const [shareTop, dateBottom] = await Promise.all([

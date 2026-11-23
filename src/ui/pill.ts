@@ -45,7 +45,7 @@ export function createPills(ctx: PillContext) {
       el("dd", {}, from, to === null ? null : el("span", { class: "arrow" }, " → "), to, extra ? el("span", { class: "of" }, ` ${extra}`) : null));
   }
 
-  /** This month's assigned, of what the bucket wants a month: a recurring bucket's amount or a goal's share. */
+  /** This month's assigned, of what the bucket wants each month: a recurring bucket's amount or a goal's share. */
   function assignedLine(bucket: BucketMonth, delta: number): HTMLElement {
     const wanted = bucket.type === "recurring" ? bucket.amount : bucket.monthlyShare;
     const of = wanted ? `of ${formatMoney(wanted)}` : "";

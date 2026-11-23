@@ -35,9 +35,9 @@ export function openBucketSheet(options: BucketSheetOptions): void {
   direction.root.addEventListener("click", () => amount.focus());
 
   // A goal's share for the month gets a line of its own, worded like a recurring bucket's amount.
-  const targetLines = bucket.type === "recurring" && bucket.amount !== null ? [`${money(bucket.amount)} a month`]
+  const targetLines = bucket.type === "recurring" && bucket.amount !== null ? [`${money(bucket.amount)} per month`]
     : bucket.type === "goal" && bucket.amount !== null && bucket.goalMonth
-      ? [`${money(bucket.amount)} by ${monthLabel(bucket.goalMonth)}`, ...(bucket.monthlyShare ? [`${money(bucket.monthlyShare)} a month`] : [])]
+      ? [`${money(bucket.amount)} by ${monthLabel(bucket.goalMonth)}`, ...(bucket.monthlyShare ? [`${money(bucket.monthlyShare)} per month`] : [])]
       : ["No target"];
   const figure = el("div", { class: `sheet-fig${bucket.available < 0 ? " is-over" : ""}` },
     el("div", {}, el("span", { class: "sheet-label" }, "Available"), el("div", { class: "big num" }, formatMoney(bucket.available))),

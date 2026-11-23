@@ -199,7 +199,7 @@ test("a goal's panel shows this month's assigned of its monthly share, and no sh
   const app = await openApp(t);
   const { page } = app;
   const { budgetId } = await household(app.url);
-  // Vacation wants 3,000 ten months out: 300 a month. Bike's 100 was all saved last month.
+  // Vacation wants 3,000 ten months out: 300 per month. Bike's 100 was all saved last month.
   const monthOf = (offset: number) => {
     const date = new Date(now.getFullYear(), now.getMonth() + offset, 1);
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
@@ -237,9 +237,9 @@ test("a goal's panel shows this month's assigned of its monthly share, and no sh
     await sheet.waitFor({ state: "hidden" });
     return lines;
   };
-  assert.deepEqual(await context("Vacation"), [`$3,000.00 by ${by(9)}`, "$300.00 a month", "Assigned 0.00 · Spent 0.00"]);
+  assert.deepEqual(await context("Vacation"), [`$3,000.00 by ${by(9)}`, "$300.00 per month", "Assigned 0.00 · Spent 0.00"]);
   assert.deepEqual(await context("Bike"), [`$100.00 by ${by(3)}`, "Assigned 0.00 · Spent 0.00"]);
-  assert.deepEqual(await context("Fuel"), ["$160.00 a month", "Assigned 0.00 · Spent 0.00"]);
+  assert.deepEqual(await context("Fuel"), ["$160.00 per month", "Assigned 0.00 · Spent 0.00"]);
   assert.deepEqual(app.pageErrors, []);
 });
 
