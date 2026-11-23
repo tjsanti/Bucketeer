@@ -3,15 +3,19 @@ import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
-import type { TestContext } from "node:test";
 import { chromium, firefox, webkit } from "playwright-core";
 import type { BrowserContext, BrowserContextOptions, Page } from "playwright-core";
+
+/** Registers cleanup to run at the end: a test's context, or the screenshot script's own list. */
+export interface Teardown {
+  after(fn: () => unknown): void;
+}
 
 /**
  * Starts the built server on a free port with an in-memory database; stops it when the test ends. `timeZone`
  * sets its TZ; it shares the test machine's otherwise.
  */
-export async function startServer(t: TestContext, timeZone?: string): Promise<string> {
+export async function startServer(t: Teardown, timeZone?: string): Promise<string> {
   const server = spawn(process.execPath, [resolve("dist/server.js")], {
     env: { ...process.env, HOST: "127.0.0.1", PORT: "0", DATABASE_PATH: ":memory:", ...(timeZone ? { TZ: timeZone } : {}) },
     stdio: ["ignore", "pipe", "pipe"],
@@ -63,18 +67,18 @@ export const tabKeys: { next: string; previous: string } = (() => {
 })();
 
 /**
- * A browser context in headless `engine` (Chromium from BUCKETEER_BROWSER_PATH when set), closed with its browser
- * when the test ends. Firefox has no mobile emulation, so `isMobile` is dropped there: a phone is touch at the phone's
- * viewport, still with a mouse's hover.
+ * A browser context in headless `which` engine (Chromium from BUCKETEER_BROWSER_PATH when set), closed with its
+ * browser when the test ends. Firefox has no mobile emulation, so `isMobile` is dropped there: a phone is touch at the
+ * phone's viewport, still with a mouse's hover.
  */
-export async function openContext(t: TestContext, options: BrowserContextOptions = {}): Promise<BrowserContext> {
+export async function openContext(t: Teardown, options: BrowserContextOptions = {}, which: Engine = engine): Promise<BrowserContext> {
   const browserPath = process.env.BUCKETEER_BROWSER_PATH;
-  const browser = engine === "chromium"
+  const browser = which === "chromium"
     ? await chromium.launch({ headless: true, ...(browserPath ? { executablePath: browserPath } : {}) })
-    : await { webkit, firefox }[engine].launch({ headless: true });
+    : await { webkit, firefox }[which].launch({ headless: true });
   t.after(() => browser.close());
-  const context = await browser.newContext(engine === "firefox" ? { ...options, isMobile: false } : options);
-  if (engine === "firefox") {
+  const context = await browser.newContext(which === "firefox" ? { ...options, isMobile: false } : options);
+  if (which === "firefox") {
     // Playwright's Firefox crashes the page when its main-world and isolated-world scripts both read one element's
     // ariaLabelledByElements, as a role or label locator over an aria-labelledby element does for evaluateAll and
     // then any other call. The app never reads it; without it in the main world, Playwright reads aria-labelledby.
@@ -105,7 +109,7 @@ export interface App {
  * and `browserTimeZone` put the two in different zones; both share the test machine's otherwise. `touch` is a phone
  * with a touch screen. When the test ends the browser closes, then the server stops.
  */
-export async function openApp(t: TestContext, options: {
+export async function openApp(t: Teardown, options: {
   colorScheme?: "light" | "dark"; width?: number; height?: number; touch?: boolean; reducedMotion?: "reduce" | "no-preference";
   serverTimeZone?: string; browserTimeZone?: string;
 } = {}): Promise<App> {
@@ -127,9 +131,9 @@ export async function openApp(t: TestContext, options: {
   return { url, page, pageErrors, foreignRequests };
 }
 
-/** Waits until the app has finished loading its route. */
-export async function ready(page: Page): Promise<void> {
-  await page.locator("#main:not([aria-busy])").waitFor();
+/** Waits until the app has finished loading its route, within `timeout` ms when given. */
+export async function ready(page: Page, timeout?: number): Promise<void> {
+  await page.locator("#main:not([aria-busy])").waitFor(timeout === undefined ? {} : { timeout });
 }
 
 export async function seedBudget(url: string, name: string): Promise<string> {
