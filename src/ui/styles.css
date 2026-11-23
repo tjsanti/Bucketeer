@@ -486,13 +486,15 @@ main { padding: var(--s-8) var(--s-10) var(--s-16); min-width: 0; max-width: 110
 .page-row h1 { font-size: var(--fs-2xl); overflow-wrap: anywhere; }
 
 /* The month's summary strip: Ready to assign (violet, largest, small cents; the overspent red when negative)
-   with the Make it rain slot beside it, then Income, Assigned and Spent. */
-.summary-wrap { align-self: stretch; }
+   with the Make it rain slot beside it (under it when the two don't fit), then Income, Assigned and Spent.
+   The strip's own width sets its arrangement, under either shell, so everyday figures always fit whole. A figure
+   too long for its cell still wraps: `.ready` and `.summary` clip, and a figure must never lose digits. */
+.summary-wrap { align-self: stretch; container-type: inline-size; }
 .summary { display: grid; grid-template-columns: minmax(0, 2.1fr) repeat(3, minmax(0, 1fr)); overflow: hidden; }
 .ready {
   background: var(--unassigned-soft); box-shadow: inset -1px 0 0 var(--unassigned-line);
   padding: var(--s-4) var(--s-5) var(--s-4) var(--s-6);
-  display: flex; align-items: center; justify-content: space-between; gap: var(--s-4); min-width: 0;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s-2) var(--s-4); min-width: 0;
 }
 .ready > div:first-child { min-width: 0; }
 .ready-label { display: flex; align-items: center; gap: var(--s-2); color: var(--unassigned); font-weight: var(--fw-bold); font-size: 14px; }
@@ -528,6 +530,12 @@ main { padding: var(--s-8) var(--s-10) var(--s-16); min-width: 0; max-width: 110
 .stat + .stat { border-left: 1px solid var(--border); }
 .stat .label { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--fs-sm); font-weight: var(--fw-medium); }
 .stat .figure { font-size: var(--fs-lg); font-weight: var(--fw-semibold); letter-spacing: -0.01em; line-height: 1.15; overflow-wrap: anywhere; }
+/* Under 900px the four don't fit side by side (on a phone, never): Ready to assign goes across the top, the stats under it. */
+@container (width < 900px) {
+  .summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .ready { grid-column: 1 / -1; box-shadow: inset 0 -1px 0 var(--unassigned-line); }
+  .ready.neg { box-shadow: inset 0 -1px 0 var(--border); }
+}
 .accounts-content { align-self: stretch; min-width: 0; }
 
 /* The month header: ‹ November 2026 ›, with a month and year picker under the label. */
@@ -576,11 +584,14 @@ main { padding: var(--s-8) var(--s-10) var(--s-16); min-width: 0; max-width: 110
 .acct-summary { display: flex; flex-direction: column; gap: 2px; padding: var(--s-4) var(--s-5); }
 .acct-summary .label { font-size: var(--fs-sm); font-weight: var(--fw-medium); color: var(--text-muted); }
 .acct-summary .figure { font-size: var(--fs-2xl); font-weight: var(--fw-heavy); letter-spacing: -0.01em; overflow-wrap: anywhere; }
-/* Date is wide enough for every engine's date field with its year and calendar button (Firefox's is the widest). */
-.reg { overflow: hidden; --reg-date: 140px; --reg-cols: var(--reg-date) minmax(0, 1.05fr) minmax(0, 1fr) minmax(0, 1.05fr) 128px 128px; }
+/* Date is wide enough for every engine's date field with its year and calendar button (Firefox's is the widest).
+   Category's field carries a dot and a chevron, so it gets the most of the flexible width. Balance is read-only:
+   112px, with 4px on the side facing Amount, still holds −123,456.78 or 1,234,567.89. */
+.reg { overflow: hidden; --reg-date: 140px; --reg-cols: var(--reg-date) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 0.9fr) 128px 112px; }
 .reg [role="row"], .reg .erow { display: grid; grid-template-columns: var(--reg-cols); }
 .reg .c { display: flex; align-items: center; padding: 0 var(--s-3); min-width: 0; gap: 8px; }
 .reg .c.amt, .reg .c.bal { justify-content: flex-end; }
+.reg .c.bal { padding-left: var(--s-1); }
 .reg .rhead { min-height: 40px; border-bottom: 1px solid var(--border-strong); }
 .reg .rhead .c { font-size: var(--fs-xs); font-weight: var(--fw-semibold); color: var(--text-muted); letter-spacing: .02em; }
 .reg .rrow { min-height: var(--row-h); border-top: 1px solid var(--border); }
@@ -800,6 +811,13 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .btable .c.avail { background: var(--avail-col); font-weight: var(--fw-bold); }
 .btable .c.spent { color: var(--text-muted); }
 .bhead .c.spent, .bgroup .c.spent { color: var(--text-muted); }
+/* Under the top bar the fixed columns give 36px to the names; the pill stays 80px, and Spent's right-aligned figure
+   takes 8px from the side facing the names, so it still holds 12,345.67. Bounded below too (with no gap at fractional
+   widths), so the phone's grid never depends on coming later in the file. */
+@media (760px < width < 1140px) {
+  .btable [role="row"] { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1.25fr) 100px 104px 116px; }
+  .btable .c.spent { padding-left: var(--s-2); }
+}
 .btable .c.go, .btable .c.ctl { display: none; }
 /* Rows with a grip start a little further in; the grip lives in that gutter */
 .btable .bname, .btable .gcell { padding-left: 6px; }
@@ -1023,23 +1041,15 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .snack :focus-visible { outline-color: var(--snack-text); }
 
 /* ==========================================================================
-   Phone: sidebar becomes a top bar; 16px gutter, 44px touch targets
+   Narrow desktop and phone (under 1140px): the sidebar becomes a top bar
    ========================================================================== */
-@media (max-width: 760px) {
-  .summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .ready { grid-column: 1 / -1; padding: var(--s-3) var(--s-4); box-shadow: inset 0 -1px 0 var(--unassigned-line); }
-  .ready.neg { box-shadow: inset 0 -1px 0 var(--border); }
-  .ready-label { font-size: 13px; }
-  .ready-figure { font-size: 34px; }
-  .ready .btn-rain { padding: 0 var(--s-4); height: var(--touch); }
-  .stat { padding: 10px var(--s-3); gap: 2px; }
-  .stat .label { font-size: var(--fs-xs); }
-  .stat .label .icon { display: none; }
-  .stat .figure { font-size: 15px; font-weight: var(--fw-bold); }
+/* Beside the 252px sidebar the desktop pages run out of room below 1140px, so the sidebar gives its width back.
+   The pages stay desktop down to 761px; the account list is on the Accounts page. */
+@media (width < 1140px) {
   .app { display: block; }
   .side { border-right: 0; border-bottom: 1px solid var(--border); }
   .side-inner {
-    position: static; max-height: none; overflow: visible; padding: var(--s-3) var(--s-4);
+    position: static; max-height: none; overflow: visible; padding: var(--s-3) var(--s-6);
     grid-template-columns: auto minmax(0, 1fr) auto; row-gap: var(--s-3);
     grid-template-areas: "brand budget toggle" "nav nav nav";
   }
@@ -1053,6 +1063,30 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
   .nav a { flex: 1 1 auto; justify-content: center; padding: 0 8px; font-size: 14px; }
   .nav a .icon { display: none; }
   .accounts { display: none; }
+  /* Full width, so the page lines up with the top bar's right edge. */
+  main { padding: var(--s-6) var(--s-6) var(--s-12); max-width: none; }
+}
+
+/* ==========================================================================
+   Phone: 16px gutter, 44px touch targets
+   ========================================================================== */
+@media (max-width: 760px) {
+  .ready { padding: var(--s-3) var(--s-4); }
+  .ready-label { font-size: 13px; }
+  .ready-figure { font-size: 34px; }
+  .ready .btn-rain { padding: 0 var(--s-4); height: var(--touch); }
+  .stat { padding: 10px var(--s-3); gap: 2px; }
+  .stat .label { font-size: var(--fs-xs); }
+  .stat .label .icon { display: none; }
+  .stat .figure { font-size: 15px; font-weight: var(--fw-bold); }
+  /* Narrower than a 360px phone's strip (328px), a third of it can't hold a five-figure stat at 15px:
+     one size down with 8px a side, it fits. */
+  @container (width < 328px) {
+    .stat { padding-inline: var(--s-2); }
+    .stat .figure { font-size: 14px; }
+  }
+  /* The top bar keeps to the page's 16px gutter. */
+  .side-inner { padding: var(--s-3) var(--s-4); }
 
   /* Register: two-line rows (payee over category and date; amount over balance). Entry comes with the phone sheet. */
   .reg .rhead, .reg .entry { display: none; }
