@@ -436,10 +436,12 @@ function formatBucket(bucket: Bucket, table: BucketTable): string {
   return (bucket.archived ? [...fields, "archived"] : fields).join("\t");
 }
 
-// group, name, target, assigned, spent, available in the month, and "archived" when archived.
+// group, name, target, assigned, spent, available in the month, and "archived" when archived. A goal's target
+// ends with the month's share, written like a recurring bucket's amount, until nothing is left to save.
 function formatBucketMonth(bucket: BucketMonth, groups: readonly GroupMonth[]): string {
   const group = groups.find((candidate) => candidate.id === bucket.groupId)?.name ?? "";
-  const fields = [group, bucket.name, targetOf(bucket), formatMoney(bucket.assigned), formatMoney(bucket.spent), formatMoney(bucket.available)];
+  const target = bucket.monthlyShare ? `${targetOf(bucket)}, ${formatMoney(bucket.monthlyShare)}/month` : targetOf(bucket);
+  const fields = [group, bucket.name, target, formatMoney(bucket.assigned), formatMoney(bucket.spent), formatMoney(bucket.available)];
   return (bucket.archived ? [...fields, "archived"] : fields).join("\t");
 }
 

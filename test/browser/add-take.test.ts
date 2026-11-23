@@ -195,6 +195,54 @@ test("the pill's error notes float beside it, and Tab skips group rows and never
   assert.deepEqual(app.pageErrors, []);
 });
 
+test("a goal's panel shows this month's assigned of its monthly share, and no share once the goal is reached", { timeout: 60_000 }, async (t) => {
+  const app = await openApp(t);
+  const { page } = app;
+  const { budgetId } = await household(app.url);
+  // Vacation wants 3,000 ten months out: 300 a month. Bike's 100 was all saved last month.
+  const monthOf = (offset: number) => {
+    const date = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+  };
+  const buckets = `/api/budgets/${budgetId}/buckets`;
+  const vacation = await send(app.url, buckets, { name: "Vacation", newGroupName: "Goals", type: "goal", amount: 300_000, goalMonth: monthOf(9) });
+  const bike = await send(app.url, buckets, { name: "Bike", groupId: vacation.groupId, type: "goal", amount: 10_000, goalMonth: monthOf(3) });
+  await send(app.url, `/api/budgets/${budgetId}/accounts`, { name: "Savings", type: "savings", startingBalance: 10_000, startingDate: `${monthOf(-1)}-01` });
+  await send(app.url, `/api/buckets/${bike.id}/assign`, { month: monthOf(-1), amount: 10_000 }, 200);
+  await openBuckets(page, app.url, budgetId);
+
+  await pill(page, "Vacation").focus();
+  const panel = rowOf(page, "Vacation").locator(".rpanel");
+  await panel.waitFor();
+  assert.match(compact(await panel.innerText()), /Assigned this month 0\.00 of 300\.00/);
+  await pill(page, "Vacation").pressSequentially("50");
+  assert.match(compact(await panel.innerText()), /Assigned this month 0\.00 → 50\.00 of 300\.00/);
+  await pill(page, "Vacation").press("Escape");
+
+  await pill(page, "Bike").focus();
+  const reached = rowOf(page, "Bike").locator(".rpanel");
+  await reached.waitFor();
+  assert.match(compact(await reached.innerText()), /Assigned this month 0\.00 Spent/);
+  assert.doesNotMatch(await reached.innerText(), / of /);
+
+  // On a phone the bucket sheet gives the share a line of its own, as a recurring bucket's sheet gives its amount.
+  await page.setViewportSize({ width: 390, height: 844 });
+  const by = (months: number) => new Date(now.getFullYear(), now.getMonth() + months, 1).toLocaleDateString("en-US", { month: "short", year: "numeric" });
+  const context = async (name: string) => {
+    await rowOf(page, name).click();
+    const sheet = page.getByRole("dialog", { name });
+    await sheet.waitFor();
+    const lines = await sheet.locator(".ctx > span").allInnerTexts();
+    await page.keyboard.press("Escape");
+    await sheet.waitFor({ state: "hidden" });
+    return lines;
+  };
+  assert.deepEqual(await context("Vacation"), [`$3,000.00 by ${by(9)}`, "$300.00 a month", "Assigned 0.00 · Spent 0.00"]);
+  assert.deepEqual(await context("Bike"), [`$100.00 by ${by(3)}`, "Assigned 0.00 · Spent 0.00"]);
+  assert.deepEqual(await context("Fuel"), ["$160.00 a month", "Assigned 0.00 · Spent 0.00"]);
+  assert.deepEqual(app.pageErrors, []);
+});
+
 test("a take is limited by what a later month still needs, as the server says", { timeout: 60_000 }, async (t) => {
   const app = await openApp(t);
   const { page } = app;

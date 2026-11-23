@@ -5,7 +5,7 @@ import { createApi } from "../src/api.js";
 import { createClient } from "../src/client.js";
 import { openBucketeer } from "../src/core/index.js";
 
-test("HTTP previews, applies and undoes a rain, and serves each bucket's need", async () => {
+test("HTTP previews, applies and undoes a rain, and serves each bucket's need and a goal's monthly share", async () => {
   const core = openBucketeer(":memory:", { now: () => new Date("2026-11-20T12:00:00.000Z"), timeZone: "UTC" });
   const server = createApi(core);
   server.listen(0, "127.0.0.1");
@@ -21,6 +21,8 @@ test("HTTP previews, applies and undoes a rain, and serves each bucket's need", 
     const vacation = core.createBucket(budget.id, { name: "Vacation", groupId: fuel.groupId!, type: "goal", amount: 300_000, goalMonth: "2027-08" });
 
     assert.deepEqual((await client.bucketMonth(budget.id, "2026-11")).buckets.map((bucket) => bucket.need), [16_000, 30_000]);
+    const served = await (await fetch(`${url}/api/budgets/${budget.id}/months/2026-11`)).json();
+    assert.deepEqual(served.buckets.map((bucket: { monthlyShare: unknown }) => bucket.monthlyShare), [null, 30_000]);
     const expected = { fills: [{ bucketId: fuel.id, amount: 16_000 }, { bucketId: vacation.id, amount: 24_000 }], total: 40_000 };
     assert.deepEqual(await client.planRain(budget.id, "2026-11"), expected);
     assert.equal(core.readyToAssign(budget.id), 40_000);

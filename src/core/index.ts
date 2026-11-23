@@ -10,7 +10,7 @@ import type { BucketFields, GroupChoice } from "./buckets.js";
 import { leastUsedColour } from "./colours.js";
 import { calendarIn, defaultTimeZone } from "./time.js";
 import { monthName, monthRangeOf, readMonth } from "./months.js";
-import { needOf, planRain, readRainRequest, samePlan } from "./rain.js";
+import { monthlyShareOf, needOf, planRain, readRainRequest, samePlan } from "./rain.js";
 import type { Rain, RainPlan } from "./rain.js";
 import type { AccountMonth, MonthRange } from "./months.js";
 import { assertConsistent, bucketIdsOf, readNewTransaction, readTransactionEdit } from "./transactions.js";
@@ -515,7 +515,10 @@ export function openBucketeer(filename: string, options: BucketeerOptions = {}) 
   /** `activity` runs past `month` so `takeable` can see later months; the month's figures ignore them. */
   function withFigures(bucket: Bucket, activity: readonly MonthActivity[], month: string): BucketMonth {
     const figures = monthFigures(activity, month);
-    return { ...bucket, month, ...figures, need: needOf(bucket, figures, month), takeable: Math.max(0, lowestAvailableFrom(activity, month)) };
+    return {
+      ...bucket, month, ...figures, need: needOf(bucket, figures, month), monthlyShare: monthlyShareOf(bucket, figures, month),
+      takeable: Math.max(0, lowestAvailableFrom(activity, month)),
+    };
   }
 
   /** The lowest Available the bucket has from `month` on, later months' ledger entries included. */

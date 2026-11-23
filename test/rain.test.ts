@@ -178,3 +178,57 @@ test("a rain sent with the plan it previewed is refused with rain_changed once t
     core.close();
   }
 });
+
+test("a goal's monthly share is its goal over the months left, fixed for the month as money is assigned", () => {
+  const { core, rent, fuel, vacation, clothing, row } = household(500_000);
+  try {
+    // 3,000 by August 2027 is ten months from November: 300 a month.
+    assert.deepEqual([row("2026-11", vacation.id).monthlyShare, row("2026-11", vacation.id).need], [30_000, 30_000]);
+    core.assign(vacation.id, { month: "2026-11", amount: 10_000 });
+    assert.deepEqual([row("2026-11", vacation.id).monthlyShare, row("2026-11", vacation.id).need], [30_000, 20_000]);
+    core.assign(vacation.id, { month: "2026-11", amount: 20_000 });
+    assert.deepEqual([row("2026-11", vacation.id).monthlyShare, row("2026-11", vacation.id).need], [30_000, 0]);
+    // Only goals have a share.
+    assert.deepEqual([rent, fuel, clothing].map((bucket) => row("2026-11", bucket.id).monthlyShare), [null, null, null]);
+  } finally {
+    core.close();
+  }
+});
+
+test("a later month's share is recomputed from what carried in, rounded up to the cent, and is 0 once the goal is reached", () => {
+  const { core, vacation, spend, row } = household(500_000);
+  try {
+    // 500 saved in November leaves 2,500 over nine months: 277.777… rounds up to 277.78.
+    core.assign(vacation.id, { month: "2026-11", amount: 50_000 });
+    assert.equal(row("2026-12", vacation.id).monthlyShare, 27_778);
+    // Spending some of it leaves more to save: 2,590 over nine months is 287.777…, so 287.78.
+    spend(vacation.id, "2026-11-15", -9_000);
+    assert.equal(row("2026-12", vacation.id).monthlyShare, 28_778);
+    // November's own share is unchanged: it counts only what carried in.
+    assert.equal(row("2026-11", vacation.id).monthlyShare, 30_000);
+
+    // Saving the rest in December reaches the goal; from January nothing is left to save.
+    core.assign(vacation.id, { month: "2026-12", amount: 259_000 });
+    assert.equal(row("2026-12", vacation.id).monthlyShare, 28_778);
+    assert.deepEqual([row("2027-01", vacation.id).monthlyShare, row("2027-01", vacation.id).need], [0, 0]);
+  } finally {
+    core.close();
+  }
+});
+
+test("an overdue goal's share is all that's left to save, and an archived goal has none", () => {
+  const { core, vacation, row } = household(500_000);
+  try {
+    core.editBucket(vacation.id, { type: "goal", amount: 300_000, goalMonth: "2026-12" });
+    core.assign(vacation.id, { month: "2026-11", amount: 100_000 });
+    // Due in December, so January and February each count as one month left.
+    assert.equal(row("2027-01", vacation.id).monthlyShare, 200_000);
+    assert.equal(row("2027-02", vacation.id).monthlyShare, 200_000);
+
+    core.archiveBucket(vacation.id);
+    // Archived with November's 1,000 returned, it shows that month for its activity, with no share.
+    assert.deepEqual([row("2026-11", vacation.id).monthlyShare, row("2026-11", vacation.id).need], [null, 0]);
+  } finally {
+    core.close();
+  }
+});

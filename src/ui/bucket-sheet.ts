@@ -34,11 +34,15 @@ export function openBucketSheet(options: BucketSheetOptions): void {
   direction.root.classList.add("dir");
   direction.root.addEventListener("click", () => amount.focus());
 
-  const targetLine = bucket.type === "recurring" && bucket.amount !== null ? `${money(bucket.amount)} a month`
-    : bucket.type === "goal" && bucket.amount !== null && bucket.goalMonth ? `${money(bucket.amount)} by ${monthLabel(bucket.goalMonth)}` : "No target";
+  // A goal's share for the month gets a line of its own, worded like a recurring bucket's amount.
+  const targetLines = bucket.type === "recurring" && bucket.amount !== null ? [`${money(bucket.amount)} a month`]
+    : bucket.type === "goal" && bucket.amount !== null && bucket.goalMonth
+      ? [`${money(bucket.amount)} by ${monthLabel(bucket.goalMonth)}`, ...(bucket.monthlyShare ? [`${money(bucket.monthlyShare)} a month`] : [])]
+      : ["No target"];
   const figure = el("div", { class: `sheet-fig${bucket.available < 0 ? " is-over" : ""}` },
     el("div", {}, el("span", { class: "sheet-label" }, "Available"), el("div", { class: "big num" }, formatMoney(bucket.available))),
-    el("div", { class: "ctx num" }, el("span", {}, targetLine), el("span", {}, `Assigned ${formatMoney(bucket.assigned)} · Spent ${formatMoney(bucket.spent)}`)));
+    el("div", { class: "ctx num" }, ...targetLines.map((line) => el("span", {}, line)),
+      el("span", {}, `Assigned ${formatMoney(bucket.assigned)} · Spent ${formatMoney(bucket.spent)}`)));
 
   const tabId = uid("tab");
   const panelId = uid("tabpanel");

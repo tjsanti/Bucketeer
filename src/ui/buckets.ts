@@ -89,14 +89,18 @@ function archivedDay(iso: string | null): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric", ...(sameYear ? {} : { year: "numeric" }) });
 }
 
+/**
+ * This month's assigned against what the bucket wants a month: "$100.00 of $160.00 a month", the assigned figure
+ * in bold. Exactly met: just "$160.00 a month". A recurring bucket's monthly amount and a goal's monthly share alike.
+ */
+function perMonth(assigned: number, wanted: number, className = "num"): HTMLElement {
+  const amount = `${formatMoney(wanted, { symbol: true })} a month`;
+  return assigned === wanted ? el("span", { class: className }, amount)
+    : el("span", { class: className }, el("span", { class: "fund" }, formatMoney(assigned, { symbol: true })), ` of ${amount}`);
+}
+
 function target(bucket: BucketMonth): Node[] {
-  if (bucket.type === "recurring" && bucket.amount !== null) {
-    const amount = `${formatMoney(bucket.amount, { symbol: true })} a month`;
-    // Exactly met: just the target. Short of it or above it: both figures.
-    const text = bucket.assigned === bucket.amount ? el("span", { class: "num" }, amount)
-      : el("span", { class: "num" }, el("span", { class: "fund" }, formatMoney(bucket.assigned, { symbol: true })), ` of ${amount}`);
-    return [vessel(bucket.assigned, bucket.amount), text];
-  }
+  if (bucket.type === "recurring" && bucket.amount !== null) return [vessel(bucket.assigned, bucket.amount), perMonth(bucket.assigned, bucket.amount)];
   if (bucket.type === "goal" && bucket.amount !== null && bucket.goalMonth) {
     const share = Math.max(0, Math.min(1, bucket.available / bucket.amount));
     const percent = Math.floor(share * 100);
@@ -108,6 +112,8 @@ function target(bucket: BucketMonth): Node[] {
         el("span", { class: "pct num" }, `${percent}%`),
         el("span", { class: "gmeta num" }, `of ${goal}`, el("span", { class: "when" }, " ", el("span", { class: "sep" }, "·"), ` ${when}`))),
       el("span", { class: "goal-date num" }, `By ${when}`),
+      // The month's share, on a line of its own: none once nothing is left to save.
+      ...(bucket.monthlyShare ? [perMonth(bucket.assigned, bucket.monthlyShare, "goal-share num")] : []),
     ];
   }
   return [el("span", { class: "sr-only" }, "No target")];

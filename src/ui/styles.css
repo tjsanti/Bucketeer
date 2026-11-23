@@ -836,6 +836,10 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .goal .pct { font-weight: var(--fw-bold); color: var(--text); min-width: 3ch; text-align: right; }
 .goal .gmeta { overflow: hidden; text-overflow: ellipsis; }
 .goal-date { display: none; }
+/* A goal's monthly share: a line of its own under the bar (the bar's line is already full at 1280). */
+.brow.is-goal .det { flex-direction: column; align-items: flex-start; justify-content: center; }
+.brow.is-goal .det > * { max-width: 100%; }
+.goal-share { overflow: hidden; text-overflow: ellipsis; }
 /* Vessel: this month's assigned over the monthly amount. Amber while filling (an empty one is a bare amber
    outline), a soft green outline over a pale tint when the target is met, so full vessels read as quiet ticks. */
 .vessel { --vl: var(--vessel-full-line); --vf: var(--vessel-full-fill); display: inline-block; flex: none; width: 18px; height: 22px; overflow: visible; }
@@ -1002,6 +1006,9 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
   .sheet.top .arch-prev .ap-n { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sheet.top .sheet-footer { padding-top: 8px; padding-bottom: 8px; gap: 4px; }
   .sheet.top .seg > button { min-height: 44px; }
+  /* A goal with a share grows its row to 48px to give the share its own line. Whole-pixel lines keep the row,
+     and the cards below it, on whole pixels. */
+  .brow.is-goal .det { gap: 2px; padding-block: 5px; line-height: 18px; }
 }
 
 /* ==========================================================================

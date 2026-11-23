@@ -98,6 +98,11 @@ export interface BucketMonth extends Bucket {
   available: number;
   /** What rain would give the bucket this month (ADR-0005); 0 for plain and archived buckets. */
   need: number;
+  /**
+   * Goal buckets only: the month's Monthly share (ADR-0005), fixed for the month and 0 once nothing is left to
+   * save. Null for recurring, plain and archived buckets.
+   */
+  monthlyShare: number | null;
   /** ≥ 0: the most a take in this month can be, the lowest Available from this month on (later months included). */
   takeable: number;
 }

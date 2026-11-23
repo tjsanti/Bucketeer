@@ -97,3 +97,116 @@ test("the Buckets page shows a month's Spent, Available, vessels and goal bars, 
   assert.equal(new URL(page.url()).searchParams.get("month"), monthOf(1).key);
   assert.deepEqual(app.pageErrors, []);
 });
+
+/**
+ * Checking at 9,000.00, with Rent (recurring 1,650, all assigned this month) beside the goals. Vacation (3,000 by
+ * nine months on: ten months, 300 a month) has 100 this month. Laptop (1,800 over six months: 300 a month) has all
+ * 300. Bike (600) was saved in full last month. Camera (400) is due next month. House deposit (25,000 over twenty
+ * months: 1,250 a month) has 1,000, the widest figures.
+ */
+async function goals(url: string) {
+  const budgetId = await seedBudget(url, "Household");
+  await send(url, `/api/budgets/${budgetId}/accounts`, { name: "Checking", type: "checking", startingBalance: 900_000, startingDate: `${previous.key}-01` });
+  const rent = await send(url, `/api/budgets/${budgetId}/buckets`, { name: "Rent", newGroupName: "Fixed", type: "recurring", amount: 165_000 });
+  const goal = (name: string, amount: number, months: number, groupId?: string) =>
+    send(url, `/api/budgets/${budgetId}/buckets`, { name, ...(groupId ? { groupId } : { newGroupName: "Goals" }), type: "goal", amount, goalMonth: monthOf(months).key });
+  const vacation = await goal("Vacation", 300_000, 9);
+  const laptop = await goal("Laptop", 180_000, 5, vacation.groupId);
+  const bike = await goal("Bike", 60_000, 4, vacation.groupId);
+  await goal("Camera", 40_000, 1, vacation.groupId);
+  const house = await goal("House deposit", 2_500_000, 19, vacation.groupId);
+  const assign = (id: string, month: string, amount: number) => send(url, `/api/buckets/${id}/assign`, { month, amount }, 200);
+  await assign(rent.id, current.key, 165_000);
+  await assign(vacation.id, current.key, 10_000);
+  await assign(laptop.id, current.key, 30_000);
+  await assign(bike.id, previous.key, 60_000);
+  await assign(house.id, current.key, 100_000);
+  return { budgetId };
+}
+
+const shareOf = (page: Page, name: string) => rowOf(page, name).locator(".goal-share");
+const shareText = async (page: Page, name: string) => compact(await shareOf(page, name).innerText());
+
+/** The share's line: below everything else in the target, one line high, not cut off, and inside its row. */
+async function assertShareLine(page: Page, name: string): Promise<void> {
+  const layout = await shareOf(page, name).evaluate((share) => {
+    const box = share.getBoundingClientRect();
+    const row = share.closest(".brow")!.getBoundingClientRect();
+    const above = [...share.parentElement!.children].filter((other) => other !== share && getComputedStyle(other).display !== "none")
+      .map((other) => other.getBoundingClientRect().bottom);
+    return {
+      lineHeight: parseFloat(getComputedStyle(share).lineHeight) || parseFloat(getComputedStyle(share).fontSize) * 1.5,
+      height: box.height, top: box.top, bottom: box.bottom, right: box.right, aboveBottom: Math.max(...above),
+      rowBottom: row.bottom, rowRight: row.right, clipped: share.scrollWidth > share.clientWidth,
+    };
+  });
+  assert.ok(layout.top >= layout.aboveBottom - 0.5, `${name}'s share sits on its own line below the goal (${layout.top} vs ${layout.aboveBottom})`);
+  assert.ok(layout.height < layout.lineHeight * 1.5, `${name}'s share is one line (${layout.height}px)`);
+  assert.equal(layout.clipped, false, `${name}'s share is not cut off`);
+  assert.ok(layout.bottom <= layout.rowBottom && layout.right <= layout.rowRight, `${name}'s share stays inside its row`);
+}
+
+test("a goal row shows the month's share of its goal in a recurring row's words, recomputed in each month", { timeout: 60_000 }, async (t) => {
+  const app = await openApp(t, { height: 800 });
+  const { page } = app;
+  const { budgetId } = await goals(app.url);
+  await page.goto(`${app.url}/budgets/${budgetId}/buckets`);
+  await ready(page);
+
+  // Short of the share, this month's assigned leads in bold; exactly met, only the share. A reached goal has none.
+  assert.equal(await shareText(page, "Vacation"), "$100.00 of $300.00 a month");
+  assert.equal(await shareOf(page, "Vacation").locator(".fund").textContent(), "$100.00");
+  assert.equal(await shareText(page, "Laptop"), "$300.00 a month");
+  assert.equal(await shareOf(page, "Laptop").locator(".fund").count(), 0);
+  assert.equal(await shareText(page, "Camera"), "$0.00 of $200.00 a month");
+  assert.equal(await shareText(page, "House deposit"), "$1,000.00 of $1,250.00 a month");
+  assert.equal(await shareOf(page, "Bike").count(), 0);
+  assert.equal(await barLabel(page, "Bike"), "100% saved toward a $600.00 goal");
+  assert.equal(compact(await rowOf(page, "Vacation").locator(".gmeta").innerText()), `of $3,000.00 · ${monthOf(9).label.replace(/^(\w{3})\w*/, "$1")}`);
+  assert.equal(await cell(page, "Rent", "det"), "$1,650.00 a month");
+  for (const name of ["Vacation", "Laptop", "Camera", "House deposit"]) await assertShareLine(page, name);
+
+  // Next month the share is worked out again from what carried in: 2,900 over nine months is 322.22…, rounded up.
+  await page.locator(".month-head").getByRole("button", { name: "Next month" }).click();
+  await ready(page);
+  assert.equal(compact(await page.locator(".month-head .month-label").innerText()), monthOf(1).label);
+  assert.equal(await shareText(page, "Vacation"), "$0.00 of $322.23 a month");
+  assert.equal(await shareText(page, "Laptop"), "$0.00 of $300.00 a month");
+  assert.equal(await shareText(page, "Camera"), "$0.00 of $400.00 a month");
+
+  // Overdue, Camera still wants all of what's left in one month.
+  await page.goto(`${app.url}/budgets/${budgetId}/buckets?month=${monthOf(3).key}`);
+  await ready(page);
+  assert.equal(await shareText(page, "Camera"), "$0.00 of $400.00 a month");
+  assert.deepEqual(app.pageErrors, []);
+});
+
+test("on a phone a goal's share is its own line under its date, and nothing wraps or scrolls sideways", { timeout: 60_000 }, async (t) => {
+  for (const scheme of ["light", "dark"] as const) {
+    const app = await openApp(t, { colorScheme: scheme, width: 390, height: 844, touch: true });
+    const { page } = app;
+    const { budgetId } = await goals(app.url);
+    await page.goto(`${app.url}/budgets/${budgetId}/buckets`);
+    await ready(page);
+    const phoneRow = (name: string) => page.locator(".brow", { has: page.locator(".name", { hasText: new RegExp(`^${name}$`) }) });
+    const share = (name: string) => phoneRow(name).locator(".goal-share");
+    assert.equal(compact(await share("Vacation").innerText()), "$100.00 of $300.00 a month");
+    assert.equal(compact(await share("House deposit").innerText()), "$1,000.00 of $1,250.00 a month");
+    assert.equal(await share("Bike").count(), 0);
+    for (const name of ["Vacation", "Laptop", "Camera", "House deposit"]) {
+      const [shareTop, dateBottom] = await Promise.all([
+        share(name).evaluate((node) => node.getBoundingClientRect().top),
+        phoneRow(name).locator(".goal-date").evaluate((node) => node.getBoundingClientRect().bottom),
+      ]);
+      assert.ok(shareTop >= dateBottom - 0.5, `${name}'s share is under its date (${shareTop} vs ${dateBottom})`);
+      const fits = await share(name).evaluate((node) => {
+        const box = node.getBoundingClientRect();
+        const row = node.closest(".brow")!.getBoundingClientRect();
+        return { oneLine: box.height < parseFloat(getComputedStyle(node).fontSize) * 2, clipped: node.scrollWidth > node.clientWidth, inside: box.bottom <= row.bottom && box.right <= row.right };
+      });
+      assert.deepEqual(fits, { oneLine: true, clipped: false, inside: true }, name);
+    }
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "No sideways scroll");
+    assert.deepEqual(app.pageErrors, []);
+  }
+});

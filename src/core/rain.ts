@@ -26,18 +26,25 @@ function monthsLeft(from: string, to: string): number {
 }
 
 /**
+ * A goal bucket's monthly share in `month` (ADR-0005): what was still to save at the start of the month (the goal
+ * amount less what carried in), over the months left including this one, rounded up to the cent; 0 once nothing is
+ * left to save. It ignores what's assigned this month, so it's fixed for the month. Null for recurring, plain and
+ * archived buckets, which aren't saving toward anything.
+ */
+export function monthlyShareOf(bucket: Bucket, figures: Pick<MonthFigures, "carriedIn">, month: string): number | null {
+  if (bucket.archived || bucket.type !== "goal" || bucket.amount === null || bucket.goalMonth === null) return null;
+  return Math.max(0, Math.ceil((bucket.amount - figures.carriedIn) / monthsLeft(month, bucket.goalMonth)));
+}
+
+/**
  * What rain would give the bucket in `month`, from that month's figures (ADR-0005).
- * Recurring: the monthly amount less what's assigned this month. Goal: the monthly share of what's still to
- * save at the start of the month, rounded up to the cent, less what's assigned this month. Plain: none.
+ * Recurring: the monthly amount less what's assigned this month. Goal: its monthly share less what's assigned
+ * this month. Plain: none.
  */
 export function needOf(bucket: Bucket, figures: Pick<MonthFigures, "assigned" | "carriedIn">, month: string): number {
   if (bucket.archived || bucket.amount === null) return 0;
   if (bucket.type === "recurring") return Math.max(0, bucket.amount - figures.assigned);
-  if (bucket.type === "goal" && bucket.goalMonth !== null) {
-    const share = Math.max(0, Math.ceil((bucket.amount - figures.carriedIn) / monthsLeft(month, bucket.goalMonth)));
-    return Math.max(0, share - figures.assigned);
-  }
-  return 0;
+  return Math.max(0, (monthlyShareOf(bucket, figures, month) ?? 0) - figures.assigned);
 }
 
 /** Gives each bucket, in the order given, min(need, what's left); buckets that get nothing are left out. */
