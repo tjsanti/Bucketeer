@@ -170,7 +170,10 @@ export function openSheet(options: SheetOptions): Sheet {
   dialog.addEventListener("close", () => {
     dialog.remove();
     const target = options.returnFocus();
-    if (target?.isConnected) target.focus();
+    if (!target?.isConnected) return;
+    // Until layout is up to date, WebKit on Linux can still treat the page as inert behind the dialog and ignore focus().
+    void target.offsetHeight;
+    target.focus();
   });
 
   document.body.append(dialog);
