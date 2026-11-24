@@ -103,13 +103,12 @@ export interface App {
 /**
  * A fresh server and browser page; tracks page errors and requests that leave the app's origin. `serverTimeZone`
  * and `browserTimeZone` put the two in different zones; both share the test machine's otherwise. `touch` is a phone
- * with a touch screen.
+ * with a touch screen. When the test ends the browser closes, then the server stops.
  */
 export async function openApp(t: TestContext, options: {
   colorScheme?: "light" | "dark"; width?: number; height?: number; touch?: boolean; reducedMotion?: "reduce" | "no-preference";
   serverTimeZone?: string; browserTimeZone?: string;
 } = {}): Promise<App> {
-  const url = await startServer(t, options.serverTimeZone);
   const context = await openContext(t, {
     colorScheme: options.colorScheme ?? "light",
     viewport: { width: options.width ?? 1280, height: options.height ?? 900 },
@@ -117,6 +116,7 @@ export async function openApp(t: TestContext, options: {
     ...(options.browserTimeZone ? { timezoneId: options.browserTimeZone } : {}),
     ...(options.touch ? { hasTouch: true, isMobile: true } : {}),
   });
+  const url = await startServer(t, options.serverTimeZone);
   const page = await context.newPage();
   const pageErrors: string[] = [];
   const foreignRequests: string[] = [];
