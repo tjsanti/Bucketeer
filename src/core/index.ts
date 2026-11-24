@@ -136,8 +136,6 @@ function bucketFromRow(row: Record<string, SQLOutputValue>): Bucket {
   };
 }
 
-/** A month bound past every real month, for activity in every month. */
-const ALL_MONTHS = "9999-12";
 const clamp = (index: number, length: number) => Math.min(Math.max(index, 0), length);
 
 // The core owns validation, identity, timestamps, and persistence. Clients only send intent.

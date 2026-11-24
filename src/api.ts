@@ -79,7 +79,7 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   }
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of request) {
+  for await (const chunk of request as AsyncIterable<Buffer>) {
     size += chunk.length;
     if (size > 16_384) throw new HttpError(413, "payload_too_large", "Request body is too large.");
     chunks.push(chunk);
@@ -92,6 +92,7 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
 }
 
 export function createApi(core: Bucketeer) {
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- the handler catches every error and answers it
   return createServer(async (request, response) => {
     response.setHeader("x-content-type-options", "nosniff");
     response.setHeader("content-security-policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");

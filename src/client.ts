@@ -22,14 +22,15 @@ export function createClient(baseUrl: string) {
       throw new ApiError("unreachable", "Cannot reach the Bucketeer server. Check its address and whether it is running.");
     }
     if (response.status === 204) return undefined as T;
-    let body;
+    let body: unknown;
     try {
       body = await response.json();
     } catch {
       throw new ApiError("invalid_response", "Server returned an invalid JSON response.");
     }
     if (!response.ok) {
-      throw new ApiError(body?.error?.code ?? "request_failed", body?.error?.message ?? `Request failed with HTTP ${response.status}.`, body?.error?.field);
+      const error = (body as { error?: { code?: string; message?: string; field?: string } } | null)?.error;
+      throw new ApiError(error?.code ?? "request_failed", error?.message ?? `Request failed with HTTP ${response.status}.`, error?.field);
     }
     return body as T;
   }

@@ -64,7 +64,6 @@ async function openBuckets(app: App, budgetId: string): Promise<void> {
 
 const compact = (text: string | null) => (text ?? "").replace(/\s+/g, " ").trim();
 const colorOf = (locator: Locator) => locator.evaluate((node) => getComputedStyle(node).color);
-const snackText = (page: Page) => page.locator("#snack-msg").textContent();
 const announced = (page: Page, text: string) => page.waitForFunction((expected) => document.getElementById("announce")?.textContent === expected, text, { timeout: 3_000 });
 const focusedLabel = (page: Page) => page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? document.activeElement?.textContent ?? "");
 const noHorizontalScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
@@ -648,8 +647,8 @@ test("each group is its own card with the page showing between, under one header
     assert.deepEqual(look.gaps.map((gap) => gap.above), ["Everyday", "Goals", "Kids"]);
     for (const { above, gap, middle, availColumn } of look.gaps) {
       assert.ok(gap >= 20 && gap <= 24, `${where}: a 20–24px gap above ${above} (${gap})`);
-      assert.ok(distance(middle, look.pageBackground) < 1, `${where}: the page shows in the gap above ${above} (${middle})`);
-      assert.ok(distance(availColumn, look.pageBackground) < 1, `${where}: the Available tint stops at the card above ${above} (${availColumn})`);
+      assert.ok(distance(middle, look.pageBackground) < 1, `${where}: the page shows in the gap above ${above} (${middle.join()})`);
+      assert.ok(distance(availColumn, look.pageBackground) < 1, `${where}: the Available tint stops at the card above ${above} (${availColumn.join()})`);
     }
     for (const gap of look.bucketGaps) assert.ok(Math.abs(gap) <= 0.5, `${where}: bucket rows within a group touch (${gap})`);
     assert.deepEqual(look.misaligned, [], `${where}: every card's columns line up under the header`);
@@ -1297,9 +1296,11 @@ test("on a touch phone, only the grip drags in Reorder mode; swipes on rows scro
   // touch-action that lets the browser scroll it, and the grip is dragged with the pointer events of a mouse.
   const cdp = engine === "chromium" ? await page.context().newCDPSession(page) : null;
   const touch = (type: string, points: { x: number; y: number }[]) => cdp!.send("Input.dispatchTouchEvent", { type: type as "touchStart", touchPoints: points });
+  const restFinger = () => page.waitForTimeout(200);
   async function swipe(from: { x: number; y: number }, toY: number): Promise<void> {
     await touch("touchStart", [from]);
     for (let i = 1; i <= 10; i++) await touch("touchMove", [{ x: from.x, y: from.y + ((toY - from.y) * i) / 10 }]);
+    await restFinger();
     await touch("touchEnd", []);
   }
   async function drag(from: { x: number; y: number }, toY: number): Promise<void> {

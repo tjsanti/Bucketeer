@@ -44,7 +44,7 @@ function rememberBudget(id: string): void {
 }
 
 const shell = createShell({
-  navigate,
+  navigate: (path) => void navigate(path),
   newBudget: () => openBudgetSheet(),
   renameBudget: () => { if (current) openBudgetSheet(current); },
   undoFailed: (message) => {
@@ -143,6 +143,7 @@ function showFirstRun(): void {
   const fields = el("fieldset", { class: "sheet-fields" }, name.root);
   const form = el("form", { class: "start-form", novalidate: true }, fields, note, submit);
   form.addEventListener("input", () => setNote(note, null));
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- the handler catches every error and shows it
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     setNote(note, null);

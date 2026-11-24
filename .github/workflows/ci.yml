@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A new push cancels a pull request's older run; each push to main gets its own group, so every one is checked.
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint, type-check, unit and browser tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Cache Playwright engines
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      # Downloads only engines missing from the cache; --with-deps always installs their system libraries.
+      - name: Install Playwright engines
+        run: npx playwright-core install --with-deps chromium webkit firefox
+      - run: npm run lint
+      - run: npm run check
+      - run: npm test
+      - run: npm run test:ui
+
+  acceptance:
+    name: Docker Compose acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      # The upgrade check builds the image from a local `main` branch, which a pull request checkout lacks.
+      - name: Fetch main
+        run: git rev-parse --verify --quiet refs/heads/main || git fetch --no-tags --depth=1 origin main:main
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm run acceptance
