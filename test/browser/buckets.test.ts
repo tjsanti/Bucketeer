@@ -1299,6 +1299,8 @@ test("on a touch phone, only the grip drags in Reorder mode; swipes on rows scro
   async function swipe(from: { x: number; y: number }, toY: number): Promise<void> {
     await touch("touchStart", [from]);
     for (let i = 1; i <= 10; i++) await touch("touchMove", [{ x: from.x, y: from.y + ((toY - from.y) * i) / 10 }]);
+    // Hold still before lifting: after a flick, Chromium on Linux takes the next tap as stopping the fling, not a click.
+    await page.waitForTimeout(200);
     await touch("touchEnd", []);
   }
   async function drag(from: { x: number; y: number }, toY: number): Promise<void> {
