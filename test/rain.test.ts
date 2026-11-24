@@ -68,7 +68,7 @@ test("a second rain in the same month gives nothing, and with nothing ready noth
 });
 
 test("an overspent recurring bucket gets only its monthly need and stays below its monthly amount", () => {
-  const { core, budget, fuel, vacation, spend, row } = household(500_000);
+  const { core, budget, fuel, spend, row } = household(500_000);
   try {
     // Fuel overspent by 40 in October carries in at −40; rain still gives it just 160 in November.
     spend(fuel.id, "2026-10-10", -4_000);

@@ -174,6 +174,7 @@ Requires Node.js 24 or newer and npm. Docker is required for the deployment acce
 
 ```sh
 npm ci
+npm run lint
 npm run check
 npm test
 npm run acceptance
@@ -194,11 +195,13 @@ To use an existing Chrome or Chromium executable in place of Playwright's Chromi
 
 `npm run acceptance` builds an isolated Docker Compose project, saves and updates a budget, its accounts, income and buckets through the CLI, recreates the container on a non-default port, and verifies the same budget reopens from its SQLite volume. It also starts the image built from `main` on a separate volume, then upgrades that volume in place with the current build. It checks health, errors, and UI assets, then removes only its own containers, volume, and image.
 
+`npm run lint` runs ESLint with typescript-eslint's type-aware recommended rules (`eslint.config.js`). Tests and scripts may use untyped JSON; the app code may not.
+
 ### Continuous integration and the pre-push hook
 
-GitHub Actions (`.github/workflows/ci.yml`) runs on every push to `main` and every pull request, on Ubuntu with Node.js 24. One job runs `npm ci`, installs the three Playwright engines with their system libraries, then runs `npm run check`, `npm test` and `npm run test:ui`. A second job runs `npm run acceptance`, after fetching `main` so the upgrade check can build the image from it. The npm cache and the Playwright engines are cached between runs.
+GitHub Actions (`.github/workflows/ci.yml`) runs on every push to `main` and every pull request, on Ubuntu with Node.js 24. One job runs `npm ci`, installs the three Playwright engines with their system libraries, then runs `npm run lint`, `npm run check`, `npm test` and `npm run test:ui`. A second job runs `npm run acceptance`, after fetching `main` so the upgrade check can build the image from it. The npm cache and the Playwright engines are cached between runs.
 
-`npm install` (or `npm ci`) also installs a pre-push hook: its `prepare` script points `core.hooksPath` at the committed `.githooks/` directory. Before each push, the hook runs `npm run check && npm test` and stops the push if either fails. It leaves the browser tests and the acceptance check to CI. `git push --no-verify` skips it once; `git config --unset core.hooksPath` removes it.
+`npm install` (or `npm ci`) also installs a pre-push hook: its `prepare` script points `core.hooksPath` at the committed `.githooks/` directory. Before each push, the hook runs `npm run lint && npm run check && npm test` and stops the push if any fails. It leaves the browser tests and the acceptance check to CI. `git push --no-verify` skips it once; `git config --unset core.hooksPath` removes it until the next `npm install`. The setting lives in the clone's shared Git config, so it covers every worktree of the clone.
 
 To run without Docker during development:
 

@@ -1,4 +1,4 @@
 #!/bin/sh
 # Installed by `npm install` (the `prepare` script sets core.hooksPath to .githooks).
 # Skip once with `git push --no-verify`.
-npm run check && npm test
+npm run lint && npm run check && npm test

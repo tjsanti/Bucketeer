@@ -16,7 +16,6 @@ function localDate(daysAgo = 0): Date {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysAgo);
 }
 const iso = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-const label = (date: Date) => date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 
 async function api(url: string, method: string, path: string, body?: unknown): Promise<any> {
   const response = await fetch(`${url}${path}`, { method, ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }) });

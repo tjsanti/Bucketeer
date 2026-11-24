@@ -9,12 +9,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # A new push cancels a pull request's older run; each push to main gets its own group, so every one is checked.
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   test:
-    name: Type-check, unit and browser tests
+    name: Lint, type-check, unit and browser tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -32,6 +33,7 @@ jobs:
       # Downloads only engines missing from the cache; --with-deps always installs their system libraries.
       - name: Install Playwright engines
         run: npx playwright-core install --with-deps chromium webkit firefox
+      - run: npm run lint
       - run: npm run check
       - run: npm test
       - run: npm run test:ui

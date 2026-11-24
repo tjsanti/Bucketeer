@@ -293,7 +293,7 @@ export function dropdown(config: { label: string; options: readonly DropdownOpti
     const start = typed.length === 1 ? from + 1 : from;
     for (let step = 0; step < items.length; step++) {
       const index = (start + step + items.length) % items.length;
-      if (items[index]!.textContent!.toLowerCase().startsWith(typed)) return index;
+      if (items[index]!.textContent.toLowerCase().startsWith(typed)) return index;
     }
     return -1;
   }
