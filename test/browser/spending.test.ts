@@ -312,3 +312,33 @@ test("phone: the bottom sheet adds (Save and add another, Save and close) and ed
   assert.equal(compact(await rows.first().locator(".amt").innerText()), "30.00");
   assert.deepEqual(app.pageErrors, []);
 });
+
+test("phone: closing the bottom sheet returns focus to the row it edited, or to New transaction", { timeout: 60_000 }, async (t) => {
+  const app = await openApp(t, { width: 390, height: 844, touch: true });
+  const { page } = app;
+  const { budgetId, visa } = await household(app.url);
+  await api(app.url, "POST", `/api/accounts/${visa.id}/transactions`, { payee: "Refund", amount: 1_200, category: { kind: "income" } });
+  await page.goto(`${app.url}/budgets/${budgetId}/accounts/${visa.id}`);
+  await ready(page);
+  const isFocused = (locator: Locator) => locator.evaluate((node) => node === document.activeElement);
+  const add = page.getByRole("button", { name: "New transaction" });
+  const row = page.locator(".rrow");
+  const edit = page.getByRole("dialog", { name: "Edit transaction" });
+
+  await add.tap();
+  await page.getByRole("dialog", { name: "New transaction" }).getByRole("button", { name: "Close", exact: true }).tap();
+  await page.locator("dialog").waitFor({ state: "detached" });
+  assert.equal(await isFocused(add), true, "Closing a new transaction returns to New transaction.");
+
+  await row.tap();
+  await edit.getByLabel("Amount").fill("25");
+  await edit.getByRole("button", { name: "Save", exact: true }).tap();
+  await page.locator("dialog").waitFor({ state: "detached" });
+  assert.equal(await isFocused(row), true, "Saving an edit returns to its row.");
+
+  await row.tap();
+  await edit.getByRole("button", { name: "Delete" }).tap();
+  await page.locator("dialog").waitFor({ state: "detached" });
+  assert.equal(await isFocused(add), true, "Deleting returns to New transaction, since the row is gone.");
+  assert.deepEqual(app.pageErrors, []);
+});

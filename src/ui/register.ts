@@ -10,7 +10,7 @@ import { BudgetError } from "../core/types.js";
 import { categoryDot, categoryLabel, categoryPicker, sameCategory, transferLabel } from "./category-picker.js";
 import type { CategoryPicker } from "./category-picker.js";
 import { el, icon, messageOf, setNote } from "./dom.js";
-import { segmented, uid } from "./sheet.js";
+import { returnFocusOnClose, segmented, uid } from "./sheet.js";
 import { SplitError, splitLines } from "./split-lines.js";
 import type { SplitLines } from "./split-lines.js";
 
@@ -662,11 +662,8 @@ export function createRegisterPage(ctx: RegisterContext) {
     });
     closeButton.addEventListener("click", () => dialog.close());
     dialog.addEventListener("cancel", (event) => { if (running) event.preventDefault(); });
-    dialog.addEventListener("close", () => {
-      dialog.remove();
-      const row = transaction && body.querySelector<HTMLElement>(`.rrow[data-id="${CSS.escape(transaction.id)}"]`);
-      (row ?? addButton).focus();
-    });
+    returnFocusOnClose(dialog, () =>
+      (transaction && body.querySelector<HTMLElement>(`.rrow[data-id="${CSS.escape(transaction.id)}"]`)) ?? addButton);
     document.body.append(dialog);
     dialog.showModal();
     draft.amount.focus();

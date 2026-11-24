@@ -106,6 +106,15 @@ export interface Sheet {
   close(): void;
 }
 
+/** Closing `dialog` focuses the element `returnFocus` finds, then removes the dialog from the page. */
+export function returnFocusOnClose(dialog: HTMLDialogElement, returnFocus: () => HTMLElement | null): void {
+  dialog.addEventListener("close", () => {
+    const target = returnFocus();
+    if (target?.isConnected) target.focus();
+    dialog.remove();
+  });
+}
+
 export function openSheet(options: SheetOptions): Sheet {
   const titleId = uid("sheet-title");
   const noteId = uid("snote");
@@ -167,14 +176,7 @@ export function openSheet(options: SheetOptions): Sheet {
   closeButton.addEventListener("click", () => dialog.close());
   // Escape must not abandon a request in flight.
   dialog.addEventListener("cancel", (event) => { if (busy) event.preventDefault(); });
-  dialog.addEventListener("close", () => {
-    dialog.remove();
-    const target = options.returnFocus();
-    if (!target?.isConnected) return;
-    // Until layout is up to date, WebKit on Linux can still treat the page as inert behind the dialog and ignore focus().
-    void target.offsetHeight;
-    target.focus();
-  });
+  returnFocusOnClose(dialog, options.returnFocus);
 
   document.body.append(dialog);
   dialog.showModal();
