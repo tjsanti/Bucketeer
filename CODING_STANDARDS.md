@@ -1,38 +1,35 @@
 # Coding standards
 
-These are the judgement calls a reviewer applies to a diff. The compiler, the tests and the build already enforce everything else. Terms come from [`GLOSSARY.md`](GLOSSARY.md); the reasons behind the money rules are in [`docs/adr/`](docs/adr/).
+Judgement calls a reviewer applies to a diff; check every rule whose area the diff touches. Terms are defined in [`GLOSSARY.md`](GLOSSARY.md), money rules are decided in [`docs/adr/`](docs/adr/), and the approved design is in [`docs/design.md`](docs/design.md).
 
-## Where rules live
+## Core and clients
 
-- **Budgeting rules live in core.** `src/core` decides every budgeting rule: balances, Available, Ready to assign, need, monthly share, rain, refusals and undo. The API, CLI and UI carry and display what core returns, and a client never derives a figure itself. For example, a goal's monthly share is `monthlyShareOf` in `src/core/rain.ts`, and the UI reads `bucket.monthlyShare` (`src/ui/buckets.ts`). Report any arithmetic on money in a client that goes beyond formatting.
-- **The UI imports only these from core at runtime:**
-  - `money.js` (`formatMoney`, `parseMoney`),
-  - `months.js` (month arithmetic such as `addMonths` and `lastDayOf`),
-  - `refusals.js` (`addRefusal`, `takeRefusal`: core's wording for a refused add or take),
-  - `colours.js` (`BUCKET_COLOURS`, `leastUsedColour`: palette order and the default hue),
-  - `types.js` (`BudgetError`, which `parseMoney` throws).
-
-  Imports from `core/index.js` are `import type` only, because it opens SQLite. These modules stay free of Node imports, and each is served to the browser from the asset list in `src/api.ts`. A new runtime import needs a pure module, an entry in that list, and a reason it can't come from the server.
-- **Core validates every input at the API boundary.** Each core entry point takes `unknown` and reads it through a `read*` function that throws `BudgetError("invalid_input", message, field)`. Examples are `readMonth` in `src/core/months.ts` and `readNewBucket` in `src/core/buckets.ts`. New input reaches core through such a reader. A client guard on data from the server is only defensive, so don't report a missing one as a reachable bug unless you show how bad data gets in past core.
-- **Money is integer cents** everywhere below the display. `parseMoney` and `formatMoney` in `src/core/money.ts` are the only conversions.
-- **Undo is an inverse operation, not a snapshot.** It runs against the current state and is refused with a reason when the target has changed since, for example `bucket_changed` or `money_moved` in `src/core/index.ts`. A new undoable action follows the same pattern.
-- **Deep modules.** Keep a module's interface small and its details private. `src/core/index.ts` exposes `openBucketeer` and hides the SQL behind it.
-- **Slices go core → API → CLI → UI.** Every capability the UI has is also a CLI command with `--json` output, so agents can drive it (`src/cli.ts`, `test/cli*.test.ts`).
+- **Budgeting rules live in core.** Core decides balances, limits, need, monthly share and rain; the API, CLI and UI carry and display the result. A goal's monthly share comes from `monthlyShareOf` (`src/core/rain.ts`) and the UI reads `bucket.monthlyShare` (`src/ui/buckets.ts`). Three kinds of UI arithmetic are fine:
+  - previewing a draft by adding its delta to server figures (`src/ui/pill.ts`);
+  - summing figures already shown, such as the account total (`src/ui/shell.ts`) or split lines (`src/ui/split-lines.ts`);
+  - turning two server figures into a drawn proportion (`vessel` in `src/ui/buckets.ts`).
+- **A draft check mirrors core with core's own figures and words.** The pill compares a draft with the server's `takeable` and Ready to assign, and shows `addRefusal` or `takeRefusal` (`src/ui/add-take.ts`). Core still refuses the request itself.
+- **The UI runs only core's pure modules.** The runtime imports today are `formatMoney` and `parseMoney` (`money.ts`), `addMonths` and `lastDayOf` (`months.ts`), `addRefusal` and `takeRefusal` (`refusals.ts`), `BUCKET_COLOURS` and `leastUsedColour` (`colours.ts`), and `BudgetError` (`types.ts`). Everything else is `import type`. Another helper for formatting, parsing, months or refusal wording is fine; importing a budgeting rule is a finding. A newly imported module must also be pure and in the asset list in `src/api.ts`.
+- **Core validates every input at the API boundary.** The API passes request bodies and months to core unchecked, and core reads them with `read*` functions that throw `invalid_input`: `readMonth` (`src/core/months.ts`), `readNewBucket` (`src/core/buckets.ts`). A client guard on data from the server is defensive only, so report one as a reachable bug only with the path bad data takes past core.
+- **Money is integer cents.** Amounts stay in cents outside display and input. Display goes through `formatMoney` and typed amounts through `parseMoney` (`src/core/money.ts`). `readDraft` (`src/ui/add-take.ts`) is the one other parser, because it must tell an unfinished draft from an error.
+- **"Today" and "this month" are the server's** (ADR-0007). Core reads its injected clock (`now` in `openBucketeer`), and clients default dates to the server's `today` (`ctx.today` in `src/ui/register.ts`).
+- **Undo is an inverse change against current state.** Undoing a bucket edit, a move, a group rename or a rain is refused with a reason when its target has changed since: `revertBucket` and `undoRain` (`src/core/index.ts`), and the move and rename undos (`src/ui/buckets.ts`).
+- **A write that touches several rows is one transaction.** Wrap it in `transaction()`, as `editBucketRow` does (`src/core/index.ts`).
+- **A shipped migration is never edited.** A schema change appends to the list in `src/core/migrations.ts`.
+- **Modules are deep.** Implementation specifics sit behind a minimal interface: `openBucketeer` (`src/core/index.ts`) hides the SQL, and `openSheet` (`src/ui/sheet.ts`) hides the dialog.
+- **A slice reaches core, API, CLI and UI.** A new action on the budget gets a CLI command with `--json` (`src/cli.ts`). UI conveniences such as payee history and reverting an edit have none.
 
 ## Browsers
 
-- **Safari doesn't focus a clicked or tapped button.** Focus falls back to the nearest focusable ancestor, such as a `<dialog>`. A control that handles keys after a click, or that tracks `focusout`, must focus itself in its click handler, and a `focusout` handler must treat focus moving to an ancestor as staying inside. See `src/ui/month-picker.ts`, `src/ui/sheet.ts` (the group dropdown) and the budget menu in `src/ui/shell.ts`. This quirk has caused three bugs. Every such control needs a browser test that clicks or taps and then uses keys, as in `test/browser/goal-month.test.ts` and `test/browser/buckets.test.ts`, because the suite runs in WebKit.
-- **All three engines pass.** `npm run test:ui` runs the browser tests in Chromium, WebKit and Firefox (`scripts/test-ui.ts`). A change is done only when all three pass.
+- **Safari doesn't focus a clicked or tapped button.** Focus falls back to the nearest focusable ancestor, such as a `<dialog>`; three bugs came from this. A control that handles keys, or tracks `focusout`, after a click must keep focus explicitly: the pressed button focuses itself (the budget menu in `src/ui/shell.ts`, `dropdown` in `src/ui/sheet.ts`), or a `tabindex="-1"` container takes it (`src/ui/month-picker.ts`, whose `focusout` also ignores focus moving to an element around it). Each such control needs a browser test that clicks or taps and then uses keys, which WebKit runs: `test/browser/budget.test.ts`, `test/browser/buckets.test.ts`, `test/browser/goal-month.test.ts`.
+- **All three engines pass.** `npm run test:ui` passes in Chromium, WebKit and Firefox (`scripts/test-ui.ts`). A test's engine-specific step says why (`tabKeys`-style handling in `test/browser/harness.ts`).
 
 ## UI copy and look
 
-The approved design is called **Watercolour**. Its wording rules are:
-
-- **Use the glossary's terms**, such as Ready to assign, Available, Assign / Take, Income, Recurring, Dated goal and Plain. Money for each month reads "per month", as in "$100.00 of $160.00 per month" (`src/ui/buckets.ts`).
-- **Use no state words.** Available is a bare number. Words like "On track", "Funded", "Paid" or "Saving" never appear. The one state shown is overspent.
-- **Show no usage hints** (such as "type here to…") on any page.
-- **Show negatives with a true minus** (U+2212). `formatMoney` does this, so build money text with it.
-- **Each colour has one role.** The accent is for actions and focus. Violet (`--unassigned`) is only for Ready to assign and Make it rain. Red (`--over`) is only for overspent figures and a negative Ready to assign. Bucket hues (`--b-*`) only identify a bucket. Validation notes use neutral ink with an alert icon (`.note` in `src/ui/styles.css`), never red. Money coming in is green with a +.
-- **Never signal with colour alone.** Text contrast is at least 4.5:1, control outlines at least 3:1, touch targets at least 44px on phone, and reduced motion is respected.
-- **Style with the design tokens.** Use the custom properties in `src/ui/styles.css`, with dark values in its single `:root[data-theme="dark"]` block. Fonts are bundled, never loaded from a CDN, because the app runs behind a VPN.
-- **Error notes never move the layout.** The pill's refusal floats beside it (`.pnote` in `src/ui/pill.ts`), and a dialog throws `FieldError` so that its one note shows the message and the bad field takes focus (`src/ui/sheet.ts`, `src/ui/bucket-dialog.ts`).
+- **Copy uses the glossary's terms and the approved labels.** The bucket types read Recurring, Dated goal and Plain (`src/ui/bucket-dialog.ts`). Money per month reads "per month" (`perMonth` in `src/ui/buckets.ts`).
+- **Available is a bare number.** Overspent is the only state shown, so "On track", "Funded", "Paid" and "Saving" stay out of visible copy (`.brow.is-over` in `src/ui/styles.css`).
+- **Pages carry no usage hints.** A placeholder holds a format or a control's resting label: "0.00" (`src/ui/sheet.ts`), "+ / −" (`src/ui/pill.ts`).
+- **Negatives use a true minus, U+2212.** `formatMoney` writes it; hand-built signs use the same character (`signed` in `src/ui/add-take.ts`).
+- **Each colour has one role.** Violet (`--unassigned`) is for Ready to assign and Make it rain; red (`--over`) is for overspent and a negative Ready to assign; bucket hues (`--b-*`) identify a bucket; errors are neutral ink with an alert icon (`.note`, `.pnote`). See the colour uses in `src/ui/styles.css`, which pairs each with text, a sign or an icon.
+- **Colours come from the tokens.** A new colour is a custom property with its own light and dark value (`src/ui/styles.css`); shadows may use a literal.
+- **The pill's error floats beside it** and leaves the rows where they are (`.pnote` in `src/ui/styles.css`). A dialog shows one note above its button and focuses the bad field through `FieldError` (`src/ui/sheet.ts`).
