@@ -18,12 +18,21 @@ Judgement calls a reviewer applies to a diff; check every rule whose area the di
 - **A write that touches several rows is one transaction.** Wrap it in `transaction()`, as `editBucketRow` does (`src/core/index.ts`).
 - **A shipped migration is never edited.** A schema change appends to the list in `src/core/migrations.ts`.
 - **Modules are deep.** Implementation specifics sit behind a minimal interface: `openBucketeer` (`src/core/index.ts`) hides the SQL, and `openSheet` (`src/ui/sheet.ts`) hides the dialog.
+- **An odd line gets a plain fix, not a comment excusing it.** Restructure first: `returnFocusOnClose` (`src/ui/sheet.ts`) got its order by moving a line, with no workaround to explain. A comment is right where the constraint has no plain fix, such as Safari's focus rule. An `eslint-disable` states its reason after `--` (`src/api.ts`).
 - **A slice reaches core, API, CLI and UI.** A new action on the budget gets a CLI command with `--json` (`src/cli.ts`). UI conveniences such as payee history and reverting an edit have none.
 
 ## Browsers
 
-- **Safari doesn't focus a clicked or tapped button.** Focus falls back to the nearest focusable ancestor, such as a `<dialog>`; three bugs came from this. A control that handles keys, or tracks `focusout`, after a click must keep focus explicitly: the pressed button focuses itself (the budget menu in `src/ui/shell.ts`, `dropdown` in `src/ui/sheet.ts`), or a `tabindex="-1"` container takes it (`src/ui/month-picker.ts`, whose `focusout` also ignores focus moving to an element around it). Each such control needs a browser test that clicks or taps and then uses keys, which WebKit runs: `test/browser/budget.test.ts`, `test/browser/buckets.test.ts`, `test/browser/goal-month.test.ts`.
-- **All three engines pass.** `npm run test:ui` passes in Chromium, WebKit and Firefox (`scripts/test-ui.ts`). A test's engine-specific step says why (`tabKeys`-style handling in `test/browser/harness.ts`).
+- **Safari doesn't focus a clicked or tapped button that has no `tabindex`.** Focus falls back to the nearest focusable ancestor, such as a `<dialog>`; three bugs came from this. A control that handles keys, or tracks `focusout`, after a click must place focus explicitly, in one of these ways:
+  - the pressed button focuses itself: the budget menu in `src/ui/shell.ts`, `dropdown` in `src/ui/sheet.ts`;
+  - opening moves focus inside: the group menu in `src/ui/buckets.ts`;
+  - the button or its container has a `tabindex`: `segmented` and `swatches` in `src/ui/sheet.ts`, the picker in `src/ui/month-picker.ts`, whose `focusout` also ignores focus moving to an element around it.
+
+  Each such control needs a browser test that clicks or taps and then uses keys, which WebKit runs: `test/browser/budget.test.ts`, `test/browser/buckets.test.ts`, `test/browser/goal-month.test.ts`.
+- **A closing dialog returns focus through `returnFocusOnClose`** (`src/ui/sheet.ts`). It focuses before it removes the dialog, because WebKit on Linux ignores a focus call made after. `openSheet` uses it already; a hand-built dialog calls it, as the phone sheet in `src/ui/register.ts` does.
+- **Every change keeps Chromium, WebKit and Firefox passing.** CI runs `npm run test:ui` in all three. What CI can't judge is a test that passes by checking less in one engine: an engine branch in a test is limited to what that engine can't do, and says so (the touch test in `test/browser/buckets.test.ts`).
+- **A layout holds at every width it's shown at.** Pages are phone to 760px, desktop under a top bar from 761 to 1139px, and desktop beside the sidebar from 1140px. A change to a register, table or summary column extends the width checks in `test/browser/narrow-desktop.test.ts`. In the summary strip a figure may wrap but never loses digits (`.summary-wrap` in `src/ui/styles.css`).
+- **A browser test opens the context before it starts the server**, so cleanup closes the browser first; otherwise the server can wait on the browser's connection forever. Use `openApp` (`test/browser/harness.ts`), or that order by hand (`test/browser/theme.test.ts`).
 
 ## UI copy and look
 
@@ -31,6 +40,6 @@ Judgement calls a reviewer applies to a diff; check every rule whose area the di
 - **Available is a bare number.** Overspent is the only state shown, so "On track", "Funded", "Paid" and "Saving" stay out of visible copy (`.brow.is-over` in `src/ui/styles.css`).
 - **Pages carry no usage hints.** A placeholder holds a format, a resting label or a brief confirmation: "0.00" (`src/ui/sheet.ts`), "+ / −" and "✓ +20.00" (`src/ui/pill.ts`).
 - **Negatives use a true minus, U+2212.** `formatMoney` writes it; hand-built signs use the same character (`signed` in `src/ui/add-take.ts`).
-- **Each colour has one role.** Violet (`--unassigned`) is for Ready to assign and Make it rain; red (`--over`) is for overspent and a negative Ready to assign; bucket hues (`--b-*`) identify a bucket; errors are neutral ink with an alert icon (`.note`, `.pnote`). See the colour uses in `src/ui/styles.css`, which pairs each with text, a sign or an icon.
+- **Each colour has one role.** Violet (`--unassigned`) is for Ready to assign and Make it rain; red (`--over`) is for overspent and a negative Ready to assign; bucket hues (`--b-*`) identify a bucket; errors are neutral ink with an alert icon (`.note`, `.pnote`). Colour is never the only signal: a red figure also has its minus sign. See `src/ui/styles.css`.
 - **Colours come from the tokens.** A new colour is a custom property with its own light and dark value (`src/ui/styles.css`); shadows may use a literal.
 - **The pill's error floats beside it** and leaves the rows where they are (`.pnote` in `src/ui/styles.css`). A dialog shows one note above its button and focuses the bad field through `FieldError` (`src/ui/sheet.ts`).
