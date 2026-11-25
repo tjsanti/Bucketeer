@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
 import { copyFile, chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { clearBuildRecord, recordBuild } from "./stale-dist.ts";
+
+const root = fileURLToPath(new URL("..", import.meta.url));
+clearBuildRecord(root);
 
 const source = new URL("../src/ui/", import.meta.url);
 const output = new URL("../dist/ui/", import.meta.url);
@@ -56,3 +61,4 @@ const css = await readFile(new URL("styles.css", source), "utf8");
 await writeFile(new URL("styles.css", output), withHashedFonts(withSystemDarkTheme(css), "styles.css", true));
 
 await chmod(new URL("../dist/cli.js", import.meta.url), 0o755);
+recordBuild(root);
