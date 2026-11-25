@@ -1,34 +1,34 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, statSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { openContext, ready, startServer } from "../test/browser/harness.ts";
-import type { Engine } from "../test/browser/harness.ts";
+import { engines, launchContext, ready, startServer } from "../test/browser/launch.ts";
 import { seedRichBudget } from "../test/browser/seed.ts";
+import { distIsStale } from "./stale-dist.ts";
 
-const usage = `Screenshots the built app with a seeded budget showing every main UI state (test/browser/seed.ts).
+const usage = `Screenshots the built app with a seeded budget of the main bucket and transaction states (test/browser/seed.ts).
 
   npm run screenshot -- [options]
 
   --engine  chromium | webkit | firefox | all      (chromium)
-  --width   viewport width in CSS pixels; 600 or less is a touch phone   (1280)
-  --height  viewport height; the shot is the full page                   (900, or 844 at phone widths)
+  --width   viewport width in whole CSS pixels, 1 to 4000; 600 or less is a touch phone   (1280)
+  --height  viewport height in whole pixels, 1 to 4000; the shot is the full page          (900, or 844 at phone widths)
   --theme   light | dark | both                     (light)
   --route   buckets | accounts | register, or a raw path where {budget} and {account} stand for the seeded
             budget's and Checking's ids, e.g. /budgets/{budget}/buckets?month=2026-10   (buckets; repeatable)
   --out     directory for the PNGs                  (.local/screenshots)
-  --scale   device pixel ratio                      (1)
-  --no-build  fail instead of building when dist is older than src
+  --scale   device pixel ratio, 0.1 to 4            (1)
+  --no-build  fail instead of building when dist is incomplete or older than src
 
 Prints each PNG path it writes, named route-engine-width[xheight][@scale]-theme.png. Builds first when dist is
-older than src.
+incomplete or older than src.
 Style tweaks must go through page.evaluate: the app's CSP blocks page.addStyleTag.`;
 
 function fail(message: string): never {
   console.error(`${message}\n\n${usage}`);
   process.exit(2);
 }
-const engines: Engine[] = ["chromium", "webkit", "firefox"];
 const options = {
   "no-build": { type: "boolean" },
   engine: { type: "string", default: "chromium" },
@@ -51,9 +51,9 @@ if (values.help) {
   console.log(usage);
   process.exit(0);
 }
-function positive(name: string, value: string, most: number): number {
+function pixels(name: string, value: string): number {
   const number = Number(value);
-  if (!(number > 0 && number <= most)) fail(`--${name} must be a number above 0 and at most ${most}, not "${value}".`);
+  if (!(Number.isInteger(number) && number >= 1 && number <= 4000)) fail(`--${name} must be a whole number from 1 to 4000, not "${value}".`);
   return number;
 }
 const chosenEngines = values.engine === "all" ? engines : engines.filter((name) => name === values.engine);
@@ -61,37 +61,25 @@ if (!chosenEngines.length) fail(`--engine must be chromium, webkit, firefox or a
 const themes = values.theme === "both" ? ["light", "dark"] as const
   : values.theme === "light" || values.theme === "dark" ? [values.theme] as const
   : fail(`--theme must be light, dark or both, not "${values.theme}".`);
-const width = Math.round(positive("width", values.width, 4000));
+const width = pixels("width", values.width);
 const phone = width <= 600;
-const height = Math.round(positive("height", values.height ?? (phone ? "844" : "900"), 4000));
-const scale = positive("scale", values.scale, 4);
+const height = pixels("height", values.height ?? (phone ? "844" : "900"));
+const scale = Number(values.scale);
+if (!(scale >= 0.1 && scale <= 4)) fail(`--scale must be a number from 0.1 to 4, not "${values.scale}".`);
 const named = ["buckets", "accounts", "register"];
 const routes = values.route ?? ["buckets"];
 for (const route of routes) {
   if (!named.includes(route) && !route.startsWith("/")) fail(`--route must be buckets, accounts, register or a path starting with /, not "${route}".`);
 }
-const slug = (route: string) => named.includes(route) ? route : route.replace(/^\/+/, "").replace(/[^a-z0-9]+/gi, "-").replace(/-+$/, "") || "root";
+const slug = (route: string) => named.includes(route) ? route : route.toLowerCase().replace(/^\/+/, "").replace(/[^a-z0-9]+/g, "-").replace(/-+$/, "") || "root";
 const slugs = routes.map(slug);
 const repeated = slugs.find((name, index) => slugs.indexOf(name) !== index);
 if (repeated) fail(`Two routes would both be saved as ${repeated}; drop one.`);
 const outDir = resolve(values.out);
 
-// dist is stale when any source file is newer than the build's last output.
-function newest(dir: string): number {
-  return Math.max(0, ...readdirSync(dir, { withFileTypes: true, recursive: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => statSync(join(entry.parentPath, entry.name)).mtimeMs));
-}
-function builtAt(): number {
-  try {
-    return Math.min(...["dist/server.js", "dist/ui/styles.css", "dist/ui/index.html"].map((file) => statSync(file).mtimeMs));
-  } catch {
-    return 0;
-  }
-}
-if (builtAt() < Math.max(newest("src"), statSync("scripts/copy-assets.ts").mtimeMs)) {
+if (distIsStale(process.cwd())) {
   if (values["no-build"]) {
-    console.error("dist is older than src. Run npm run build.");
+    console.error("dist is incomplete or older than src. Run npm run build.");
     process.exit(1);
   }
   console.error("dist is stale; running npm run build...");
@@ -102,11 +90,16 @@ if (builtAt() < Math.max(newest("src"), statSync("scripts/copy-assets.ts").mtime
   }
 }
 
+// Exiting on these signals stops the server too (see startServer).
+process.once("SIGHUP", () => process.exit(129));
+process.once("SIGINT", () => process.exit(130));
+process.once("SIGTERM", () => process.exit(143));
 const cleanup: (() => unknown)[] = [];
 const teardown = { after: (fn: () => unknown) => { cleanup.push(fn); } };
 try {
   const url = await startServer(teardown);
-  const seeded = await seedRichBudget(url);
+  const { createClient } = await import(pathToFileURL(resolve("dist/client.js")).href) as typeof import("../src/client.js");
+  const seeded = await seedRichBudget(createClient(url));
   const paths: Record<string, string> = {
     buckets: `/budgets/${seeded.budget.id}/buckets`,
     accounts: `/budgets/${seeded.budget.id}/accounts`,
@@ -118,13 +111,13 @@ try {
 
   for (const engine of chosenEngines) {
     for (const theme of themes) {
-      const context = await openContext(teardown, {
+      const context = await launchContext(teardown, engine, {
         viewport: { width, height },
         deviceScaleFactor: scale,
         colorScheme: theme,
         reducedMotion: "reduce",
         ...(phone ? { hasTouch: true, isMobile: true } : {}),
-      }, engine);
+      });
       const page = await context.newPage();
       const pageErrors: string[] = [];
       page.on("pageerror", (error) => pageErrors.push(error.message));

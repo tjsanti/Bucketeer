@@ -16,4 +16,4 @@ Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/ag
 
 ### Screenshots
 
-Visual or design work: take screenshots with `npm run screenshot` (options: `-- --help`); its seeded budget shows every main UI state.
+Visual or design work: take screenshots with `npm run screenshot` (options: `-- --help`).

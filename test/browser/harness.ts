@@ -1,44 +1,10 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
-import { once } from "node:events";
-import { resolve } from "node:path";
-import { createInterface } from "node:readline";
-import { chromium, firefox, webkit } from "playwright-core";
+import { execFileSync } from "node:child_process";
 import type { BrowserContext, BrowserContextOptions, Page } from "playwright-core";
+import { engines, launchContext, startServer } from "./launch.js";
+import type { Engine, Teardown } from "./launch.js";
 
-/** Registers cleanup to run at the end: a test's context, or the screenshot script's own list. */
-export interface Teardown {
-  after(fn: () => unknown): void;
-}
-
-/**
- * Starts the built server on a free port with an in-memory database; stops it when the test ends. `timeZone`
- * sets its TZ; it shares the test machine's otherwise.
- */
-export async function startServer(t: Teardown, timeZone?: string): Promise<string> {
-  const server = spawn(process.execPath, [resolve("dist/server.js")], {
-    env: { ...process.env, HOST: "127.0.0.1", PORT: "0", DATABASE_PATH: ":memory:", ...(timeZone ? { TZ: timeZone } : {}) },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const exited = once(server, "exit");
-  let stderr = "";
-  server.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-  t.after(async () => {
-    if (server.exitCode === null && server.signalCode === null) server.kill("SIGTERM");
-    await exited;
-  });
-  const lines = createInterface({ input: server.stdout });
-  const line = await Promise.race([
-    once(lines, "line").then(([value]) => String(value)),
-    exited.then(() => { throw new Error(`Server exited before listening: ${stderr}`); }),
-  ]);
-  lines.close();
-  const port = /port (\d+)/.exec(line)?.[1];
-  assert.ok(port, line);
-  return `http://127.0.0.1:${port}`;
-}
-
-export type Engine = "chromium" | "webkit" | "firefox";
+export { ready, startServer } from "./launch.js";
 
 /**
  * The engine every browser test runs in, from BUCKETEER_BROWSER (chromium by default). `npm run test:ui` runs the
@@ -46,8 +12,9 @@ export type Engine = "chromium" | "webkit" | "firefox";
  */
 export const engine: Engine = (() => {
   const value = process.env.BUCKETEER_BROWSER || "chromium";
-  if (value === "chromium" || value === "webkit" || value === "firefox") return value;
-  throw new Error(`BUCKETEER_BROWSER must be chromium, webkit or firefox, not "${value}".`);
+  const found = engines.find((name) => name === value);
+  if (found) return found;
+  throw new Error(`BUCKETEER_BROWSER must be ${engines.slice(0, -1).join(", ")} or ${engines.at(-1)}, not "${value}".`);
 })();
 
 /**
@@ -66,35 +33,9 @@ export const tabKeys: { next: string; previous: string } = (() => {
   return mode & 2 ? { next: "Tab", previous: "Shift+Tab" } : { next: "Alt+Tab", previous: "Alt+Shift+Tab" };
 })();
 
-/**
- * A browser context in headless `which` engine (Chromium from BUCKETEER_BROWSER_PATH when set), closed with its
- * browser when the test ends. Firefox has no mobile emulation, so `isMobile` is dropped there: a phone is touch at the
- * phone's viewport, still with a mouse's hover.
- */
-export async function openContext(t: Teardown, options: BrowserContextOptions = {}, which: Engine = engine): Promise<BrowserContext> {
-  const browserPath = process.env.BUCKETEER_BROWSER_PATH;
-  const browser = which === "chromium"
-    ? await chromium.launch({ headless: true, ...(browserPath ? { executablePath: browserPath } : {}) })
-    : await { webkit, firefox }[which].launch({ headless: true });
-  t.after(() => browser.close());
-  const context = await browser.newContext(which === "firefox" ? { ...options, isMobile: false } : options);
-  if (which === "firefox") {
-    // Playwright's Firefox crashes the page when its main-world and isolated-world scripts both read one element's
-    // ariaLabelledByElements, as a role or label locator over an aria-labelledby element does for evaluateAll and
-    // then any other call. The app never reads it; without it in the main world, Playwright reads aria-labelledby.
-    await context.addInitScript(() => { Reflect.deleteProperty(Element.prototype, "ariaLabelledByElements"); });
-  }
-  if (options.hasTouch) {
-    // A phone's scroll indicators overlay whatever they scroll (iOS ignores ::-webkit-scrollbar), but a desktop
-    // engine emulating one still lays out its own scrollbars, narrowing the page and its scroll areas. Playwright's
-    // Chromium already hides them.
-    await context.addInitScript(() => {
-      const sheet = new CSSStyleSheet();
-      sheet.replaceSync("* { scrollbar-width: none !important; } ::-webkit-scrollbar { display: none !important; }");
-      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
-    });
-  }
-  return context;
+/** A browser context in the test engine, closed with its browser when the test ends (see `launchContext`). */
+export function openContext(t: Teardown, options: BrowserContextOptions = {}): Promise<BrowserContext> {
+  return launchContext(t, engine, options);
 }
 
 export interface App {
@@ -129,11 +70,6 @@ export async function openApp(t: Teardown, options: {
     if (new URL(request.url()).origin !== url) foreignRequests.push(request.url());
   });
   return { url, page, pageErrors, foreignRequests };
-}
-
-/** Waits until the app has finished loading its route, within `timeout` ms when given. */
-export async function ready(page: Page, timeout?: number): Promise<void> {
-  await page.locator("#main:not([aria-busy])").waitFor(timeout === undefined ? {} : { timeout });
 }
 
 export async function seedBudget(url: string, name: string): Promise<string> {

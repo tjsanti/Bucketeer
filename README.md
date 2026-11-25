@@ -221,7 +221,7 @@ Server configuration: `PORT` defaults to `3000`, `HOST` to `0.0.0.0`, and `DATAB
 - `src/client.ts` is the HTTP client shared by the CLI and UI.
 - `src/cli.ts` provides scriptable commands.
 - `src/ui/` is the web app, with no framework: the shell and budget picker, the Accounts page and each account's register, the Buckets page, and their dialogs. `styles.css` holds the design tokens and light/dark themes. The build bundles the Nunito and Figtree fonts from Fontsource into `dist/ui/fonts` with content-hashed names, served as immutable.
-- `scripts/` holds the asset build, the browser test runner (one run per engine) and the Docker acceptance check; `test/` holds core, API, CLI, and browser tests.
+- `scripts/` holds the asset build, the browser test runner (one run per engine), the screenshot script (`npm run screenshot`) and the Docker acceptance check; `test/` holds core, API, CLI, and browser tests.
 
 ## Contributing
 
