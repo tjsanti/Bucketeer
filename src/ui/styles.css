@@ -1094,6 +1094,7 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
   .atable [role="row"].arow, .atable.with-acct [role="row"].arow { grid-template-columns: minmax(0, 1fr) auto; min-height: 60px; }
   .atable .arow .c.date, .atable .arow .c.cat, .atable .arow .c.acct { display: none; }
   .atable .arow .c.payee { flex-direction: column; align-items: flex-start; justify-content: center; gap: 1px; padding: 9px 4px 9px var(--s-3); }
+  .atable .arow .pn { max-width: 100%; }
   .atable .arow .pn:empty { display: none; }
   .atable .arow .pfall { display: block; }
   .atable .arow .sub { display: block; max-width: 100%; font-size: var(--fs-sm); font-weight: var(--fw-regular); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1178,7 +1179,7 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
   .goal .when { display: none; }
   .goal-date { display: block; color: var(--text-muted); }
   .goal { gap: var(--s-2); }
-  .goal .pct { min-width: 0; }
+  .goal .pct { flex: none; min-width: 0; }
   .bar { --bar-w: 64px; --bar-h: 6px; }
   .bgroup { min-height: 52px; }
   .more-btn { width: var(--touch); height: var(--touch); margin-left: -4px; }

@@ -1,17 +1,118 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Locator, Page } from "playwright-core";
+import { createClient } from "../../src/client.js";
 import { openApp, ready, seedBudget } from "./harness.js";
+import { seedRichBudget } from "./seed.js";
 
 // Below 1140px the sidebar becomes the phone's top bar, but the pages stay desktop down to 761px. The narrowest
 // width checked is 780: headless WebKit evaluates media queries without its 10px scrollbar, so 761–770 is a phone there.
 const topBarWidths = [780, 800, 1024, 1120];
 const sidebarWidths = [1160, 1280];
+const phoneWidths = [320, 340, 360, 375, 390, 430, 600, 760];
 
 const MINUS = "−";
 
 const noHorizontalScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 const box = async (locator: Locator) => (await locator.boundingBox())!;
+
+test("Recent activity truncates long payees before the amount on Buckets and Accounts", { timeout: 90_000 }, async (t) => {
+  const app = await openApp(t, { width: 320, height: 844, touch: true });
+  const { page } = app;
+  const client = createClient(app.url);
+  const { budget, checking } = await seedRichBudget(client);
+  const longerPayee = "Northwind Logistics Payroll Direct Deposit including warehouse inventory overtime and the annual performance bonus";
+  await client.addTransaction(checking.id, { payee: longerPayee, amount: 241_200, category: { kind: "income" } });
+
+  // Touch emulation hides the desktop scrollbar, so the exact media-query boundaries can be checked too.
+  for (const width of [...phoneWidths, 761, 780, 1140, 1160, 1280]) {
+    for (const route of ["buckets", "accounts"]) {
+      await t.test(`${route} at ${width}px: payees stay in their column and amounts show whole`, async () => {
+        const where = `${route} at ${width}px`;
+        await page.setViewportSize({ width, height: 844 });
+        await page.goto(`${app.url}/budgets/${budget.id}/${route}`);
+        await ready(page);
+        await page.evaluate(() => document.fonts.ready);
+        const rows = page.locator(".atable .arow").filter({ hasText: "Northwind Logistics Payroll Direct Deposit" });
+        assert.equal(await rows.count(), 2, `${where}: both long payees show`);
+        assert.deepEqual(await rows.locator(".c.amt").allInnerTexts(), ["2,412.00", "2,412.00"]);
+        await assertTextFits(rows.locator(".c.amt"), `${where} the amount`);
+        const payees = await rows.locator(".pn").evaluateAll((nodes) => nodes.map((node) => {
+          const rect = node.getBoundingClientRect();
+          const cell = node.closest(".c")!;
+          const room = cell.getBoundingClientRect();
+          const padding = getComputedStyle(cell);
+          const style = getComputedStyle(node);
+          const amount = document.createRange();
+          amount.selectNodeContents(node.closest(".arow")!.querySelector(".c.amt")!);
+          return {
+            text: node.textContent, left: rect.left, right: rect.right, width: rect.width,
+            start: room.left + parseFloat(padding.paddingLeft), end: room.right - parseFloat(padding.paddingRight),
+            amountLeft: amount.getBoundingClientRect().left, clipped: node.scrollWidth > node.clientWidth + 1,
+            ellipsis: style.textOverflow === "ellipsis" && style.overflowX === "hidden" && style.whiteSpace === "nowrap",
+          };
+        }));
+        for (const payee of payees) {
+          assert.ok(payee.width > 0 && payee.left >= payee.start - 1 && payee.right <= payee.end + 1,
+            `${where}: "${payee.text}" stays inside its payee column`);
+          assert.ok(payee.right <= payee.amountLeft - 1, `${where}: the payee leaves a gap before the amount`);
+          if (payee.text === longerPayee || width <= 390) {
+            assert.ok(payee.clipped && payee.ellipsis, `${where}: the long payee ends in an ellipsis`);
+          }
+        }
+        assert.equal(await noHorizontalScroll(page), true, `${where}: the page does not scroll sideways`);
+      });
+    }
+  }
+  assert.deepEqual(app.pageErrors, []);
+});
+
+test("goal percentages stay whole and clear of their metadata from phone to desktop", { timeout: 90_000 }, async (t) => {
+  const app = await openApp(t, { width: 320, height: 844, touch: true });
+  const { page } = app;
+  const { budget } = await seedRichBudget(createClient(app.url));
+  for (const width of [...phoneWidths, 761, 780, 1140, 1160, 1280]) {
+    await t.test(`${width}px: percentages keep their gap while goal metadata can truncate`, async () => {
+      const where = `At ${width}px`;
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto(`${app.url}/budgets/${budget.id}/buckets`);
+      await ready(page);
+      await page.evaluate(() => document.fonts.ready);
+      const goals = await page.locator(".brow.is-goal .goal").evaluateAll((nodes) => nodes.map((node) => {
+        const percentage = node.querySelector(".pct")!;
+        const range = document.createRange();
+        range.selectNodeContents(percentage);
+        const text = range.getBoundingClientRect();
+        const pct = percentage.getBoundingClientRect();
+        const meta = node.querySelector(".gmeta")!;
+        const metadata = meta.getBoundingClientRect();
+        const style = getComputedStyle(meta);
+        return {
+          name: node.closest(".brow")!.querySelector(".name")!.textContent, percentage: percentage.textContent,
+          textLeft: text.left, textRight: text.right, pctLeft: pct.left, pctRight: pct.right,
+          gap: metadata.left - text.right, end: metadata.right, room: node.getBoundingClientRect().right,
+          metaWidth: metadata.width, clipped: meta.scrollWidth > meta.clientWidth + 1,
+          ellipsis: style.textOverflow === "ellipsis" && style.overflowX === "hidden",
+        };
+      }));
+      assert.deepEqual(goals.map((goal) => goal.name), ["Vacation", "Laptop", "Bike", "House deposit"]);
+      assert.equal(goals.find((goal) => goal.name === "Bike")!.percentage, "100%");
+      for (const goal of goals) {
+        assert.ok(goal.gap >= 1, `${where}: ${goal.name}'s percentage is clear of its metadata`);
+        if (width <= 760) {
+          assert.ok(goal.textLeft >= goal.pctLeft - 0.5 && goal.textRight <= goal.pctRight + 0.5,
+            `${where}: ${goal.name}'s ${goal.percentage} fits in its box`);
+          assert.ok(Math.abs(goal.gap - 8) <= 0.5,
+            `${where}: ${goal.name}'s percentage has a ${goal.gap.toFixed(1)}px gap before its metadata`);
+        }
+        assert.ok(goal.metaWidth > 0 && goal.end <= goal.room + 0.5, `${where}: ${goal.name}'s metadata stays on its line`);
+        if (width === 320) assert.ok(goal.clipped && goal.ellipsis, `${where}: ${goal.name}'s metadata ends in an ellipsis`);
+      }
+      assert.equal(await noHorizontalScroll(page), true, `${where}: the page does not scroll sideways`);
+    });
+  }
+  assert.deepEqual(app.pageErrors, []);
+});
 
 /**
  * Each cell's text (measured over its text node, not the cell) against the cell's content box: a label that
