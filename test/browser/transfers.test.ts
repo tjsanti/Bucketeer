@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Locator, Page } from "playwright-core";
-import { openApp, ready, seedBudget } from "./harness.js";
+import type { Locator } from "playwright-core";
+import { noHorizontalScroll, openApp, ready, seedBudget } from "./harness.js";
 
 const MINUS = "−";
 const compact = (text: string | null) => (text ?? "").replace(/\s+/g, " ").trim();
-const noHorizontalScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 const cells = async (row: Locator) => (await row.locator("[role=cell]").allInnerTexts()).map(compact);
 
 async function api(url: string, method: string, path: string, body?: unknown): Promise<any> {

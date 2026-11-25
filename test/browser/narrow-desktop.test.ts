@@ -2,117 +2,29 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Locator, Page } from "playwright-core";
 import { createClient } from "../../src/client.js";
-import { openApp, ready, seedBudget } from "./harness.js";
+import { MAX_BUCKET_NAME_LENGTH } from "../../src/core/buckets.js";
+import { noHorizontalScroll, openApp, ready, seedBudget } from "./harness.js";
 import { seedRichBudget } from "./seed.js";
 
-// Below 1140px the sidebar becomes the phone's top bar, but the pages stay desktop down to 761px. The narrowest
-// width checked is 780: headless WebKit evaluates media queries without its 10px scrollbar, so 761–770 is a phone there.
+// Below 1140px the sidebar becomes the phone's top bar, but the pages stay desktop down to 761px. Without touch the
+// narrowest desktop width checked is 780: headless WebKit evaluates media queries without its 10px scrollbar, so
+// 761–770 is a phone there. Touch emulation hides the scrollbar, so a touch test can check each side of 761 and 1140.
 const topBarWidths = [780, 800, 1024, 1120];
 const sidebarWidths = [1160, 1280];
 const phoneWidths = [320, 340, 360, 375, 390, 430, 600, 760];
+const touchWidths = [...phoneWidths, 761, 780, 1139, 1140, 1160, 1280];
 
 const MINUS = "−";
 
-const noHorizontalScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 const box = async (locator: Locator) => (await locator.boundingBox())!;
 
-test("Recent activity truncates long payees before the amount on Buckets and Accounts", { timeout: 90_000 }, async (t) => {
-  const app = await openApp(t, { width: 320, height: 844, touch: true });
-  const { page } = app;
-  const client = createClient(app.url);
-  const { budget, checking } = await seedRichBudget(client);
-  const longerPayee = "Northwind Logistics Payroll Direct Deposit including warehouse inventory overtime and the annual performance bonus";
-  await client.addTransaction(checking.id, { payee: longerPayee, amount: 241_200, category: { kind: "income" } });
-
-  // Touch emulation hides the desktop scrollbar, so the exact media-query boundaries can be checked too.
-  for (const width of [...phoneWidths, 761, 780, 1140, 1160, 1280]) {
-    for (const route of ["buckets", "accounts"]) {
-      await t.test(`${route} at ${width}px: payees stay in their column and amounts show whole`, async () => {
-        const where = `${route} at ${width}px`;
-        await page.setViewportSize({ width, height: 844 });
-        await page.goto(`${app.url}/budgets/${budget.id}/${route}`);
-        await ready(page);
-        await page.evaluate(() => document.fonts.ready);
-        const rows = page.locator(".atable .arow").filter({ hasText: "Northwind Logistics Payroll Direct Deposit" });
-        assert.equal(await rows.count(), 2, `${where}: both long payees show`);
-        assert.deepEqual(await rows.locator(".c.amt").allInnerTexts(), ["2,412.00", "2,412.00"]);
-        await assertTextFits(rows.locator(".c.amt"), `${where} the amount`);
-        const payees = await rows.locator(".pn").evaluateAll((nodes) => nodes.map((node) => {
-          const rect = node.getBoundingClientRect();
-          const cell = node.closest(".c")!;
-          const room = cell.getBoundingClientRect();
-          const padding = getComputedStyle(cell);
-          const style = getComputedStyle(node);
-          const amount = document.createRange();
-          amount.selectNodeContents(node.closest(".arow")!.querySelector(".c.amt")!);
-          return {
-            text: node.textContent, left: rect.left, right: rect.right, width: rect.width,
-            start: room.left + parseFloat(padding.paddingLeft), end: room.right - parseFloat(padding.paddingRight),
-            amountLeft: amount.getBoundingClientRect().left, clipped: node.scrollWidth > node.clientWidth + 1,
-            ellipsis: style.textOverflow === "ellipsis" && style.overflowX === "hidden" && style.whiteSpace === "nowrap",
-          };
-        }));
-        for (const payee of payees) {
-          assert.ok(payee.width > 0 && payee.left >= payee.start - 1 && payee.right <= payee.end + 1,
-            `${where}: "${payee.text}" stays inside its payee column`);
-          assert.ok(payee.right <= payee.amountLeft - 1, `${where}: the payee leaves a gap before the amount`);
-          if (payee.text === longerPayee || width <= 390) {
-            assert.ok(payee.clipped && payee.ellipsis, `${where}: the long payee ends in an ellipsis`);
-          }
-        }
-        assert.equal(await noHorizontalScroll(page), true, `${where}: the page does not scroll sideways`);
-      });
-    }
-  }
-  assert.deepEqual(app.pageErrors, []);
-});
-
-test("goal percentages stay whole and clear of their metadata from phone to desktop", { timeout: 90_000 }, async (t) => {
-  const app = await openApp(t, { width: 320, height: 844, touch: true });
-  const { page } = app;
-  const { budget } = await seedRichBudget(createClient(app.url));
-  for (const width of [...phoneWidths, 761, 780, 1140, 1160, 1280]) {
-    await t.test(`${width}px: percentages keep their gap while goal metadata can truncate`, async () => {
-      const where = `At ${width}px`;
-      await page.setViewportSize({ width, height: 844 });
-      await page.goto(`${app.url}/budgets/${budget.id}/buckets`);
-      await ready(page);
-      await page.evaluate(() => document.fonts.ready);
-      const goals = await page.locator(".brow.is-goal .goal").evaluateAll((nodes) => nodes.map((node) => {
-        const percentage = node.querySelector(".pct")!;
-        const range = document.createRange();
-        range.selectNodeContents(percentage);
-        const text = range.getBoundingClientRect();
-        const pct = percentage.getBoundingClientRect();
-        const meta = node.querySelector(".gmeta")!;
-        const metadata = meta.getBoundingClientRect();
-        const style = getComputedStyle(meta);
-        return {
-          name: node.closest(".brow")!.querySelector(".name")!.textContent, percentage: percentage.textContent,
-          textLeft: text.left, textRight: text.right, pctLeft: pct.left, pctRight: pct.right,
-          gap: metadata.left - text.right, end: metadata.right, room: node.getBoundingClientRect().right,
-          metaWidth: metadata.width, clipped: meta.scrollWidth > meta.clientWidth + 1,
-          ellipsis: style.textOverflow === "ellipsis" && style.overflowX === "hidden",
-        };
-      }));
-      assert.deepEqual(goals.map((goal) => goal.name), ["Vacation", "Laptop", "Bike", "House deposit"]);
-      assert.equal(goals.find((goal) => goal.name === "Bike")!.percentage, "100%");
-      for (const goal of goals) {
-        assert.ok(goal.gap >= 1, `${where}: ${goal.name}'s percentage is clear of its metadata`);
-        if (width <= 760) {
-          assert.ok(goal.textLeft >= goal.pctLeft - 0.5 && goal.textRight <= goal.pctRight + 0.5,
-            `${where}: ${goal.name}'s ${goal.percentage} fits in its box`);
-          assert.ok(Math.abs(goal.gap - 8) <= 0.5,
-            `${where}: ${goal.name}'s percentage has a ${goal.gap.toFixed(1)}px gap before its metadata`);
-        }
-        assert.ok(goal.metaWidth > 0 && goal.end <= goal.room + 0.5, `${where}: ${goal.name}'s metadata stays on its line`);
-        if (width === 320) assert.ok(goal.clipped && goal.ellipsis, `${where}: ${goal.name}'s metadata ends in an ellipsis`);
-      }
-      assert.equal(await noHorizontalScroll(page), true, `${where}: the page does not scroll sideways`);
-    });
-  }
-  assert.deepEqual(app.pageErrors, []);
-});
+/** Opens `url` in a window of `size` and waits for the route and its fonts, so text measures at its final width. */
+async function openAt(page: Page, url: string, size: { width: number; height: number }): Promise<void> {
+  await page.setViewportSize(size);
+  await page.goto(url);
+  await ready(page);
+  await page.evaluate(() => document.fonts.ready);
+}
 
 /**
  * Each cell's text (measured over its text node, not the cell) against the cell's content box: a label that
@@ -200,12 +112,7 @@ test("from 800 to 1280px the register keeps its desktop entry row, under a top b
   const { page } = app;
   const { budgetId, checking, savings, card } = await household(app.url);
   const registerOf = (account: { id: string }) => `${app.url}/budgets/${budgetId}/accounts/${account.id}`;
-  const open = async (account: { id: string }, width: number) => {
-    await page.setViewportSize({ width, height: 900 });
-    await page.goto(registerOf(account));
-    await ready(page);
-    await page.evaluate(() => document.fonts.ready);
-  };
+  const open = (account: { id: string }, width: number) => openAt(page, registerOf(account), { width, height: 900 });
 
   for (const width of [...topBarWidths, ...sidebarWidths]) {
     const topBar = width < 1140;
@@ -420,7 +327,10 @@ const groupLabels = (page: Page) => page.locator(".btable .bgroup .gcell").evalu
   };
 }));
 
-/** The ancestors whose overflow clipping cuts into `node`'s box or its text, nearest first; the window counts as one. */
+/**
+ * The ancestors whose overflow clipping cuts into `node`'s box or its text, nearest first; the window, less any
+ * scrollbar beside the page, counts as one.
+ */
 const clippedBy = (node: Locator) => node.evaluate((note) => {
   const range = document.createRange();
   range.selectNodeContents(note);
@@ -436,7 +346,8 @@ const clippedBy = (node: Locator) => node.evaluate((note) => {
       cuts.push(`.${[...ancestor.classList].join(".") || ancestor.tagName.toLowerCase()} (${clip.left.toFixed(0)}–${clip.right.toFixed(0)} against ${left.toFixed(0)}–${right.toFixed(0)})`);
     }
   }
-  if (left < -1 || right > window.innerWidth + 1) cuts.push(`the window (0–${window.innerWidth} against ${left.toFixed(0)}–${right.toFixed(0)})`);
+  const windowWidth = document.documentElement.clientWidth;
+  if (left < -1 || right > windowWidth + 1) cuts.push(`the window (0–${windowWidth} against ${left.toFixed(0)}–${right.toFixed(0)})`);
   return cuts;
 });
 
@@ -459,12 +370,7 @@ test("from 800 to 1280px the Buckets page's summary strip and table keep every f
   const app = await openApp(t);
   const { page } = app;
   const { budgetId } = await bucketsHousehold(app.url);
-  const open = async (width: number) => {
-    await page.setViewportSize({ width, height: 900 });
-    await page.goto(`${app.url}/budgets/${budgetId}/buckets`);
-    await ready(page);
-    await page.evaluate(() => document.fonts.ready);
-  };
+  const open = (width: number) => openAt(page, `${app.url}/budgets/${budgetId}/buckets`, { width, height: 900 });
   // The strip is under 900px wide at 800 (752px under the top bar) and at 1160 (828px beside the sidebar).
   const stackedAt = new Set([780, 800, 1160]);
 
@@ -562,10 +468,7 @@ test("at 320, 360 and 390px the phone's strip keeps five-figure stats and Ready 
   for (const width of [320, 360, 390]) {
     await t.test(`${width}px: Ready to assign spans the strip and every figure shows whole`, { timeout: 30_000 }, async () => {
       const where = `At ${width}px`;
-      await page.setViewportSize({ width, height: 844 });
-      await page.goto(`${app.url}/budgets/${budgetId}/buckets`);
-      await ready(page);
-      await page.evaluate(() => document.fonts.ready);
+      await openAt(page, `${app.url}/budgets/${budgetId}/buckets`, { width, height: 844 });
       const strip = summaryStrip(page);
       assert.equal((await strip.locator(".ready-figure").innerText()).replace(/\s+/g, ""), "$32,888.89");
       assert.deepEqual((await strip.locator(".stat .figure").allInnerTexts()).map((text) => text.trim()), ["$15,234.56", "$12,345.67", "$10,987.65"]);
@@ -583,10 +486,7 @@ test("from 780 to 1280px the Buckets table's Spent and Available keep five- and 
   for (const width of [...topBarWidths, ...sidebarWidths]) {
     await t.test(`${width}px: every bucket's and group's Spent and Available fits its cell`, { timeout: 30_000 }, async () => {
       const where = `At ${width}px`;
-      await page.setViewportSize({ width, height: 900 });
-      await page.goto(`${app.url}/budgets/${budgetId}/buckets`);
-      await ready(page);
-      await page.evaluate(() => document.fonts.ready);
+      await openAt(page, `${app.url}/budgets/${budgetId}/buckets`, { width, height: 900 });
       const grid = page.getByRole("table", { name: "Buckets" });
       const spent = grid.locator(".brow .c.spent, .bgroup .c.spent");
       const available = grid.locator(".brow .c.avail, .bgroup .c.avail");
@@ -598,5 +498,139 @@ test("from 780 to 1280px the Buckets table's Spent and Available keep five- and 
       assert.equal(await noHorizontalScroll(page), true, `${where} the page does not scroll sideways`);
     });
   }
+  assert.deepEqual(app.pageErrors, []);
+});
+
+/**
+ * Every label that shows in each Recent activity row (its payee, or its category in the payee's place, and the line
+ * under it on phones; its payee, category and account on desktop): how far its text reaches, against the content box
+ * of its column. A label that hides its overflow shows only up to its own edges, and says whether it ends in an
+ * ellipsis; a label that wraps shows all of its text.
+ */
+const activityLabels = (rows: Locator) => rows.evaluateAll((nodes) => nodes.map((row) => [...row.querySelectorAll(".pn, .pfall, .sub, .cn")]
+  .filter((label) => label.textContent && label.getClientRects().length)
+  .map((label) => {
+    const range = document.createRange();
+    range.selectNodeContents(label);
+    const text = range.getBoundingClientRect();
+    const edges = label.getBoundingClientRect();
+    const style = getComputedStyle(label);
+    const hides = style.overflowX !== "visible";
+    const column = label.closest(".c")!;
+    const columnBox = column.getBoundingClientRect();
+    const columnStyle = getComputedStyle(column);
+    return {
+      text: label.textContent ?? "",
+      left: hides ? Math.max(text.left, edges.left) : text.left, right: hides ? Math.min(text.right, edges.right) : text.right,
+      start: columnBox.left + parseFloat(columnStyle.paddingLeft), end: columnBox.right - parseFloat(columnStyle.paddingRight),
+      ellipsis: hides && style.textOverflow === "ellipsis" && style.whiteSpace === "nowrap" && label.scrollWidth > label.clientWidth + 1,
+    };
+  })));
+
+test("Recent activity keeps payees, and a category in a payee's place, in their column before a whole amount on Buckets and Accounts", { timeout: 90_000 }, async (t) => {
+  const app = await openApp(t, { width: 320, height: 844, touch: true });
+  const { page } = app;
+  const client = createClient(app.url);
+  const { budget, checking, visa } = await seedRichBudget(client);
+  const seededPayee = "Northwind Logistics Payroll Direct Deposit";
+  const longerPayee = `${seededPayee} including warehouse inventory overtime and the annual performance bonus`;
+  await client.addTransaction(checking.id, { payee: longerPayee, amount: 241_200, category: { kind: "income" } });
+  // Corner Café's row loses its payee to a bucket with the longest one-word name a bucket can have, which shows in the
+  // payee's place on phones and in the Category column on desktop.
+  const longName = "Supercalifragilisticexpialidocious".repeat(2).slice(0, MAX_BUCKET_NAME_LENGTH);
+  const bucket = await client.createBucket(budget.id, { name: longName, newGroupName: "Odds and ends", type: "plain" });
+  const cafe = (await client.listTransactions(visa.id)).transactions.find((transaction) => transaction.payee === "Corner Café")!;
+  await client.editTransaction(cafe.id, { payee: "", category: { kind: "bucket", bucketId: bucket.id } });
+
+  for (const width of touchWidths) {
+    for (const route of ["buckets", "accounts"]) {
+      await t.test(`${route} at ${width}px: every payee and category stays in its column, before an amount that shows whole`, { timeout: 30_000 }, async () => {
+        const where = `${route} at ${width}px`;
+        await openAt(page, `${app.url}/budgets/${budget.id}/${route}`, { width, height: 844 });
+        const rows = page.getByRole("table", { name: "Recent activity" }).locator(".arow");
+        assert.deepEqual(await rows.filter({ hasText: seededPayee }).locator(".c.amt").allInnerTexts(), ["2,412.00", "2,412.00"], `${where}: both long payees show`);
+        const amounts = rows.locator(".c.amt");
+        await assertTextFits(amounts, `${where} the amount`);
+        const amountStarts = (await textBoxes(amounts)).map((amount) => amount.left);
+        const labelsByRow = await activityLabels(rows);
+        for (const [index, labels] of labelsByRow.entries()) {
+          for (const label of labels) {
+            assert.ok(label.left >= label.start - 1 && label.right <= label.end + 1,
+              `${where}: "${label.text}" runs ${label.left.toFixed(1)}–${label.right.toFixed(1)} in a column with room for ${label.start.toFixed(1)}–${label.end.toFixed(1)}`);
+            assert.ok(label.right <= amountStarts[index]! - 1,
+              `${where}: "${label.text}" ends at ${label.right.toFixed(1)}, with no gap before the amount at ${amountStarts[index]!.toFixed(1)}`);
+          }
+        }
+        const labels = labelsByRow.flat();
+        for (const payee of [longerPayee, ...(width <= 390 ? [seededPayee] : [])]) {
+          assert.equal(labels.find((label) => label.text === payee)?.ellipsis, true, `${where}: "${payee}" ends in an ellipsis`);
+        }
+        const names = labels.filter((label) => label.text === longName);
+        assert.equal(names.length, 1, `${where}: the long bucket name shows once`);
+        if (width <= 760) assert.equal(names[0]!.ellipsis, false, `${where}: the long bucket name shows whole, not cut short with an ellipsis`);
+        assert.equal(await noHorizontalScroll(page), true, `${where}: the page does not scroll sideways`);
+      });
+    }
+  }
+  assert.deepEqual(app.pageErrors, []);
+});
+
+/**
+ * Each goal's amount on its bar's line ("of $600.00", and the month on desktop): where it sits, where the line ends,
+ * and whether it is cut short with an ellipsis.
+ */
+const goalAmounts = (page: Page) => page.locator(".brow.is-goal .goal .gmeta").evaluateAll((nodes) => nodes.map((node) => {
+  const edges = node.getBoundingClientRect();
+  const style = getComputedStyle(node);
+  return {
+    bucket: node.closest(".brow")!.querySelector(".name")!.textContent ?? "",
+    left: edges.left, right: edges.right, width: edges.width, lineEnd: node.closest(".goal")!.getBoundingClientRect().right,
+    ellipsis: style.overflowX === "hidden" && style.textOverflow === "ellipsis" && node.scrollWidth > node.clientWidth + 1,
+  };
+}));
+
+test("goal percentages show whole 8px before the goal amount on phones, and stay clear of it on desktop", { timeout: 90_000 }, async (t) => {
+  const app = await openApp(t, { width: 320, height: 844, touch: true });
+  const { page } = app;
+  const { budget } = await seedRichBudget(createClient(app.url));
+  const percentages = page.locator(".brow.is-goal .goal .pct");
+  for (const width of touchWidths) {
+    const phone = width <= 760;
+    await t.test(`${width}px: each percentage ${phone ? "shows whole, 8px before" : "is clear of"} a goal amount that stays on its line`, { timeout: 30_000 }, async () => {
+      const where = `At ${width}px`;
+      await openAt(page, `${app.url}/budgets/${budget.id}/buckets`, { width, height: 844 });
+      const percentageTexts = await textBoxes(percentages);
+      const goals = await goalAmounts(page);
+      assert.deepEqual(goals.map((goal) => goal.bucket), ["Vacation", "Laptop", "Bike", "House deposit"]);
+      assert.equal(percentageTexts[2]!.text, "100%", `${where}: Bike is fully saved`);
+      if (phone) await assertTextFits(percentages, `${where} a goal's percentage`);
+      for (const [index, goal] of goals.entries()) {
+        const gap = goal.left - percentageTexts[index]!.right;
+        const what = `${where}: ${goal.bucket}'s ${percentageTexts[index]!.text} is ${gap.toFixed(1)}px before its goal amount`;
+        if (phone) assert.ok(Math.abs(gap - 8) <= 0.5, `${what}, not 8px`);
+        else assert.ok(gap >= 1, `${what}, not clear of it`);
+        assert.ok(goal.width > 0 && goal.right <= goal.lineEnd + 0.5, `${where}: ${goal.bucket}'s goal amount stays on its line`);
+        if (width === 320) assert.ok(goal.ellipsis, `${where}: ${goal.bucket}'s goal amount ends in an ellipsis`);
+      }
+      assert.equal(await noHorizontalScroll(page), true, `${where}: the page does not scroll sideways`);
+    });
+  }
+  assert.deepEqual(app.pageErrors, []);
+});
+
+test("the sideways-scroll check fails on a page wider than a touch phone's window", { timeout: 30_000 }, async (t) => {
+  const app = await openApp(t, { width: 320, height: 844, touch: true });
+  const { page } = app;
+  await page.goto(app.url);
+  await ready(page);
+  assert.equal(await noHorizontalScroll(page), true);
+  // 300px too wide: with touch, Chromium widens window.innerWidth to fit it.
+  await page.evaluate(() => {
+    const wide = document.createElement("div");
+    wide.style.width = "620px";
+    wide.style.height = "1px";
+    document.body.append(wide);
+  });
+  assert.equal(await noHorizontalScroll(page), false);
   assert.deepEqual(app.pageErrors, []);
 });

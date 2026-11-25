@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Locator, Page } from "playwright-core";
-import { openApp, ready, seedBudget } from "./harness.js";
+import type { Locator } from "playwright-core";
+import { noHorizontalScroll, openApp, ready, seedBudget } from "./harness.js";
 
 const MINUS = "−";
 const over = "rgb(179, 36, 59)"; // --over, light
 
 const compact = (text: string | null) => (text ?? "").replace(/\s+/g, " ").trim();
 const colorOf = (locator: Locator) => locator.evaluate((node) => getComputedStyle(node).color);
-const noHorizontalScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 const cells = async (row: Locator) => (await row.locator("[role=cell]").allInnerTexts()).map(compact);
 const overlaps = (a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }) =>
   a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;

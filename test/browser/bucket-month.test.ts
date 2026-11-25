@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Page } from "playwright-core";
-import { openApp, ready, seedBudget } from "./harness.js";
+import { noHorizontalScroll, openApp, ready, seedBudget } from "./harness.js";
 
 const compact = (text: string | null) => (text ?? "").replace(/\s+/g, " ").trim();
 
@@ -206,7 +206,7 @@ test("on a phone a goal's share is its own line under its date, and nothing wrap
       });
       assert.deepEqual(fits, { oneLine: true, clipped: false, inside: true }, name);
     }
-    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "No sideways scroll");
+    assert.ok(await noHorizontalScroll(page), "No sideways scroll");
     assert.deepEqual(app.pageErrors, []);
   }
 });

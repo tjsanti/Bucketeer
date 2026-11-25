@@ -72,6 +72,15 @@ export async function openApp(t: Teardown, options: {
   return { url, page, pageErrors, foreignRequests };
 }
 
+/**
+ * Whether the page fits its window, with nothing to scroll sideways to. It compares the page's width with the root's
+ * `clientWidth`, the window less any scrollbar: with touch emulation Chromium widens `window.innerWidth` to whatever
+ * overflows, so a check against that never fails there.
+ */
+export function noHorizontalScroll(page: Page): Promise<boolean> {
+  return page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
+}
+
 export async function seedBudget(url: string, name: string): Promise<string> {
   const response = await fetch(`${url}/api/budgets`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name }) });
   assert.equal(response.status, 201);

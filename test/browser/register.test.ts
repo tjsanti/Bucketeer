@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Locator, Page } from "playwright-core";
-import { openApp, ready, seedBudget } from "./harness.js";
+import type { Locator } from "playwright-core";
+import { noHorizontalScroll, openApp, ready, seedBudget } from "./harness.js";
 
 const MINUS = "−";
 const over = { light: "rgb(179, 36, 59)", dark: "rgb(255, 150, 164)" }; // --over
 
 const compact = (text: string | null) => (text ?? "").replace(/\s+/g, " ").trim();
 const colorOf = (locator: Locator) => locator.evaluate((node) => getComputedStyle(node).color);
-const noHorizontalScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 
 /** A date in the browser's zone, which the test machine shares with the server, `daysAgo` before today. */
 function localDate(daysAgo = 0): Date {

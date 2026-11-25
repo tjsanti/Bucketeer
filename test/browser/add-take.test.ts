@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Page } from "playwright-core";
-import { openApp, ready, seedBudget } from "./harness.js";
+import { noHorizontalScroll, openApp, ready, seedBudget } from "./harness.js";
 
 const MINUS = "−";
 const compact = (text: string | null) => (text ?? "").replace(/\s+/g, " ").trim();
-const noHorizontalScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 
 const now = new Date();
 const current = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
