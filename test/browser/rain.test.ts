@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Locator, Page } from "playwright-core";
-import { openApp, ready, seedBudget } from "./harness.js";
+import { noHorizontalScroll, openApp, ready, seedBudget } from "./harness.js";
 
 const compact = (text: string | null) => (text ?? "").replace(/\s+/g, " ").trim();
-const noHorizontalScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 
 // The browser shares the test machine's zone with the server, so "this month" agrees on both.
 const now = new Date();

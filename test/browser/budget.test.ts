@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { openApp, ready, seedBudget } from "./harness.js";
+import { noHorizontalScroll, openApp, ready, seedBudget } from "./harness.js";
 
 const accountsPath = /\/budgets\/([^/]+)\/accounts$/;
 
@@ -115,7 +115,7 @@ test("first run creates a budget, and the picker renames, adds and switches budg
   assert.equal((await picker.innerText()).replace(/\s+/g, " "), "Budget Family & <budget>");
 
   await page.setViewportSize({ width: 375, height: 812 });
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  assert.equal(await noHorizontalScroll(page), true);
   assert.deepEqual(foreignRequests, []);
   assert.deepEqual(pageErrors, []);
 });

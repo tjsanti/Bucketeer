@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Locator, Page } from "playwright-core";
-import { openApp, ready, seedBudget } from "./harness.js";
+import { noHorizontalScroll, openApp, ready, seedBudget } from "./harness.js";
 import type { App } from "./harness.js";
 
 const MINUS = "−";
@@ -336,10 +336,9 @@ for (const width of [390, 375, 360]) {
     await fetch(`${app.url}/api/accounts/${old.id}/close`, { method: "POST" });
     await page.reload();
     await ready(page);
-    const noOverflow = () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
-    assert.equal(await noOverflow(), true);
+    assert.equal(await noHorizontalScroll(page), true);
     await page.locator("details.closed summary").click();
-    assert.equal(await noOverflow(), true);
+    assert.equal(await noHorizontalScroll(page), true);
 
     // The sidebar becomes a top bar: brand, picker, theme toggle, then a tab row; the account list is on the page.
     assert.equal(await page.locator("#side-accounts").isVisible(), false);
@@ -373,7 +372,7 @@ for (const width of [390, 375, 360]) {
     assert.equal(await dialog.getByLabel("Starting balance").evaluate((node) => getComputedStyle(node).fontSize), "16px");
     assert.equal(await dialog.evaluate((node) => getComputedStyle(node).borderTopLeftRadius), "24px");
     await dialog.getByRole("radio", { name: "Credit card" }).click();
-    assert.equal(await noOverflow(), true);
+    assert.equal(await noHorizontalScroll(page), true);
     assert.equal(await dialog.evaluate((node) => node.scrollWidth <= node.clientWidth), true);
     for (const radio of await dialog.getByRole("radio").all()) assert.ok((await box(radio)).height >= 44);
     const submit = await box(dialog.getByRole("button", { name: "Add account" }));
@@ -388,7 +387,7 @@ for (const width of [390, 375, 360]) {
     await page.locator("#budget-button").click();
     const menu = await box(page.locator("#budget-menu"));
     assert.ok(menu.x >= 0 && menu.x + menu.width <= width, JSON.stringify(menu));
-    assert.equal(await noOverflow(), true);
+    assert.equal(await noHorizontalScroll(page), true);
     assert.deepEqual(app.pageErrors, []);
   });
 }

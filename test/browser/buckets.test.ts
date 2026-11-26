@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Locator, Page } from "playwright-core";
-import { engine, openApp, ready, seedBudget } from "./harness.js";
+import { engine, noHorizontalScroll, openApp, ready, seedBudget } from "./harness.js";
 import type { App } from "./harness.js";
 
 // Independent expectations, taken from the plan and the locked design (not from the code under test).
@@ -66,7 +66,6 @@ const compact = (text: string | null) => (text ?? "").replace(/\s+/g, " ").trim(
 const colorOf = (locator: Locator) => locator.evaluate((node) => getComputedStyle(node).color);
 const announced = (page: Page, text: string) => page.waitForFunction((expected) => document.getElementById("announce")?.textContent === expected, text, { timeout: 3_000 });
 const focusedLabel = (page: Page) => page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? document.activeElement?.textContent ?? "");
-const noHorizontalScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 
 async function waitForSnack(page: Page, text: string): Promise<void> {
   await page.waitForFunction((expected) => document.getElementById("snack-msg")?.textContent === expected && !document.getElementById("snack")?.hidden, text, { timeout: 5_000 });

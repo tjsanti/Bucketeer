@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Locator, Page } from "playwright-core";
-import { openApp, ready, seedBudget, tabKeys } from "./harness.js";
+import { noHorizontalScroll, openApp, ready, seedBudget, tabKeys } from "./harness.js";
 import type { App } from "./harness.js";
 
 // A dated goal's "By" month is chosen with a year stepper and a month grid, never typed. Months before the
@@ -198,7 +198,7 @@ for (const scheme of ["light", "dark"] as const) {
     await byButton(dialog).click();
     await picker(page).waitFor();
     await assertPickerOnScreen(page, 390, 844);
-    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+    assert.equal(await noHorizontalScroll(page), true);
     // The picker floats over the sheet on a raised, shadowed surface.
     assert.notEqual(await picker(page).evaluate((node) => getComputedStyle(node).boxShadow), "none");
 

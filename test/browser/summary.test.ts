@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Locator, Page } from "playwright-core";
-import { openApp, ready, seedBudget } from "./harness.js";
+import { noHorizontalScroll, openApp, ready, seedBudget } from "./harness.js";
 
 const MINUS = "−";
 const violet = { light: "rgb(90, 59, 194)", dark: "rgb(183, 163, 255)" }; // --unassigned
@@ -9,7 +9,6 @@ const over = { light: "rgb(179, 36, 59)", dark: "rgb(255, 150, 164)" }; // --ove
 
 const compact = (text: string | null) => (text ?? "").replace(/\s+/g, " ").trim();
 const colorOf = (locator: Locator) => locator.evaluate((node) => getComputedStyle(node).color);
-const noHorizontalScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 
 // The browser shares the test machine's zone with the server, so "this month" agrees on both.
 const now = new Date();
