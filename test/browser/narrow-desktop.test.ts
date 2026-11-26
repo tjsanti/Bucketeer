@@ -610,10 +610,14 @@ test("goal percentages show whole 8px before the goal amount on phones, and stay
       assert.equal(percentageTexts[2]!.text, "100%", `${where}: Bike is fully saved`);
       if (phone) await assertTextFits(percentages, `${where} a goal's percentage`);
       for (const [index, goal] of goals.entries()) {
-        const gap = goal.left - percentageTexts[index]!.right;
-        const what = `${where}: ${goal.bucket}'s ${percentageTexts[index]!.text} is ${gap.toFixed(1)}px before its goal amount`;
-        if (phone) assert.ok(Math.abs(gap - 8) <= 0.5, `${what}, not 8px`);
-        else assert.ok(gap >= 1, `${what}, not clear of it`);
+        const percentage = percentageTexts[index]!;
+        const gap = goal.left - percentage.right;
+        const what = `${where}: ${goal.bucket}'s ${percentage.text} is ${gap.toFixed(2)}px before its goal amount`;
+        if (phone) {
+          const squeeze = (percentage.right - percentage.left) - (percentage.end - percentage.start);
+          assert.ok(squeeze <= 0.05, `${where}: ${goal.bucket}'s ${percentage.text} is ${squeeze.toFixed(2)}px narrower than its text`);
+          assert.ok(Math.abs(gap - 8) <= 0.05, `${what}, not 8px`);
+        } else assert.ok(gap >= 1, `${what}, not clear of it`);
         assert.ok(goal.width > 0 && goal.right <= goal.lineEnd + 0.5, `${where}: ${goal.bucket}'s goal amount stays on its line`);
         if (width === 320) assert.ok(goal.ellipsis, `${where}: ${goal.bucket}'s goal amount ends in an ellipsis`);
       }
