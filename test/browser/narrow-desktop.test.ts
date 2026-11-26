@@ -577,15 +577,20 @@ test("Recent activity keeps payees, and a category in a payee's place, in their 
 
 /**
  * Each goal's amount on its bar's line ("of $600.00", and the month on desktop): where it sits, where the line ends,
- * and whether it is cut short with an ellipsis.
+ * and whether it is cut short with an ellipsis. The ellipsis shows only with room for the first letter beside it:
+ * with less, Firefox draws the letters that fit and no ellipsis.
  */
 const goalAmounts = (page: Page) => page.locator(".brow.is-goal .goal .gmeta").evaluateAll((nodes) => nodes.map((node) => {
   const edges = node.getBoundingClientRect();
   const style = getComputedStyle(node);
+  const context = document.createElement("canvas").getContext("2d")!;
+  context.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+  const firstLetterAndEllipsis = context.measureText(`${node.textContent?.[0] ?? ""}…`).width;
   return {
     bucket: node.closest(".brow")!.querySelector(".name")!.textContent ?? "",
     left: edges.left, right: edges.right, width: edges.width, lineEnd: node.closest(".goal")!.getBoundingClientRect().right,
-    ellipsis: style.overflowX === "hidden" && style.textOverflow === "ellipsis" && node.scrollWidth > node.clientWidth + 1,
+    ellipsis: style.overflowX === "hidden" && style.textOverflow === "ellipsis" && node.scrollWidth > node.clientWidth + 1
+      && edges.width >= firstLetterAndEllipsis,
   };
 }));
 

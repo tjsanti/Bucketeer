@@ -1180,7 +1180,10 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
   .goal-date { display: block; color: var(--text-muted); }
   .goal { gap: var(--s-2); }
   .goal .pct { flex: none; min-width: 0; }
-  .bar { --bar-w: 64px; --bar-h: 6px; }
+  /* Firefox draws no ellipsis without room for the first letter beside it, so the goal amount keeps that much,
+     and only then does the bar give way. */
+  .goal .gmeta { flex: 1 1 0; min-width: 1.25em; }
+  .bar { --bar-w: 64px; --bar-h: 6px; flex: 0 1 auto; }
   .bgroup { min-height: 52px; }
   .more-btn { width: var(--touch); height: var(--touch); margin-left: -4px; }
   .btable:not(.reordering) .brow:active .c:not(.avail):not(.go) { background: var(--accent-soft); }
